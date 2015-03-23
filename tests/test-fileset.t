@@ -111,6 +111,28 @@ Test files properties
   $ hg add b2link
 #endif
 
+#if no-windows
+  $ echo foo > con.xml
+  $ echo bar > 'bar '
+  $ echo baz > 'baz\'
+  $ ls
+  b1
+  b2
+  b2link
+  bar 
+  baz\
+  bin
+  c1
+  c2
+  c3
+  con.xml
+  $ fileset 'not portable()'
+  bar 
+  baz\
+  con.xml
+  $ hg --config ui.portablefilenames=ignore add con.xml 'bar ' 'baz\'
+#endif
+
   >>> file('1k', 'wb').write(' '*1024)
   >>> file('2k', 'wb').write(' '*2048)
   $ hg add 1k 2k
@@ -218,6 +240,16 @@ Test with a revision
 #if symlink
   $ fileset -r1 'symlink()'
   b2link
+#endif
+
+#if no-windows
+  $ fileset -r1 'not portable()'
+  bar 
+  baz\
+  con.xml
+  $ hg forget 'bar '
+  $ hg forget 'baz\'
+  $ hg forget 'con.xml'
 #endif
 
   $ fileset -r4 'subrepo("re:su.*")'

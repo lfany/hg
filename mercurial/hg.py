@@ -34,7 +34,11 @@ def addbranchrevs(lrepo, other, branches, revs):
         else:
             y = None
         return x, y
-    revs = revs and list(revs) or []
+    if revs:
+        revs = list(revs)
+    else:
+        revs = []
+
     if not peer.capable('branchmap'):
         if branches:
             raise util.Abort(_("remote branch lookup not supported"))
@@ -672,7 +676,9 @@ def remoteui(src, opts):
         for key, val in src.configitems(sect):
             dst.setconfig(sect, key, val, 'copied')
     v = src.config('web', 'cacerts')
-    if v:
+    if v == '!':
+        dst.setconfig('web', 'cacerts', v, 'copied')
+    elif v:
         dst.setconfig('web', 'cacerts', util.expandpath(v), 'copied')
 
     return dst

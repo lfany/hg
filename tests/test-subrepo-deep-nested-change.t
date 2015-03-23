@@ -46,11 +46,28 @@ Cleaning both repositories, just as a clone -U
 
 Clone main
 
-  $ hg clone main cloned
+  $ hg --config extensions.largefiles= clone main cloned
   updating to branch default
   cloning subrepo sub1 from $TESTTMP/sub1
   cloning subrepo sub1/sub2 from $TESTTMP/sub2 (glob)
   3 files updated, 0 files merged, 0 files removed, 0 files unresolved
+
+Largefiles is NOT enabled in the clone if the source repo doesn't require it
+  $ cat cloned/.hg/hgrc
+  # example repository config (see "hg help config" for more info)
+  [paths]
+  default = $TESTTMP/main (glob)
+  
+  # path aliases to other clones of this repo in URLs or filesystem paths
+  # (see "hg help config.paths" for more info)
+  #
+  # default-push = ssh://jdoe@example.net/hg/jdoes-fork
+  # my-fork      = ssh://jdoe@example.net/hg/jdoes-fork
+  # my-clone     = /home/jdoe/jdoes-clone
+  
+  [ui]
+  # name and email (local to this repository, optional), e.g.
+  # username = Jane Doe <jdoe@example.com>
 
 Checking cloned repo ids
 
@@ -169,6 +186,24 @@ Test relative path printing + subrepos
   adding foo/bar/abc
   committing subrepository sub1
   committing subrepository sub1/sub2 (glob)
+
+  $ hg forget sub1/sub2/sub2
+  $ echo x > sub1/sub2/x.txt
+  $ hg add sub1/sub2/x.txt
+
+Files sees uncommitted adds and removes in subrepos
+  $ hg files -S
+  .hgsub
+  .hgsubstate
+  foo/bar/abc (glob)
+  main
+  sub1/.hgsub (glob)
+  sub1/.hgsubstate (glob)
+  sub1/foo (glob)
+  sub1/sub1 (glob)
+  sub1/sub2/folder/bar (glob)
+  sub1/sub2/x.txt (glob)
+
   $ hg rollback -q
   $ hg up -Cq
 
@@ -319,6 +354,31 @@ Find an exact largefile match in a largefiles subrepo
   ../archive_lf/sub1/sub2/large.bin
   $ rm -rf ../archive_lf
 
+The local repo enables largefiles if a largefiles repo is cloned
+  $ hg showconfig extensions
+  abort: repository requires features unknown to this Mercurial: largefiles!
+  (see http://mercurial.selenic.com/wiki/MissingRequirement for more information)
+  [255]
+  $ hg --config extensions.largefiles= clone -qU . ../lfclone
+  $ cat ../lfclone/.hg/hgrc
+  # example repository config (see "hg help config" for more info)
+  [paths]
+  default = $TESTTMP/cloned (glob)
+  
+  # path aliases to other clones of this repo in URLs or filesystem paths
+  # (see "hg help config.paths" for more info)
+  #
+  # default-push = ssh://jdoe@example.net/hg/jdoes-fork
+  # my-fork      = ssh://jdoe@example.net/hg/jdoes-fork
+  # my-clone     = /home/jdoe/jdoes-clone
+  
+  [ui]
+  # name and email (local to this repository, optional), e.g.
+  # username = Jane Doe <jdoe@example.com>
+  
+  [extensions]
+  largefiles=
+
 Find an exact match to a standin (should archive nothing)
   $ hg --config extensions.largefiles= archive -S -I 'sub/sub2/.hglf/large.bin' ../archive_lf
   $ find ../archive_lf 2> /dev/null | sort
@@ -351,6 +411,7 @@ largefile and a normal file.  Then a largefile that hasn't been committed yet.
   R sub1/sub2/test.txt
   ? foo/bar/abc
   ? sub1/sub2/untracked.txt
+  ? sub1/sub2/x.txt
   $ hg add sub1/sub2
   $ hg ci -Sqm 'forget testing'
 
@@ -376,5 +437,25 @@ Test a directory commit with a changed largefile and a changed normal file
   $ hg status
   A a.dat
   A a.txt
+
+  $ hg ci -m "add a.*"
+  $ hg mv a.dat b.dat
+  $ hg mv foo/bar/abc foo/bar/def
+  $ hg status -C
+  A b.dat
+    a.dat
+  A foo/bar/def
+    foo/bar/abc
+  R a.dat
+  R foo/bar/abc
+
+  $ hg ci -m "move large and normal"
+  $ hg status -C --rev '.^' --rev .
+  A b.dat
+    a.dat
+  A foo/bar/def
+    foo/bar/abc
+  R a.dat
+  R foo/bar/abc
 
   $ cd ..

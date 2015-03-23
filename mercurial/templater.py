@@ -162,8 +162,13 @@ def buildfilter(exp, context):
 
 def runfilter(context, mapping, data):
     func, data, filt = data
+    # func() may return string, generator of strings or arbitrary object such
+    # as date tuple, but filter does not want generator.
+    thing = func(context, mapping, data)
+    if isinstance(thing, types.GeneratorType):
+        thing = stringify(thing)
     try:
-        return filt(func(context, mapping, data))
+        return filt(thing)
     except (ValueError, AttributeError, TypeError):
         if isinstance(data, tuple):
             dt = data[1]
@@ -330,10 +335,7 @@ def ifcontains(context, mapping, args):
     item = stringify(args[0][0](context, mapping, args[0][1]))
     items = args[1][0](context, mapping, args[1][1])
 
-    # Iterating over items gives a formatted string, so we iterate
-    # directly over the raw values.
-    if ((callable(items) and item in [i.values()[0] for i in items()]) or
-        (isinstance(items, str) and item in items)):
+    if item in items:
         yield _evalifliteral(args[2], context, mapping)
     elif len(args) == 4:
         yield _evalifliteral(args[3], context, mapping)
@@ -389,11 +391,11 @@ def revset(context, mapping, args):
 
     raw = args[0][1]
     ctx = mapping['ctx']
-    repo = ctx._repo
+    repo = ctx.repo()
 
     def query(expr):
         m = revsetmod.match(repo.ui, expr)
-        return m(repo, revsetmod.spanset(repo))
+        return m(repo)
 
     if len(args) > 1:
         formatargs = list([a[0](context, mapping, a[1]) for a in args[1:]])
@@ -654,7 +656,10 @@ class templater(object):
         self.mapfile = mapfile or 'template'
         self.cache = cache.copy()
         self.map = {}
-        self.base = (mapfile and os.path.dirname(mapfile)) or ''
+        if mapfile:
+            self.base = os.path.dirname(mapfile)
+        else:
+            self.base = ''
         self.filters = templatefilters.filters.copy()
         self.filters.update(filters)
         self.defaults = defaults

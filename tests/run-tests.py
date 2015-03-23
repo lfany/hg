@@ -170,6 +170,8 @@ def getparser():
         help="shortcut for --with-hg=<testdir>/../hg")
     parser.add_option("--loop", action="store_true",
         help="loop tests repeatedly")
+    parser.add_option("--runs-per-test", type="int", dest="runs_per_test",
+        help="run each test N times (default=1)", default=1)
     parser.add_option("-n", "--nodiff", action="store_true",
         help="skip showing test changes")
     parser.add_option("-p", "--port", type="int",
@@ -459,7 +461,14 @@ class Test(unittest.TestCase):
 
         # Remove any previous output files.
         if os.path.exists(self.errpath):
-            os.remove(self.errpath)
+            try:
+                os.remove(self.errpath)
+            except OSError, e:
+                # We might have raced another test to clean up a .err
+                # file, so ignore ENOENT when removing a previous .err
+                # file.
+                if e.errno != errno.ENOENT:
+                    raise
 
     def run(self, result):
         """Run this test and report results against a TestResult instance."""
@@ -1140,8 +1149,6 @@ class TestResult(unittest._TextTestResult):
         self.warned = []
 
         self.times = []
-        self._started = {}
-        self._stopped = {}
         # Data stored for the benefit of generating xunit reports.
         self.successes = []
         self.faildata = {}
@@ -1263,20 +1270,17 @@ class TestResult(unittest._TextTestResult):
         # child's processes along with real elapsed time taken by a process.
         # This module has one limitation. It can only work for Linux user
         # and not for Windows.
-        self._started[test.name] = os.times()
+        test.started = os.times()
 
     def stopTest(self, test, interrupted=False):
         super(TestResult, self).stopTest(test)
 
-        self._stopped[test.name] = os.times()
+        test.stopped = os.times()
 
-        starttime = self._started[test.name]
-        endtime = self._stopped[test.name]
+        starttime = test.started
+        endtime = test.stopped
         self.times.append((test.name, endtime[2] - starttime[2],
                     endtime[3] - starttime[3], endtime[4] - starttime[4]))
-
-        del self._started[test.name]
-        del self._stopped[test.name]
 
         if interrupted:
             iolock.acquire()
@@ -1288,7 +1292,8 @@ class TestSuite(unittest.TestSuite):
     """Custom unittest TestSuite that knows how to execute Mercurial tests."""
 
     def __init__(self, testdir, jobs=1, whitelist=None, blacklist=None,
-                 retest=False, keywords=None, loop=False,
+                 retest=False, keywords=None, loop=False, runs_per_test=1,
+                 loadtest=None,
                  *args, **kwargs):
         """Create a new instance that can run tests with a configuration.
 
@@ -1323,13 +1328,21 @@ class TestSuite(unittest.TestSuite):
         self._retest = retest
         self._keywords = keywords
         self._loop = loop
+        self._runs_per_test = runs_per_test
+        self._loadtest = loadtest
 
     def run(self, result):
         # We have a number of filters that need to be applied. We do this
         # here instead of inside Test because it makes the running logic for
         # Test simpler.
         tests = []
+        num_tests = [0]
         for test in self._tests:
+            def get():
+                num_tests[0] += 1
+                if getattr(test, 'should_reload', False):
+                    return self._loadtest(test.name, num_tests[0])
+                return test
             if not os.path.exists(test.path):
                 result.addSkip(test, "Doesn't exist")
                 continue
@@ -1356,8 +1369,8 @@ class TestSuite(unittest.TestSuite):
 
                     if ignored:
                         continue
-
-            tests.append(test)
+            for _ in xrange(self._runs_per_test):
+                tests.append(get())
 
         runtests = list(tests)
         done = queue.Queue()
@@ -1386,7 +1399,12 @@ class TestSuite(unittest.TestSuite):
                 if tests and not running == self._jobs:
                     test = tests.pop(0)
                     if self._loop:
-                        tests.append(test)
+                        if getattr(test, 'should_reload', False):
+                            num_tests[0] += 1
+                            tests.append(
+                                self._loadtest(test.name, num_tests[0]))
+                        else:
+                            tests.append(test)
                     t = threading.Thread(target=job, name=test.name,
                                          args=(test, result))
                     t.start()
@@ -1729,7 +1747,8 @@ class TestRunner(object):
                               retest=self.options.retest,
                               keywords=self.options.keywords,
                               loop=self.options.loop,
-                              tests=tests)
+                              runs_per_test=self.options.runs_per_test,
+                              tests=tests, loadtest=self._gettest)
             verbosity = 1
             if self.options.verbose:
                 verbosity = 2
@@ -1769,14 +1788,16 @@ class TestRunner(object):
         refpath = os.path.join(self._testdir, test)
         tmpdir = os.path.join(self._hgtmp, 'child%d' % count)
 
-        return testcls(refpath, tmpdir,
-                       keeptmpdir=self.options.keep_tmpdir,
-                       debug=self.options.debug,
-                       timeout=self.options.timeout,
-                       startport=self.options.port + count * 3,
-                       extraconfigopts=self.options.extra_config_opt,
-                       py3kwarnings=self.options.py3k_warnings,
-                       shell=self.options.shell)
+        t = testcls(refpath, tmpdir,
+                    keeptmpdir=self.options.keep_tmpdir,
+                    debug=self.options.debug,
+                    timeout=self.options.timeout,
+                    startport=self.options.port + count * 3,
+                    extraconfigopts=self.options.extra_config_opt,
+                    py3kwarnings=self.options.py3k_warnings,
+                    shell=self.options.shell)
+        t.should_reload = True
+        return t
 
     def _cleanup(self):
         """Clean up state from this test invocation."""
@@ -1836,7 +1857,10 @@ class TestRunner(object):
         compiler = ''
         if self.options.compiler:
             compiler = '--compiler ' + self.options.compiler
-        pure = self.options.pure and "--pure" or ""
+        if self.options.pure:
+            pure = "--pure"
+        else:
+            pure = ""
         py3 = ''
         if sys.version_info[0] == 3:
             py3 = '--c2to3'
@@ -1863,6 +1887,17 @@ class TestRunner(object):
                   'prefix': self._installdir, 'libdir': self._pythondir,
                   'bindir': self._bindir,
                   'nohome': nohome, 'logfile': installerrs})
+
+        # setuptools requires install directories to exist.
+        def makedirs(p):
+            try:
+                os.makedirs(p)
+            except OSError, e:
+                if e.errno != errno.EEXIST:
+                    raise
+        makedirs(self._pythondir)
+        makedirs(self._bindir)
+
         vlog("# Running", cmd)
         if os.system(cmd) == 0:
             if not self.options.verbose:
@@ -1870,7 +1905,7 @@ class TestRunner(object):
         else:
             f = open(installerrs, 'rb')
             for line in f:
-                print line
+                sys.stdout.write(line)
             f.close()
             sys.exit(1)
         os.chdir(self._testdir)

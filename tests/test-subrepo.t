@@ -25,8 +25,13 @@ Issue2232: committing a subrepo without .hgsub
   abort: can't commit subrepos without .hgsub
   [255]
 
+  $ hg -R s add s/a
+  $ hg files -S
+  .hgsub
+  a
+  s/a (glob)
+
   $ hg -R s ci -Ams0
-  adding a
   $ hg sum
   parent: 0:f7b1eb17ad24 tip
    0
@@ -50,9 +55,16 @@ test handling .hgsubstate "added" explicitly.
 Revert subrepo and test subrepo fileset keyword:
 
   $ echo b > s/a
+  $ hg revert --dry-run "set:subrepo('glob:s*')"
+  reverting subrepo s
+  reverting s/a (glob)
+  $ cat s/a
+  b
   $ hg revert "set:subrepo('glob:s*')"
   reverting subrepo s
   reverting s/a (glob)
+  $ cat s/a
+  a
   $ rm s/a.orig
 
 Revert subrepo with no backup. The "reverting s/a" line is gone since

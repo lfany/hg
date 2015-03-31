@@ -59,7 +59,7 @@ Test recursive diff without committing anything:
 Commits:
 
   $ hg commit -m fails
-  abort: uncommitted changes in subrepo foo
+  abort: uncommitted changes in subrepository 'foo'
   (use --subrepos for recursive commit)
   [255]
 
@@ -342,6 +342,16 @@ Test archiving a revision that references a subrepo that is not yet
 cloned:
 
   $ hg clone -U . ../empty
+  \r (no-eol) (esc)
+  linking [ <=>                                           ] 1\r (no-eol) (esc)
+  linking [  <=>                                          ] 2\r (no-eol) (esc)
+  linking [   <=>                                         ] 3\r (no-eol) (esc)
+  linking [    <=>                                        ] 4\r (no-eol) (esc)
+  linking [     <=>                                       ] 5\r (no-eol) (esc)
+  linking [      <=>                                      ] 6\r (no-eol) (esc)
+  linking [       <=>                                     ] 7\r (no-eol) (esc)
+  linking [        <=>                                    ] 8\r (no-eol) (esc)
+                                                              \r (no-eol) (esc)
   $ cd ../empty
   $ hg archive --subrepos -r tip ../archive.tar.gz
   \r (no-eol) (esc)
@@ -355,6 +365,16 @@ cloned:
   archiving [==========================================>] 3/3\r (no-eol) (esc)
                                                               \r (no-eol) (esc)
   \r (no-eol) (esc)
+  linking [ <=>                                           ] 1\r (no-eol) (esc)
+  linking [  <=>                                          ] 2\r (no-eol) (esc)
+  linking [   <=>                                         ] 3\r (no-eol) (esc)
+  linking [    <=>                                        ] 4\r (no-eol) (esc)
+  linking [     <=>                                       ] 5\r (no-eol) (esc)
+  linking [      <=>                                      ] 6\r (no-eol) (esc)
+  linking [       <=>                                     ] 7\r (no-eol) (esc)
+  linking [        <=>                                    ] 8\r (no-eol) (esc)
+                                                              \r (no-eol) (esc)
+  \r (no-eol) (esc)
   archiving (foo) [                                     ] 0/3\r (no-eol) (esc)
   archiving (foo) [                                     ] 0/3\r (no-eol) (esc)
   archiving (foo) [===========>                         ] 1/3\r (no-eol) (esc)
@@ -363,6 +383,14 @@ cloned:
   archiving (foo) [=======================>             ] 2/3\r (no-eol) (esc)
   archiving (foo) [====================================>] 3/3\r (no-eol) (esc)
   archiving (foo) [====================================>] 3/3\r (no-eol) (esc)
+                                                              \r (no-eol) (esc)
+  \r (no-eol) (esc)
+  linking [ <=>                                           ] 1\r (no-eol) (esc)
+  linking [  <=>                                          ] 2\r (no-eol) (esc)
+  linking [   <=>                                         ] 3\r (no-eol) (esc)
+  linking [    <=>                                        ] 4\r (no-eol) (esc)
+  linking [     <=>                                       ] 5\r (no-eol) (esc)
+  linking [      <=>                                      ] 6\r (no-eol) (esc)
                                                               \r (no-eol) (esc)
   \r (no-eol) (esc)
   archiving (foo/bar) [                                 ] 0/1\r (no-eol) (glob) (esc)
@@ -500,9 +528,19 @@ The subrepo must sorts after the explicit filename.
   $ hg init test
   $ cd test
   $ hg init x
+  $ echo abc > abc.txt
+  $ hg ci -Am "abc"
+  adding abc.txt
   $ echo "x = x" >> .hgsub
   $ hg add .hgsub
   $ touch a x/a
   $ hg add a x/a
+
+  $ hg ci -Sm "added x"
+  committing subrepository x
+  $ echo abc > x/a
+  $ hg revert --rev '.^' "set:subrepo('glob:x*')"
+  abort: subrepository 'x' does not exist in 25ac2c9b3180!
+  [255]
 
   $ cd ..

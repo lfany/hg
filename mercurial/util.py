@@ -359,8 +359,10 @@ class sortdict(dict):
     def __iter__(self):
         return self._list.__iter__()
     def update(self, src):
-        for k in src:
-            self[k] = src[k]
+        if isinstance(src, dict):
+            src = src.iteritems()
+        for k, v in src:
+            self[k] = v
     def clear(self):
         dict.clear(self)
         self._list = []
@@ -737,20 +739,27 @@ def copyfile(src, dest, hardlink=False):
         except shutil.Error, inst:
             raise Abort(str(inst))
 
-def copyfiles(src, dst, hardlink=None):
-    """Copy a directory tree using hardlinks if possible"""
+def copyfiles(src, dst, hardlink=None, progress=lambda t, pos: None):
+    """Copy a directory tree using hardlinks if possible."""
+    num = 0
 
     if hardlink is None:
         hardlink = (os.stat(src).st_dev ==
                     os.stat(os.path.dirname(dst)).st_dev)
+    if hardlink:
+        topic = _('linking')
+    else:
+        topic = _('copying')
 
-    num = 0
     if os.path.isdir(src):
         os.mkdir(dst)
         for name, kind in osutil.listdir(src):
             srcname = os.path.join(src, name)
             dstname = os.path.join(dst, name)
-            hardlink, n = copyfiles(srcname, dstname, hardlink)
+            def nprog(t, pos):
+                if pos is not None:
+                    return progress(t, pos + num)
+            hardlink, n = copyfiles(srcname, dstname, hardlink, progress=nprog)
             num += n
     else:
         if hardlink:
@@ -762,6 +771,8 @@ def copyfiles(src, dst, hardlink=None):
         else:
             shutil.copy(src, dst)
         num += 1
+        progress(topic, num)
+    progress(topic, None)
 
     return hardlink, num
 
@@ -1352,11 +1363,11 @@ def parsedate(date, formats=None, bias={}):
         formats = defaultdateformats
     date = date.strip()
 
-    if date == _('now'):
+    if date == 'now' or date == _('now'):
         return makedate()
-    if date == _('today'):
+    if date == 'today' or date == _('today'):
         date = datetime.date.today().strftime('%b %d')
-    elif date == _('yesterday'):
+    elif date == 'yesterday' or date == _('yesterday'):
         date = (datetime.date.today() -
                 datetime.timedelta(days=1)).strftime('%b %d')
 

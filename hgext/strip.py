@@ -23,10 +23,8 @@ def checksubstate(repo, baserev=None):
     else:
         bctx = wctx.parents()[0]
     for s in sorted(wctx.substate):
-        if wctx.sub(s).dirty(True):
-            raise util.Abort(
-                _("uncommitted changes in subrepository %s") % s)
-        elif s not in bctx.substate or bctx.sub(s).dirty():
+        wctx.sub(s).bailifchanged(True)
+        if s not in bctx.substate or bctx.sub(s).dirty():
             inclsubs.append(s)
     return inclsubs
 
@@ -81,7 +79,8 @@ def strip(ui, repo, revs, update=True, backup=True, force=None, bookmark=None):
           ('', 'no-backup', None, _('no backups')),
           ('', 'nobackup', None, _('no backups (DEPRECATED)')),
           ('n', '', None, _('ignored  (DEPRECATED)')),
-          ('k', 'keep', None, _("do not modify working copy during strip")),
+          ('k', 'keep', None, _("do not modify working directory during "
+                                "strip")),
           ('B', 'bookmark', '', _("remove revs only reachable from given"
                                   " bookmark"))],
           _('hg strip [-k] [-f] [-n] [-B bookmark] [-r] REV...'))

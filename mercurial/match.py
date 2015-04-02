@@ -34,6 +34,15 @@ def _expandsets(kindpats, ctx):
         other.append((kind, pat))
     return fset, other
 
+def _kindpatsalwaysmatch(kindpats):
+    """"Checks whether the kindspats match everything, as e.g.
+    'relpath:.' does.
+    """
+    for kind, pat in kindpats:
+        if pat != '' or kind not in ['relpath', 'glob']:
+            return False
+    return True
+
 class match(object):
     def __init__(self, root, cwd, patterns, include=[], exclude=[],
                  default='glob', exact=False, auditor=None, ctx=None):
@@ -63,7 +72,6 @@ class match(object):
         self._cwd = cwd
         self._files = [] # exact files and roots of patterns
         self._anypats = bool(include or exclude)
-        self._ctx = ctx
         self._always = False
         self._pathrestricted = bool(include or exclude or patterns)
 
@@ -84,10 +92,11 @@ class match(object):
             matchfns.append(self.exact)
         elif patterns:
             kindpats = _normalize(patterns, default, root, cwd, auditor)
-            self._files = _roots(kindpats)
-            self._anypats = self._anypats or _anypats(kindpats)
-            self.patternspat, pm = _buildmatch(ctx, kindpats, '$')
-            matchfns.append(pm)
+            if not _kindpatsalwaysmatch(kindpats):
+                self._files = _roots(kindpats)
+                self._anypats = self._anypats or _anypats(kindpats)
+                self.patternspat, pm = _buildmatch(ctx, kindpats, '$')
+                matchfns.append(pm)
 
         if not matchfns:
             m = util.always
@@ -160,6 +169,9 @@ class match(object):
         '''Matcher will match everything and .files() will be empty
         - optimization might be possible and necessary.'''
         return self._always
+
+    def isexact(self):
+        return self.matchfn == self.exact
 
 def exact(root, cwd, files):
     return match(root, cwd, files, exact=True)

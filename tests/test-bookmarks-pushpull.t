@@ -164,6 +164,40 @@ divergent bookmarks
      Z                         2:0d2164f0ce0d
      foo                       -1:000000000000
    * foobar                    1:9b140be10808
+
+(test that too many divergence of bookmark)
+
+  $ python $TESTDIR/seq.py 1 100 | while read i; do hg bookmarks -r 000000000000 "X@${i}"; done
+  $ hg pull ../a
+  pulling from ../a
+  searching for changes
+  no changes found
+  warning: failed to assign numbered name to divergent bookmark X
+  divergent bookmark @ stored as @1
+  $ hg bookmarks | grep '^   X' | grep -v ':000000000000'
+     X                         1:9b140be10808
+     X@foo                     2:0d2164f0ce0d
+
+(test that remotely diverged bookmarks are reused if they aren't changed)
+
+  $ hg bookmarks | grep '^   @'
+     @                         1:9b140be10808
+     @1                        2:0d2164f0ce0d
+     @foo                      2:0d2164f0ce0d
+  $ hg pull ../a
+  pulling from ../a
+  searching for changes
+  no changes found
+  warning: failed to assign numbered name to divergent bookmark X
+  divergent bookmark @ stored as @1
+  $ hg bookmarks | grep '^   @'
+     @                         1:9b140be10808
+     @1                        2:0d2164f0ce0d
+     @foo                      2:0d2164f0ce0d
+
+  $ python $TESTDIR/seq.py 1 100 | while read i; do hg bookmarks -d "X@${i}"; done
+  $ hg bookmarks -d "@1"
+
   $ hg push -f ../a
   pushing to ../a
   searching for changes
@@ -459,6 +493,13 @@ pushing a new bookmark on a new head does not require -f if -B is specified
   exporting bookmark W
   $ hg -R ../b id -r W
   cc978a373a53 tip W
+
+Check summary output for incoming/outgoing bookmarks
+
+  $ hg bookmarks -d X
+  $ hg bookmarks -d Y
+  $ hg summary --remote | grep '^remote:'
+  remote: *, 2 incoming bookmarks, 1 outgoing bookmarks (glob)
 
   $ cd ..
 

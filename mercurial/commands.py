@@ -148,6 +148,7 @@ diffopts2 = [
     ('U', 'unified', '',
      _('number of lines of context to show'), _('NUM')),
     ('', 'stat', None, _('output diffstat-style summary of changes')),
+    ('', 'root', '', _('produce diffs relative to subdirectory'), _('DIR')),
 ]
 
 mergetoolopts = [
@@ -266,6 +267,9 @@ def annotate(ui, repo, *pats, **opts):
     anyway, although the results will probably be neither useful
     nor desirable.
 
+    By default, annotate files in the parent of the working directory.
+    Use -r "wdir()" to annotate the working directory files.
+
     Returns 0 on success.
     """
     if not pats:
@@ -276,13 +280,44 @@ def annotate(ui, repo, *pats, **opts):
         # to mimic the behavior of Mercurial before version 1.5
         opts['file'] = True
 
+    ctx = scmutil.revsingle(repo, opts.get('rev'))
+
     fm = ui.formatter('annotate', opts)
-    datefunc = ui.quiet and util.shortdate or util.datestr
-    hexfn = fm.hexfunc
+    if ui.quiet:
+        datefunc = util.shortdate
+    else:
+        datefunc = util.datestr
+    if ctx.rev() is None:
+        def hexfn(node):
+            if node is None:
+                return None
+            else:
+                return fm.hexfunc(node)
+        if opts.get('changeset'):
+            # omit "+" suffix which is appended to node hex
+            def formatrev(rev):
+                if rev is None:
+                    return '%d' % ctx.p1().rev()
+                else:
+                    return '%d' % rev
+        else:
+            def formatrev(rev):
+                if rev is None:
+                    return '%d+' % ctx.p1().rev()
+                else:
+                    return '%d ' % rev
+        def formathex(hex):
+            if hex is None:
+                return '%s+' % fm.hexfunc(ctx.p1().node())
+            else:
+                return '%s ' % hex
+    else:
+        hexfn = fm.hexfunc
+        formatrev = formathex = str
 
     opmap = [('user', ' ', lambda x: x[0].user(), ui.shortuser),
-             ('number', ' ', lambda x: x[0].rev(), str),
-             ('changeset', ' ', lambda x: hexfn(x[0].node()), str),
+             ('number', ' ', lambda x: x[0].rev(), formatrev),
+             ('changeset', ' ', lambda x: hexfn(x[0].node()), formathex),
              ('date', ' ', lambda x: x[0].date(), util.cachefunc(datefunc)),
              ('file', ' ', lambda x: x[0].path(), str),
              ('line_number', ':', lambda x: x[1], str),
@@ -312,7 +347,6 @@ def annotate(ui, repo, *pats, **opts):
     def bad(x, y):
         raise util.Abort("%s: %s" % (x, y))
 
-    ctx = scmutil.revsingle(repo, opts.get('rev'))
     m = scmutil.match(ctx, pats, opts)
     m.bad = bad
     follow = not opts.get('no_follow')
@@ -664,7 +698,10 @@ def bisect(ui, repo, rev=None, extra=None, command=None,
         # one of the parent was not checked.
         parents = repo[nodes[0]].parents()
         if len(parents) > 1:
-            side = good and state['bad'] or state['good']
+            if good:
+                side = state['bad']
+            else:
+                side = state['good']
             num = len(set(i.node() for i in parents) & set(side))
             if num == 1:
                 return parents[0].ancestor(parents[1])
@@ -1257,8 +1294,8 @@ def cat(ui, repo, file1, *pats, **opts):
     return cmdutil.cat(ui, repo, ctx, m, '', **opts)
 
 @command('^clone',
-    [('U', 'noupdate', None,
-     _('the clone will include an empty working copy (only a repository)')),
+    [('U', 'noupdate', None, _('the clone will include an empty working '
+                               'directory (only a repository)')),
     ('u', 'updaterev', '', _('revision, tag or branch to check out'), _('REV')),
     ('r', 'rev', [], _('include the specified changeset'), _('REV')),
     ('b', 'branch', [], _('clone only the specified branch'), _('BRANCH')),
@@ -1380,9 +1417,10 @@ def clone(ui, source, dest=None, **opts):
      _('mark new/missing files as added/removed before committing')),
     ('', 'close-branch', None,
      _('mark a branch as closed, hiding it from the branch list')),
-    ('', 'amend', None, _('amend the parent of the working dir')),
+    ('', 'amend', None, _('amend the parent of the working directory')),
     ('s', 'secret', None, _('use the secret phase for committing')),
     ('e', 'edit', None, _('invoke editor on commit messages')),
+    ('i', 'interactive', None, _('use interactive mode')),
     ] + walkopts + commitopts + commitopts2 + subrepoopts,
     _('[OPTION]... [FILE]...'),
     inferrepo=True)
@@ -1422,6 +1460,12 @@ def commit(ui, repo, *pats, **opts):
 
     Returns 0 on success, 1 if nothing changed.
     """
+    if opts.get('interactive'):
+        opts.pop('interactive')
+        cmdutil.dorecord(ui, repo, commit, 'commit', False,
+                        cmdutil.recordfilter, *pats, **opts)
+        return
+
     if opts.get('subrepos'):
         if opts.get('amend'):
             raise util.Abort(_('cannot amend with --subrepos'))
@@ -1946,7 +1990,7 @@ def debugcomplete(ui, cmd='', **opts):
         ui.write("%s\n" % "\n".join(options))
         return
 
-    cmdlist = cmdutil.findpossible(cmd, table)
+    cmdlist, unused_allcmds = cmdutil.findpossible(cmd, table)
     if ui.verbose:
         cmdlist = [' '.join(c[0]) for c in cmdlist.values()]
     ui.write("%s\n" % "\n".join(sorted(cmdlist)))
@@ -2799,6 +2843,7 @@ def debugrevlog(ui, repo, file_=None, **opts):
         deltasize[2] /= numrevs - numfull
     totalsize = fulltotal + deltatotal
     avgchainlen = sum(chainlengths) / numrevs
+    maxchainlen = max(chainlengths)
     compratio = totalrawsize / totalsize
 
     basedfmtstr = '%%%dd\n'
@@ -2831,6 +2876,7 @@ def debugrevlog(ui, repo, file_=None, **opts):
     ui.write('\n')
     fmt = dfmtstr(max(avgchainlen, compratio))
     ui.write(('avg chain length  : ') + fmt % avgchainlen)
+    ui.write(('max chain length  : ') + fmt % maxchainlen)
     ui.write(('compression ratio : ') + fmt % compratio)
 
     if format > 0:
@@ -2885,7 +2931,10 @@ def debugrevspec(ui, repo, expr, **opts):
             weight, optimizedtree = revset.optimize(newtree, True)
             ui.note("* optimized:\n", revset.prettyformat(optimizedtree), "\n")
     func = revset.match(ui, expr)
-    for c in func(repo, revset.spanset(repo)):
+    revs = func(repo)
+    if ui.verbose:
+        ui.note("* set:\n", revset.prettyformatset(revs), "\n")
+    for c in revs:
         ui.write("%s\n" % c)
 
 @command('debugsetparents', [], _('REV1 [REV2]'))
@@ -2893,7 +2942,9 @@ def debugsetparents(ui, repo, rev1, rev2=None):
     """manually set the parents of the current working directory
 
     This is useful for writing repository conversion tools, but should
-    be used with care.
+    be used with care. For example, neither the working directory nor the
+    dirstate is updated, so file status may be incorrect after running this
+    command.
 
     Returns 0 on success.
     """
@@ -3124,7 +3175,8 @@ def diff(ui, repo, *pats, **opts):
     diffopts = patch.diffallopts(ui, opts)
     m = scmutil.match(repo[node2], pats, opts)
     cmdutil.diffordiffstat(ui, repo, diffopts, node1, node2, m, stat=stat,
-                           listsubrepos=opts.get('subrepos'))
+                           listsubrepos=opts.get('subrepos'),
+                           root=opts.get('root'))
 
 @command('^export',
     [('o', 'output', '',
@@ -3210,7 +3262,7 @@ def export(ui, repo, *changesets, **opts):
 @command('files',
     [('r', 'rev', '', _('search the repository as it is in REV'), _('REV')),
      ('0', 'print0', None, _('end filenames with NUL, for use with xargs')),
-    ] + walkopts + formatteropts,
+    ] + walkopts + formatteropts + subrepoopts,
     _('[OPTION]... [PATTERN]...'))
 def files(ui, repo, *pats, **opts):
     """list tracked files
@@ -3220,7 +3272,7 @@ def files(ui, repo, *pats, **opts):
     removed files).
 
     If no patterns are given to match, this command prints the names
-    of all files under Mercurial control in the working copy.
+    of all files under Mercurial control in the working directory.
 
     .. container:: verbose
 
@@ -3257,8 +3309,6 @@ def files(ui, repo, *pats, **opts):
 
     """
     ctx = scmutil.revsingle(repo, opts.get('rev'), None)
-    rev = ctx.rev()
-    ret = 1
 
     end = '\n'
     if opts.get('print0'):
@@ -3267,17 +3317,7 @@ def files(ui, repo, *pats, **opts):
     fmt = '%s' + end
 
     m = scmutil.match(ctx, pats, opts)
-    ds = repo.dirstate
-    for f in ctx.matches(m):
-        if rev is None and ds[f] == 'r':
-            continue
-        fm.startitem()
-        if ui.verbose:
-            fc = ctx[f]
-            fm.write('size flags', '% 10d % 1s ', fc.size(), fc.flags())
-        fm.data(abspath=f)
-        fm.write('path', fmt, m.rel(f))
-        ret = 0
+    ret = cmdutil.files(ui, ctx, m, fm, fmt, opts.get('subrepos'))
 
     fm.end()
 
@@ -3675,7 +3715,10 @@ def grep(ui, repo, pattern, *pats, **opts):
 
     def display(fn, ctx, pstates, states):
         rev = ctx.rev()
-        datefunc = ui.quiet and util.shortdate or util.datestr
+        if ui.quiet:
+            datefunc = util.shortdate
+        else:
+            datefunc = util.datestr
         found = False
         @util.cachefunc
         def binary():
@@ -3915,7 +3958,7 @@ def help_(ui, name=None, **opts):
     optionalrepo=True)
 def identify(ui, repo, source=None, rev=None,
              num=None, id=None, branch=None, tags=None, bookmarks=None, **opts):
-    """identify the working copy or specified revision
+    """identify the working directory or specified revision
 
     Print a summary identifying the repository state at REV using one or
     two parent hash identifiers, followed by a "+" if the working
@@ -3951,7 +3994,10 @@ def identify(ui, repo, source=None, rev=None,
         raise util.Abort(_("there is no Mercurial repository here "
                            "(.hg not found)"))
 
-    hexfunc = ui.debugflag and hex or short
+    if ui.debugflag:
+        hexfunc = hex
+    else:
+        hexfunc = short
     default = not (num or id or branch or tags or bookmarks)
     output = []
     revs = []
@@ -4056,6 +4102,8 @@ def identify(ui, repo, source=None, rev=None,
      _('commit even if some hunks fail')),
     ('', 'exact', None,
      _('apply patch to the nodes from which it was generated')),
+    ('', 'prefix', '',
+     _('apply patch to subdirectory'), _('DIR')),
     ('', 'import-branch', None,
      _('use any branch information in patch (implied by --exact)'))] +
     commitopts + commitopts2 + similarityopts,
@@ -4155,6 +4203,8 @@ def import_(ui, repo, patch1=None, *patches, **opts):
         raise util.Abort(_('cannot use --similarity with --bypass'))
     if opts.get('exact') and opts.get('edit'):
         raise util.Abort(_('cannot use --exact with --edit'))
+    if opts.get('exact') and opts.get('prefix'):
+        raise util.Abort(_('cannot use --exact with --prefix'))
 
     if update:
         cmdutil.checkunfinished(repo)
@@ -4243,12 +4293,12 @@ def incoming(ui, repo, source="default", **opts):
     pull location. These are the changesets that would have been pulled
     if a pull at the time you issued this command.
 
-    For remote repository, using --bundle avoids downloading the
-    changesets twice if the incoming is followed by a pull.
-
     See pull for valid source format details.
 
     .. container:: verbose
+
+      For remote repository, using --bundle avoids downloading the
+      changesets twice if the incoming is followed by a pull.
 
       Examples:
 
@@ -4289,7 +4339,7 @@ def incoming(ui, repo, source="default", **opts):
             ui.warn(_("remote doesn't support bookmarks\n"))
             return 0
         ui.status(_('comparing with %s\n') % util.hidepassword(source))
-        return bookmarks.diff(ui, repo, other)
+        return bookmarks.incoming(ui, repo, other)
 
     repo._subtoppath = ui.expandpath(source)
     try:
@@ -4343,7 +4393,10 @@ def locate(ui, repo, *pats, **opts):
 
     Returns 0 if a match is found, 1 otherwise.
     """
-    end = opts.get('print0') and '\0' or '\n'
+    if opts.get('print0'):
+        end = '\0'
+    else:
+        end = '\n'
     rev = scmutil.revsingle(repo, opts.get('rev'), None).node()
 
     ret = 1
@@ -4477,6 +4530,10 @@ def log(ui, repo, *pats, **opts):
     Returns 0 on success.
 
     """
+    if opts.get('follow') and opts.get('rev'):
+        opts['rev'] = [revset.formatspec('reverse(::%lr)', opts.get('rev'))]
+        del opts['follow']
+
     if opts.get('graph'):
         return cmdutil.graphlog(ui, repo, *pats, **opts)
 
@@ -4503,7 +4560,10 @@ def log(ui, repo, *pats, **opts):
                 rename = getrenamed(fn, rev)
                 if rename:
                     copies.append((fn, rename[0]))
-        revmatchfn = filematcher and filematcher(ctx.rev()) or None
+        if filematcher:
+            revmatchfn = filematcher(ctx.rev())
+        else:
+            revmatchfn = None
         displayer.show(ctx, copies=copies, matchfn=revmatchfn)
         if displayer.flush(rev):
             count += 1
@@ -4734,7 +4794,7 @@ def outgoing(ui, repo, dest=None, **opts):
             ui.warn(_("remote doesn't support bookmarks\n"))
             return 0
         ui.status(_('comparing with %s\n') % util.hidepassword(dest))
-        return bookmarks.diff(ui, other, repo)
+        return bookmarks.outgoing(ui, repo, other)
 
     repo._subtoppath = ui.expandpath(dest or 'default-push', dest or 'default')
     try:
@@ -4821,19 +4881,20 @@ def paths(ui, repo, search=None):
     Returns 0 on success.
     """
     if search:
-        for name, path in ui.configitems("paths"):
+        for name, path in sorted(ui.paths.iteritems()):
             if name == search:
-                ui.status("%s\n" % util.hidepassword(path))
+                ui.status("%s\n" % util.hidepassword(path.loc))
                 return
         if not ui.quiet:
             ui.warn(_("not found!\n"))
         return 1
     else:
-        for name, path in ui.configitems("paths"):
+        for name, path in sorted(ui.paths.iteritems()):
             if ui.quiet:
                 ui.write("%s\n" % name)
             else:
-                ui.write("%s = %s\n" % (name, util.hidepassword(path)))
+                ui.write("%s = %s\n" % (name,
+                                        util.hidepassword(path.loc)))
 
 @command('phase',
     [('p', 'public', False, _('set changeset phase to public')),
@@ -4984,9 +5045,9 @@ def pull(ui, repo, source="default", **opts):
     Returns 0 on success, 1 if an update had unresolved files.
     """
     source, branches = hg.parseurl(ui.expandpath(source), opts.get('branch'))
+    ui.status(_('pulling from %s\n') % util.hidepassword(source))
     other = hg.peer(repo, opts, source)
     try:
-        ui.status(_('pulling from %s\n') % util.hidepassword(source))
         revs, checkout = hg.addbranchrevs(repo, other, branches,
                                           opts.get('rev'))
 
@@ -5098,6 +5159,9 @@ def push(ui, repo, dest=None, **opts):
 
     if revs:
         revs = [repo.lookup(r) for r in scmutil.revrange(repo, revs)]
+        if not revs:
+            raise util.Abort(_("specified revisions evaluate to an empty set"),
+                             hint=_("use different revision arguments"))
 
     repo._subtoppath = dest
     try:
@@ -5225,7 +5289,7 @@ def rename(ui, repo, *pats, **opts):
     ('m', 'mark', None, _('mark files as resolved')),
     ('u', 'unmark', None, _('mark files as unresolved')),
     ('n', 'no-status', None, _('hide status prefix'))]
-    + mergetoolopts + walkopts,
+    + mergetoolopts + walkopts + formatteropts,
     _('[OPTION]... [FILE]...'),
     inferrepo=True)
 def resolve(ui, repo, *pats, **opts):
@@ -5277,11 +5341,25 @@ def resolve(ui, repo, *pats, **opts):
         raise util.Abort(_('no files or directories specified'),
                          hint=('use --all to remerge all files'))
 
+    if show:
+        fm = ui.formatter('resolve', opts)
+        ms = mergemod.mergestate(repo)
+        m = scmutil.match(repo[None], pats, opts)
+        for f in ms:
+            if not m(f):
+                continue
+            l = 'resolve.' + {'u': 'unresolved', 'r': 'resolved'}[ms[f]]
+            fm.startitem()
+            fm.condwrite(not nostatus, 'status', '%s ', ms[f].upper(), label=l)
+            fm.write('path', '%s\n', f, label=l)
+        fm.end()
+        return 0
+
     wlock = repo.wlock()
     try:
         ms = mergemod.mergestate(repo)
 
-        if not (ms.active() or repo.dirstate.p2() != nullid) and not show:
+        if not (ms.active() or repo.dirstate.p2() != nullid):
             raise util.Abort(
                 _('resolve command not applicable when not merging'))
 
@@ -5295,14 +5373,7 @@ def resolve(ui, repo, *pats, **opts):
 
             didwork = True
 
-            if show:
-                if nostatus:
-                    ui.write("%s\n" % f)
-                else:
-                    ui.write("%s %s\n" % (ms[f].upper(), f),
-                             label='resolve.' +
-                             {'u': 'unresolved', 'r': 'resolved'}[ms[f]])
-            elif mark:
+            if mark:
                 ms.mark(f, "r")
             elif unmark:
                 ms.mark(f, "u")
@@ -5334,10 +5405,8 @@ def resolve(ui, repo, *pats, **opts):
     finally:
         wlock.release()
 
-    # Nudge users into finishing an unfinished operation. We don't print
-    # this with the list/show operation because we want list/show to remain
-    # machine readable.
-    if not list(ms.unresolved()) and not show:
+    # Nudge users into finishing an unfinished operation
+    if not list(ms.unresolved()):
         ui.status(_('(no more unresolved files)\n'))
 
     return ret
@@ -5347,6 +5416,7 @@ def resolve(ui, repo, *pats, **opts):
     ('d', 'date', '', _('tipmost revision matching date'), _('DATE')),
     ('r', 'rev', '', _('revert to the specified revision'), _('REV')),
     ('C', 'no-backup', None, _('do not save backup copies of files')),
+    ('i', 'interactive', None, _('interactively select the changes')),
     ] + walkopts + dryrunopts,
     _('[OPTION]... [-r REV] [NAME]...'))
 def revert(ui, repo, *pats, **opts):
@@ -5541,7 +5611,10 @@ def serve(ui, repo, **opts):
     if opts.get('port'):
         opts['port'] = util.getport(opts.get('port'))
 
-    baseui = repo and repo.baseui or ui
+    if repo:
+        baseui = repo.baseui
+    else:
+        baseui = ui
     optlist = ("name templates style address port prefix ipv6"
                " accesslog errorlog certificate encoding")
     for o in optlist.split():
@@ -5668,6 +5741,11 @@ def status(ui, repo, *pats, **opts):
 
           hg status --rev 9353
 
+      - show changes in the working directory relative to the
+        current directory (see :hg:`help patterns` for more information)::
+
+          hg status re:
+
       - show all changes including copies in an existing changeset::
 
           hg status --copies --change 9353
@@ -5691,15 +5769,25 @@ def status(ui, repo, *pats, **opts):
     else:
         node1, node2 = scmutil.revpair(repo, revs)
 
-    cwd = (pats and repo.getcwd()) or ''
-    end = opts.get('print0') and '\0' or '\n'
+    if pats:
+        cwd = repo.getcwd()
+    else:
+        cwd = ''
+
+    if opts.get('print0'):
+        end = '\0'
+    else:
+        end = '\n'
     copy = {}
     states = 'modified added removed deleted unknown ignored clean'.split()
     show = [k for k in states if opts.get(k)]
     if opts.get('all'):
         show += ui.quiet and (states[:4] + ['clean']) or states
     if not show:
-        show = ui.quiet and states[:4] or states[:5]
+        if ui.quiet:
+            show = states[:4]
+        else:
+            show = states[:5]
 
     stat = repo.status(node1, node2, scmutil.match(repo[node2], pats, opts),
                        'ignored' in show, 'clean' in show, 'unknown' in show,
@@ -5939,14 +6027,11 @@ def summary(ui, repo, **opts):
             t.append(_('%d outgoing') % len(o))
         other = dother or sother
         if 'bookmarks' in other.listkeys('namespaces'):
-            lmarks = repo.listkeys('bookmarks')
-            rmarks = other.listkeys('bookmarks')
-            diff = set(rmarks) - set(lmarks)
-            if len(diff) > 0:
-                t.append(_('%d incoming bookmarks') % len(diff))
-            diff = set(lmarks) - set(rmarks)
-            if len(diff) > 0:
-                t.append(_('%d outgoing bookmarks') % len(diff))
+            counts = bookmarks.summary(repo, other)
+            if counts[0] > 0:
+                t.append(_('%d incoming bookmarks') % counts[0])
+            if counts[1] > 0:
+                t.append(_('%d outgoing bookmarks') % counts[1])
 
         if t:
             # i18n: column positioning for "hg summary"
@@ -6020,7 +6105,11 @@ def tag(ui, repo, name1, *names, **opts):
             rev_ = opts['rev']
         message = opts.get('message')
         if opts.get('remove'):
-            expectedtype = opts.get('local') and 'local' or 'global'
+            if opts.get('local'):
+                expectedtype = 'local'
+            else:
+                expectedtype = 'global'
+
             for n in names:
                 if not repo.tagtype(n):
                     raise util.Abort(_("tag '%s' does not exist") % n)
@@ -6250,9 +6339,7 @@ def update(ui, repo, node=None, rev=None, clean=False, date=None, check=False,
         rev = cmdutil.finddate(ui, repo, date)
 
     if check:
-        c = repo[None]
-        if c.dirty(merge=False, branch=False, missing=True):
-            raise util.Abort(_("uncommitted changes"))
+        cmdutil.bailifchanged(repo, merge=False)
         if rev is None:
             rev = repo[repo[None].branch()].rev()
 
@@ -6303,7 +6390,7 @@ def version_(ui):
              % util.version())
     ui.status(_(
         "(see http://mercurial.selenic.com for more information)\n"
-        "\nCopyright (C) 2005-2014 Matt Mackall and others\n"
+        "\nCopyright (C) 2005-2015 Matt Mackall and others\n"
         "This is free software; see the source for copying conditions. "
         "There is NO\nwarranty; "
         "not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n"

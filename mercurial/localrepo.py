@@ -196,7 +196,6 @@ class localrepository(object):
     _basesupported = supportedformats | set(('store', 'fncache', 'shared',
                                              'dotencode'))
     openerreqs = set(('revlogv1', 'generaldelta', 'manifestv2'))
-    requirements = ['revlogv1']
     filtername = None
 
     # a list of (ui, featureset) functions.
@@ -204,9 +203,10 @@ class localrepository(object):
     featuresetupfuncs = set()
 
     def _baserequirements(self, create):
-        return self.requirements[:]
+        return ['revlogv1']
 
     def __init__(self, baseui, path=None, create=False):
+        self.requirements = set()
         self.wvfs = scmutil.vfs(path, expandpath=True, realpath=True)
         self.wopener = self.wvfs
         self.root = self.wvfs.base
@@ -243,14 +243,14 @@ class localrepository(object):
                 if not self.wvfs.exists():
                     self.wvfs.makedirs()
                 self.vfs.makedir(notindexed=True)
-                requirements = self._baserequirements(create)
+                self.requirements.update(self._baserequirements(create))
                 if self.ui.configbool('format', 'usestore', True):
                     self.vfs.mkdir("store")
-                    requirements.append("store")
+                    self.requirements.add("store")
                     if self.ui.configbool('format', 'usefncache', True):
-                        requirements.append("fncache")
+                        self.requirements.add("fncache")
                         if self.ui.configbool('format', 'dotencode', True):
-                            requirements.append('dotencode')
+                            self.requirements.add('dotencode')
                     # create an invalid changelog
                     self.vfs.append(
                         "00changelog.i",
@@ -258,21 +258,20 @@ class localrepository(object):
                         ' dummy changelog to prevent using the old repo layout'
                     )
                 if self.ui.configbool('format', 'generaldelta', False):
-                    requirements.append("generaldelta")
+                    self.requirements.add("generaldelta")
                 if self.ui.configbool('experimental', 'manifestv2', False):
-                    requirements.append("manifestv2")
-                requirements = set(requirements)
+                    self.requirements.add("manifestv2")
             else:
                 raise error.RepoError(_("repository %s not found") % path)
         elif create:
             raise error.RepoError(_("repository %s already exists") % path)
         else:
             try:
-                requirements = scmutil.readrequires(self.vfs, self.supported)
+                self.requirements = scmutil.readrequires(
+                        self.vfs, self.supported)
             except IOError, inst:
                 if inst.errno != errno.ENOENT:
                     raise
-                requirements = set()
 
         self.sharedpath = self.path
         try:
@@ -287,13 +286,14 @@ class localrepository(object):
             if inst.errno != errno.ENOENT:
                 raise
 
-        self.store = store.store(requirements, self.sharedpath, scmutil.vfs)
+        self.store = store.store(
+                self.requirements, self.sharedpath, scmutil.vfs)
         self.spath = self.store.path
         self.svfs = self.store.vfs
         self.sopener = self.svfs
         self.sjoin = self.store.join
         self.vfs.createmode = self.store.createmode
-        self._applyrequirements(requirements)
+        self._applyopenerreqs()
         if create:
             self._writerequirements()
 
@@ -336,9 +336,8 @@ class localrepository(object):
             caps.add('bundle2=' + urllib.quote(capsblob))
         return caps
 
-    def _applyrequirements(self, requirements):
-        self.requirements = requirements
-        self.svfs.options = dict((r, 1) for r in requirements
+    def _applyopenerreqs(self):
+        self.svfs.options = dict((r, 1) for r in self.requirements
                                            if r in self.openerreqs)
         chunkcachesize = self.ui.configint('format', 'chunkcachesize')
         if chunkcachesize is not None:
@@ -1754,7 +1753,7 @@ class localrepository(object):
         """
         return util.hooks()
 
-    def stream_in(self, remote, requirements):
+    def stream_in(self, remote, remotereqs):
         lock = self.lock()
         try:
             # Save remote branchmap. We will use it later
@@ -1827,10 +1826,11 @@ class localrepository(object):
                             util.bytecount(total_bytes / elapsed)))
 
             # new requirements = old non-format requirements +
-            #                    new format-related
+            #                    new format-related remote requirements
             # requirements from the streamed-in repository
-            requirements.update(set(self.requirements) - self.supportedformats)
-            self._applyrequirements(requirements)
+            self.requirements = remotereqs | (
+                    self.requirements - self.supportedformats)
+            self._applyopenerreqs()
             self._writerequirements()
 
             if rbranchmap:

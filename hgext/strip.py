@@ -60,8 +60,8 @@ def strip(ui, repo, revs, update=True, backup=True, force=None, bookmark=None):
 
         marks = repo._bookmarks
         if bookmark:
-            if bookmark == repo._bookmarkcurrent:
-                bookmarks.unsetcurrent(repo)
+            if bookmark == repo._activebookmark:
+                bookmarks.deactivate(repo)
             del marks[bookmark]
             marks.write()
             ui.write(_("bookmark '%s' deleted\n") % bookmark)

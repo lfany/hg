@@ -1,5 +1,27 @@
   $ HGENCODING=utf-8
   $ export HGENCODING
+  $ cat > testrevset.py << EOF
+  > import mercurial.revset
+  > 
+  > baseset = mercurial.revset.baseset
+  > 
+  > def r3232(repo, subset, x):
+  >     """"simple revset that return [3,2,3,2]
+  > 
+  >     revisions duplicated on purpose.
+  >     """
+  >     if 3 not in subset:
+  >        if 2 in subset:
+  >            return baseset([2,2])
+  >        return baseset()
+  >     return baseset([3,3,2,2])
+  > 
+  > mercurial.revset.symbols['r3232'] = r3232
+  > EOF
+  $ cat >> $HGRCPATH << EOF
+  > [extensions]
+  > testrevset=$TESTTMP/testrevset.py
+  > EOF
 
   $ try() {
   >   hg debugrevspec --debug "$@"
@@ -281,7 +303,7 @@ quoting needed
   hg: parse error: date requires a string
   [255]
   $ log 'date'
-  hg: parse error: can't use date here
+  abort: unknown revision 'date'!
   [255]
   $ log 'date('
   hg: parse error at 5: not a prefix: end
@@ -289,11 +311,40 @@ quoting needed
   $ log 'date(tip)'
   abort: invalid date: 'tip'
   [255]
-  $ log '"date"'
+  $ log '0:date'
   abort: unknown revision 'date'!
   [255]
+  $ log '::"date"'
+  abort: unknown revision 'date'!
+  [255]
+  $ hg book date -r 4
+  $ log '0:date'
+  0
+  1
+  2
+  3
+  4
+  $ log '::date'
+  0
+  1
+  2
+  4
+  $ log '::"date"'
+  0
+  1
+  2
+  4
   $ log 'date(2005) and 1::'
   4
+  $ hg book -d date
+
+Test that symbols only get parsed as functions if there's an opening
+parenthesis.
+
+  $ hg book only -r 9
+  $ log 'only(only)'   # Outer "only" is a function, inner "only" is the bookmark
+  8
+  9
 
 ancestor can accept 0 or more arguments
 
@@ -311,6 +362,9 @@ ancestor can accept 0 or more arguments
   0
   $ log 'ancestor(1,2,3,4,5)'
   1
+
+test ancestors
+
   $ log 'ancestors(5)'
   0
   1
@@ -318,6 +372,12 @@ ancestor can accept 0 or more arguments
   5
   $ log 'ancestor(ancestors(5))'
   0
+  $ log '::r3232()'
+  0
+  1
+  2
+  3
+
   $ log 'author(bob)'
   2
   $ log 'author("re:bob|test")'

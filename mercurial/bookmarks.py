@@ -83,8 +83,8 @@ class bmstore(dict):
 
     def _writerepo(self, repo):
         """Factored out for extensibility"""
-        if repo._bookmarkcurrent not in self:
-            unsetcurrent(repo)
+        if repo._activebookmark not in self:
+            deactivate(repo)
 
         wlock = repo.wlock()
         try:
@@ -106,13 +106,12 @@ class bmstore(dict):
         for name, node in self.iteritems():
             fp.write("%s %s\n" % (hex(node), encoding.fromlocal(name)))
 
-def readcurrent(repo):
-    '''Get the current bookmark
-
-    If we use gittish branches we have a current bookmark that
-    we are on. This function returns the name of the bookmark. It
-    is stored in .hg/bookmarks.current
-    '''
+def readactive(repo):
+    """
+    Get the active bookmark. We can have an active bookmark that updates
+    itself as we commit. This function returns the name of that bookmark.
+    It is stored in .hg/bookmarks.current
+    """
     mark = None
     try:
         file = repo.vfs('bookmarks.current')
@@ -129,16 +128,16 @@ def readcurrent(repo):
         file.close()
     return mark
 
-def setcurrent(repo, mark):
-    '''Set the name of the bookmark that we are currently on
-
-    Set the name of the bookmark that we are on (hg update <bookmark>).
+def activate(repo, mark):
+    """
+    Set the given bookmark to be 'active', meaning that this bookmark will
+    follow new commits that are made.
     The name is recorded in .hg/bookmarks.current
-    '''
+    """
     if mark not in repo._bookmarks:
         raise AssertionError('bookmark %s does not exist!' % mark)
 
-    current = repo._bookmarkcurrent
+    current = repo._activebookmark
     if current == mark:
         return
 
@@ -149,14 +148,17 @@ def setcurrent(repo, mark):
         file.close()
     finally:
         wlock.release()
-    repo._bookmarkcurrent = mark
+    repo._activebookmark = mark
 
-def unsetcurrent(repo):
+def deactivate(repo):
+    """
+    Unset the active bookmark in this reposiotry.
+    """
     wlock = repo.wlock()
     try:
         try:
             repo.vfs.unlink('bookmarks.current')
-            repo._bookmarkcurrent = None
+            repo._activebookmark = None
         except OSError, inst:
             if inst.errno != errno.ENOENT:
                 raise
@@ -170,7 +172,7 @@ def iscurrent(repo, mark=None, parents=None):
     parent of the working directory.
     '''
     if not mark:
-        mark = repo._bookmarkcurrent
+        mark = repo._activebookmark
     if not parents:
         parents = [p.node() for p in repo[None].parents()]
     marks = repo._bookmarks
@@ -207,7 +209,7 @@ def calculateupdate(ui, repo, checkout):
     check out and where to move the active bookmark from, if needed.'''
     movemarkfrom = None
     if checkout is None:
-        curmark = repo._bookmarkcurrent
+        curmark = repo._activebookmark
         if iscurrent(repo):
             movemarkfrom = repo['.'].node()
         elif curmark:
@@ -219,7 +221,7 @@ def update(repo, parents, node):
     deletefrom = parents
     marks = repo._bookmarks
     update = False
-    cur = repo._bookmarkcurrent
+    cur = repo._activebookmark
     if not cur:
         return False
 

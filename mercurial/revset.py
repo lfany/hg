@@ -25,23 +25,25 @@ def _revancestors(repo, revs, followfirst):
     cl = repo.changelog
 
     def iterate():
-        revqueue, revsnode = None, None
-        h = []
-
         revs.sort(reverse=True)
-        revqueue = util.deque(revs)
-        if revqueue:
-            revsnode = revqueue.popleft()
-            heapq.heappush(h, -revsnode)
+        irevs = iter(revs)
+        h = []
+        try:
+            inputrev = irevs.next()
+            heapq.heappush(h, -inputrev)
+        except StopIteration:
+            return
 
         seen = set()
         while h:
             current = -heapq.heappop(h)
+            if current == inputrev:
+                try:
+                    inputrev = irevs.next()
+                    heapq.heappush(h, -inputrev)
+                except StopIteration:
+                    pass
             if current not in seen:
-                if revsnode and current == revsnode:
-                    if revqueue:
-                        revsnode = revqueue.popleft()
-                        heapq.heappush(h, -revsnode)
                 seen.add(current)
                 yield current
                 for parent in cl.parentrevs(current)[:cut]:
@@ -333,11 +335,6 @@ def stringset(repo, subset, x):
     if x in subset:
         return baseset([x])
     return baseset()
-
-def symbolset(repo, subset, x):
-    if x in symbols:
-        raise error.ParseError(_("can't use %s here") % x)
-    return stringset(repo, subset, x)
 
 def rangeset(repo, subset, x, y):
     m = getset(repo, fullreposet(repo), x)
@@ -1684,7 +1681,7 @@ def roots(repo, subset, x):
     Changesets in set with no parent changeset in set.
     """
     s = getset(repo, fullreposet(repo), x)
-    subset = baseset([r for r in s if r in subset])
+    subset = subset & s# baseset([r for r in s if r in subset])
     cs = _children(repo, subset, s)
     return subset - cs
 
@@ -2088,7 +2085,7 @@ methods = {
     "range": rangeset,
     "dagrange": dagrange,
     "string": stringset,
-    "symbol": symbolset,
+    "symbol": stringset,
     "and": andset,
     "or": orset,
     "not": notset,
@@ -3142,7 +3139,12 @@ class generatorset(abstractsmartset):
                 self.__contains__ = self._desccontains
 
     def __nonzero__(self):
-        for r in self:
+        # Do not use 'for r in self' because it will enforce the iteration
+        # order (default ascending), possibly unrolling a whole descending
+        # iterator.
+        if self._genlist:
+            return True
+        for r in self._consumegen():
             return True
         return False
 

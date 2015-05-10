@@ -618,14 +618,25 @@ def _flatten(thing):
                 for j in _flatten(i):
                     yield j
 
-def parsestring(s, quoted=True):
-    '''unwrap quotes if quoted is True'''
-    if quoted:
-        if len(s) < 2 or s[0] != s[-1]:
-            raise SyntaxError(_('unmatched quotes'))
-        return s[1:-1]
-
-    return s
+def unquotestring(s):
+    '''unwrap quotes'''
+    if len(s) < 2 or s[0] != s[-1]:
+        raise SyntaxError(_('unmatched quotes'))
+    # de-backslash-ify only <\">. it is invalid syntax in non-string part of
+    # template, but we are likely to escape <"> in quoted string and it was
+    # accepted before, thanks to issue4290. <\\"> is unmodified because it
+    # is ambiguous and it was processed as such before 2.8.1.
+    #
+    #  template  result
+    #  --------- ------------------------
+    #  {\"\"}    parse error
+    #  "{""}"    {""} -> <>
+    #  "{\"\"}"  {""} -> <>
+    #  {"\""}    {"\""} -> <">
+    #  '{"\""}'  {"\""} -> <">
+    #  "{"\""}"  parse error (don't care)
+    q = s[0]
+    return s[1:-1].replace('\\\\' + q, '\\\\\\' + q).replace('\\' + q, q)
 
 class engine(object):
     '''template expansion engine.
@@ -717,7 +728,7 @@ class templater(object):
                 raise SyntaxError(_('%s: missing value') % conf.source('', key))
             if val[0] in "'\"":
                 try:
-                    self.cache[key] = parsestring(val)
+                    self.cache[key] = unquotestring(val)
                 except SyntaxError, inst:
                     raise SyntaxError('%s: %s' %
                                       (conf.source('', key), inst.args[0]))

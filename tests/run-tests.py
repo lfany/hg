@@ -49,6 +49,7 @@ import os
 import shutil
 import subprocess
 import signal
+import socket
 import sys
 import tempfile
 import time
@@ -77,6 +78,18 @@ if sys.version_info < (2, 5):
     subprocess._cleanup = lambda: None
 
 wifexited = getattr(os, "WIFEXITED", lambda x: False)
+
+def checkportisavailable(port):
+    """return true if a port seems free to bind on localhost"""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.bind(('localhost', port))
+        s.close()
+        return True
+    except socket.error, exc:
+        if not exc.errno == errno.EADDRINUSE:
+            raise
+        return False
 
 closefds = os.name == 'posix'
 def Popen4(cmd, wd, timeout, env=None):
@@ -442,6 +455,11 @@ class Test(unittest.TestCase):
         else:
             self._refout = []
 
+    # needed to get base class __repr__ running
+    @property
+    def _testMethodName(self):
+        return self.name
+
     def __str__(self):
         return self.name
 
@@ -620,7 +638,7 @@ class Test(unittest.TestCase):
                 f.write(line)
             f.close()
 
-        vlog("# Ret was:", self._ret)
+        vlog("# Ret was:", self._ret, '(%s)' % self.name)
 
     def _run(self, env):
         # This should be implemented in child classes to run tests.
@@ -1290,8 +1308,11 @@ class TestResult(unittest._TextTestResult):
 
         starttime = test.started
         endtime = test.stopped
-        self.times.append((test.name, endtime[2] - starttime[2],
-                    endtime[3] - starttime[3], endtime[4] - starttime[4]))
+        self.times.append((test.name,
+                           endtime[2] - starttime[2], # user space CPU time
+                           endtime[3] - starttime[3], # sys  space CPU time
+                           endtime[4] - starttime[4], # real time
+                           ))
 
         if interrupted:
             iolock.acquire()
@@ -1476,8 +1497,7 @@ class TextTestRunner(unittest.TextTestRunner):
         if self._runner.options.xunit:
             xuf = open(self._runner.options.xunit, 'wb')
             try:
-                timesd = dict(
-                    (test, real) for test, cuser, csys, real in result.times)
+                timesd = dict((t[0], t[3]) for t in result.times)
                 doc = minidom.Document()
                 s = doc.createElement('testsuite')
                 s.setAttribute('name', 'run-tests')
@@ -1513,30 +1533,21 @@ class TextTestRunner(unittest.TextTestRunner):
             fp = open(jsonpath, 'w')
             try:
                 timesd = {}
-                for test, cuser, csys, real in result.times:
-                    timesd[test] = (real, cuser, csys)
+                for tdata in result.times:
+                    test = tdata[0]
+                    timesd[test] = tdata[1:]
 
                 outcome = {}
-                for tc in result.successes:
-                    testresult = {'result': 'success',
-                                  'time': ('%0.3f' % timesd[tc.name][0]),
-                                  'cuser': ('%0.3f' % timesd[tc.name][1]),
-                                  'csys': ('%0.3f' % timesd[tc.name][2])}
-                    outcome[tc.name] = testresult
-
-                for tc, err in sorted(result.faildata.iteritems()):
-                    testresult = {'result': 'failure',
-                                  'time': ('%0.3f' % timesd[tc][0]),
-                                  'cuser': ('%0.3f' % timesd[tc][1]),
-                                  'csys': ('%0.3f' % timesd[tc][2])}
-                    outcome[tc] = testresult
-
-                for tc, reason in result.skipped:
-                    testresult = {'result': 'skip',
-                                  'time': ('%0.3f' % timesd[tc.name][0]),
-                                  'cuser': ('%0.3f' % timesd[tc.name][1]),
-                                  'csys': ('%0.3f' % timesd[tc.name][2])}
-                    outcome[tc.name] = testresult
+                groups = [('success', ((tc, None) for tc in result.successes)),
+                          ('failure', result.failures),
+                          ('skip', result.skipped)]
+                for res, testcases in groups:
+                    for tc, __ in testcases:
+                        testresult = {'result': res,
+                                      'time': ('%0.3f' % timesd[tc.name][2]),
+                                      'cuser': ('%0.3f' % timesd[tc.name][0]),
+                                      'csys': ('%0.3f' % timesd[tc.name][1])}
+                        outcome[tc.name] = testresult
 
                 jsonout = json.dumps(outcome, sort_keys=True, indent=4)
                 fp.writelines(("testreport =", jsonout))
@@ -1565,7 +1576,9 @@ class TextTestRunner(unittest.TextTestRunner):
         cols = '%7.3f %7.3f %7.3f   %s'
         self.stream.writeln('%-7s %-7s %-7s   %s' % ('cuser', 'csys', 'real',
                     'Test'))
-        for test, cuser, csys, real in times:
+        for tdata in times:
+            test = tdata[0]
+            cuser, csys, real = tdata[1:4]
             self.stream.writeln(cols % (cuser, csys, real, test))
 
 class TestRunner(object):
@@ -1603,6 +1616,8 @@ class TestRunner(object):
         self._coveragefile = None
         self._createdfiles = []
         self._hgpath = None
+        self._portoffset = 0
+        self._ports = {}
 
     def run(self, args, parser=None):
         """Run the test suite."""
@@ -1807,6 +1822,24 @@ class TestRunner(object):
         if warned:
             return 80
 
+    def _getport(self, count):
+        port = self._ports.get(count) # do we have a cached entry?
+        if port is None:
+            port = self.options.port + self._portoffset
+            portneeded = 3
+            # above 100 tries we just give up and let test reports failure
+            for tries in xrange(100):
+                allfree = True
+                for idx in xrange(portneeded):
+                    if not checkportisavailable(port + idx):
+                        allfree = False
+                        break
+                self._portoffset += portneeded
+                if allfree:
+                    break
+            self._ports[count] = port
+        return port
+
     def _gettest(self, test, count):
         """Obtain a Test by looking at its filename.
 
@@ -1828,7 +1861,7 @@ class TestRunner(object):
                     keeptmpdir=self.options.keep_tmpdir,
                     debug=self.options.debug,
                     timeout=self.options.timeout,
-                    startport=self.options.port + count * 3,
+                    startport=self._getport(count),
                     extraconfigopts=self.options.extra_config_opt,
                     py3kwarnings=self.options.py3k_warnings,
                     shell=self.options.shell)

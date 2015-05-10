@@ -95,7 +95,7 @@ Template should precede style option
   8
 
 Add a commit with empty description, to ensure that the templates
-following below omit it properly.
+below will omit the description line.
 
   $ echo c >> c
   $ hg add c
@@ -108,32 +108,52 @@ as default style, except for extra phase lines.
   $ hg log --style default > style.out
   $ cmp log.out style.out || diff -u log.out style.out
   $ hg log -T phases > phases.out
-  $ diff -u log.out phases.out | grep "phase:"
+  $ diff -U 0 log.out phases.out | grep -v '^---\|^+++'
+  @@ -2,0 +3 @@
   +phase:       draft
+  @@ -6,0 +8 @@
   +phase:       draft
+  @@ -11,0 +14 @@
   +phase:       draft
+  @@ -17,0 +21 @@
   +phase:       draft
+  @@ -24,0 +29 @@
   +phase:       draft
+  @@ -31,0 +37 @@
   +phase:       draft
+  @@ -36,0 +43 @@
   +phase:       draft
+  @@ -41,0 +49 @@
   +phase:       draft
+  @@ -46,0 +55 @@
   +phase:       draft
+  @@ -51,0 +61 @@
   +phase:       draft
 
   $ hg log -v > log.out
   $ hg log -v --style default > style.out
   $ cmp log.out style.out || diff -u log.out style.out
   $ hg log -v -T phases > phases.out
-  $ diff -u log.out phases.out | grep phase:
+  $ diff -U 0 log.out phases.out | grep -v '^---\|^+++'
+  @@ -2,0 +3 @@
   +phase:       draft
+  @@ -7,0 +9 @@
   +phase:       draft
+  @@ -15,0 +18 @@
   +phase:       draft
+  @@ -24,0 +28 @@
   +phase:       draft
+  @@ -33,0 +38 @@
   +phase:       draft
+  @@ -43,0 +49 @@
   +phase:       draft
+  @@ -50,0 +57 @@
   +phase:       draft
+  @@ -58,0 +66 @@
   +phase:       draft
+  @@ -66,0 +75 @@
   +phase:       draft
+  @@ -77,0 +87 @@
   +phase:       draft
 
   $ hg log -q > log.out
@@ -160,32 +180,52 @@ Default style should also preserve color information (issue2866):
   $ hg --color=debug log --style default > style.out
   $ cmp log.out style.out || diff -u log.out style.out
   $ hg --color=debug log -T phases > phases.out
-  $ diff -u log.out phases.out | grep phase:
+  $ diff -U 0 log.out phases.out | grep -v '^---\|^+++'
+  @@ -2,0 +3 @@
   +[log.phase|phase:       draft]
+  @@ -6,0 +8 @@
   +[log.phase|phase:       draft]
+  @@ -11,0 +14 @@
   +[log.phase|phase:       draft]
+  @@ -17,0 +21 @@
   +[log.phase|phase:       draft]
+  @@ -24,0 +29 @@
   +[log.phase|phase:       draft]
+  @@ -31,0 +37 @@
   +[log.phase|phase:       draft]
+  @@ -36,0 +43 @@
   +[log.phase|phase:       draft]
+  @@ -41,0 +49 @@
   +[log.phase|phase:       draft]
+  @@ -46,0 +55 @@
   +[log.phase|phase:       draft]
+  @@ -51,0 +61 @@
   +[log.phase|phase:       draft]
 
   $ hg --color=debug -v log > log.out
   $ hg --color=debug -v log --style default > style.out
   $ cmp log.out style.out || diff -u log.out style.out
   $ hg --color=debug -v log -T phases > phases.out
-  $ diff -u log.out phases.out | grep phase:
+  $ diff -U 0 log.out phases.out | grep -v '^---\|^+++'
+  @@ -2,0 +3 @@
   +[log.phase|phase:       draft]
+  @@ -7,0 +9 @@
   +[log.phase|phase:       draft]
+  @@ -15,0 +18 @@
   +[log.phase|phase:       draft]
+  @@ -24,0 +28 @@
   +[log.phase|phase:       draft]
+  @@ -33,0 +38 @@
   +[log.phase|phase:       draft]
+  @@ -43,0 +49 @@
   +[log.phase|phase:       draft]
+  @@ -50,0 +57 @@
   +[log.phase|phase:       draft]
+  @@ -58,0 +66 @@
   +[log.phase|phase:       draft]
+  @@ -66,0 +75 @@
   +[log.phase|phase:       draft]
+  @@ -77,0 +87 @@
   +[log.phase|phase:       draft]
 
   $ hg --color=debug -q log > log.out
@@ -1953,6 +1993,15 @@ Upper/lower filters:
   abort: template filter 'upper' is not compatible with keyword 'date'
   [255]
 
+Add a commit that does all possible modifications at once
+
+  $ echo modify >> third
+  $ touch b
+  $ hg add b
+  $ hg mv fourth fifth
+  $ hg rm a
+  $ hg ci -m "Modify, add, remove, rename"
+
 Error on syntax:
 
   $ echo 'x = "f' >> t
@@ -2273,6 +2322,25 @@ Test string escaping:
   <>\n<]>
   <>\n<
 
+Test exception in quoted template. single backslash before quotation mark is
+stripped before parsing:
+
+  $ cat <<'EOF' > escquotetmpl
+  > changeset = "\" \\" \\\" \\\\" {files % \"{file}\"}\n"
+  > EOF
+  $ cd latesttag
+  $ hg log -r 2 --style ../escquotetmpl
+  " \" \" \\" head1
+
+  $ hg log -r 2 -T esc --config templates.esc='{\"invalid\"}\n'
+  hg: parse error at 1: syntax error
+  [255]
+  $ hg log -r 2 -T esc --config templates.esc='"{\"valid\"}\n"'
+  valid
+  $ hg log -r 2 -T esc --config templates.esc="'"'{\'"'"'valid\'"'"'}\n'"'"
+  valid
+  $ cd ..
+
 Test leading backslashes:
 
   $ cd latesttag
@@ -2547,7 +2615,9 @@ Test stringify on sub expressions
 Test splitlines
 
   $ hg log -Gv -R a --template "{splitlines(desc) % 'foo {line}\n'}"
-  @  foo future
+  @  foo Modify, add, remove, rename
+  |
+  o  foo future
   |
   o  foo third
   |
@@ -2581,6 +2651,8 @@ Test startswith
   o
   |
   o
+  |
+  o
   
   o
   |\
@@ -2606,7 +2678,9 @@ Test bad template with better error message
 Test word function (including index out of bounds graceful failure)
 
   $ hg log -Gv -R a --template "{word('1', desc)}"
-  @
+  @  add,
+  |
+  o
   |
   o
   |
@@ -2630,7 +2704,9 @@ Test word function (including index out of bounds graceful failure)
 Test word third parameter used as splitter
 
   $ hg log -Gv -R a --template "{word('0', desc, 'o')}"
-  @  future
+  @  M
+  |
+  o  future
   |
   o  third
   |

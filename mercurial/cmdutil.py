@@ -1443,9 +1443,9 @@ def gettemplate(ui, tmpl, style):
         tmpl = ui.config('ui', 'logtemplate')
         if tmpl:
             try:
-                tmpl = templater.parsestring(tmpl)
+                tmpl = templater.unquotestring(tmpl)
             except SyntaxError:
-                tmpl = templater.parsestring(tmpl, quoted=False)
+                pass
             return tmpl, None
         else:
             style = util.expandpath(ui.config('ui', 'style', ''))
@@ -1477,9 +1477,9 @@ def gettemplate(ui, tmpl, style):
     t = ui.config('templates', tmpl)
     if t:
         try:
-            tmpl = templater.parsestring(t)
+            tmpl = templater.unquotestring(t)
         except SyntaxError:
-            tmpl = templater.parsestring(t, quoted=False)
+            tmpl = t
         return tmpl, None
 
     if tmpl == 'list':
@@ -2336,7 +2336,7 @@ def remove(ui, repo, m, prefix, after, force, subrepos):
                     return True
             return False
 
-        isdir = f in deleteddirs or f in wctx.dirs()
+        isdir = f in deleteddirs or wctx.hasdir(f)
         if f in repo.dirstate or isdir or f == '.' or insubrepo():
             continue
 
@@ -2480,13 +2480,13 @@ def amend(ui, repo, commitfunc, old, extra, pats, opts):
             # First, do a regular commit to record all changes in the working
             # directory (if there are any)
             ui.callhooks = False
-            currentbookmark = repo._bookmarkcurrent
+            currentbookmark = repo._activebookmark
             try:
-                repo._bookmarkcurrent = None
+                repo._activebookmark = None
                 opts['message'] = 'temporary amend commit for %s' % old
                 node = commit(ui, repo, commitfunc, pats, opts)
             finally:
-                repo._bookmarkcurrent = currentbookmark
+                repo._activebookmark = currentbookmark
                 ui.callhooks = True
             ctx = repo[node]
 
@@ -2721,8 +2721,8 @@ def buildcommittext(repo, ctx, subs, extramsg):
         edittext.append(_("HG: branch merge"))
     if ctx.branch():
         edittext.append(_("HG: branch '%s'") % ctx.branch())
-    if bookmarks.iscurrent(repo):
-        edittext.append(_("HG: bookmark '%s'") % repo._bookmarkcurrent)
+    if bookmarks.isactivewdirparent(repo):
+        edittext.append(_("HG: bookmark '%s'") % repo._activebookmark)
     edittext.extend([_("HG: subrepo %s") % s for s in subs])
     edittext.extend([_("HG: added %s") % f for f in added])
     edittext.extend([_("HG: changed %s") % f for f in modified])

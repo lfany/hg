@@ -20,6 +20,7 @@ elements = {
     "|": (5, None, ("|", 5)),
     "%": (6, None, ("%", 6)),
     ")": (0, None, None),
+    "integer": (0, ("integer",), None),
     "symbol": (0, ("symbol",), None),
     "string": (0, ("string",), None),
     "rawstring": (0, ("rawstring",), None),
@@ -59,6 +60,20 @@ def tokenizer(data):
                 pos += 1
             else:
                 raise error.ParseError(_("unterminated string"), s)
+        elif c.isdigit() or c == '-':
+            s = pos
+            if c == '-': # simply take negate operator as part of integer
+                pos += 1
+            if pos >= end or not program[pos].isdigit():
+                raise error.ParseError(_("integer literal without digits"), s)
+            pos += 1
+            while pos < end:
+                d = program[pos]
+                if not d.isdigit():
+                    break
+                pos += 1
+            yield ('integer', program[s:pos], s)
+            pos -= 1
         elif c.isalnum() or c in '_':
             s = pos
             pos += 1
@@ -100,12 +115,12 @@ def compiletemplate(tmpl, context, strtoken="string"):
         parseres, pos = p.parse(pd)
         parsed.append(parseres)
 
-    return [compileexp(e, context) for e in parsed]
+    return [compileexp(e, context, methods) for e in parsed]
 
-def compileexp(exp, context):
+def compileexp(exp, context, curmethods):
     t = exp[0]
-    if t in methods:
-        return methods[t](exp, context)
+    if t in curmethods:
+        return curmethods[t](exp, context)
     raise error.ParseError(_("unknown method '%s'") % t)
 
 # template evaluation
@@ -135,6 +150,9 @@ def gettemplate(exp, context):
         return context._load(exp[1])
     raise error.ParseError(_("expected template specifier"))
 
+def runinteger(context, mapping, data):
+    return int(data)
+
 def runstring(context, mapping, data):
     return data.decode("string-escape")
 
@@ -157,7 +175,7 @@ def runsymbol(context, mapping, key):
     return v
 
 def buildfilter(exp, context):
-    func, data = compileexp(exp[1], context)
+    func, data = compileexp(exp[1], context, methods)
     filt = getfilter(exp[2], context)
     return (runfilter, (func, data, filt))
 
@@ -179,7 +197,7 @@ def runfilter(context, mapping, data):
                            "keyword '%s'") % (filt.func_name, dt))
 
 def buildmap(exp, context):
-    func, data = compileexp(exp[1], context)
+    func, data = compileexp(exp[1], context, methods)
     ctmpl = gettemplate(exp[2], context)
     return (runmap, (func, data, ctmpl))
 
@@ -208,7 +226,7 @@ def runmap(context, mapping, data):
 
 def buildfunc(exp, context):
     n = getsymbol(exp[1])
-    args = [compileexp(x, context) for x in getlist(exp[2])]
+    args = [compileexp(x, context, exprmethods) for x in getlist(exp[2])]
     if n in funcs:
         f = funcs[n]
         return (f, args)
@@ -551,8 +569,7 @@ def word(context, mapping, args):
         num = int(stringify(args[0][0](context, mapping, args[0][1])))
     except ValueError:
         # i18n: "word" is a keyword
-        raise error.ParseError(
-                _("Use strings like '3' for numbers passed to word function"))
+        raise error.ParseError(_("word expects an integer index"))
     text = stringify(args[1][0](context, mapping, args[1][1]))
     if len(args) == 3:
         splitter = stringify(args[2][0](context, mapping, args[2][1]))
@@ -565,16 +582,22 @@ def word(context, mapping, args):
     else:
         return tokens[num]
 
-methods = {
+# methods to interpret function arguments or inner expressions (e.g. {_(x)})
+exprmethods = {
+    "integer": lambda e, c: (runinteger, e[1]),
     "string": lambda e, c: (runstring, e[1]),
     "rawstring": lambda e, c: (runrawstring, e[1]),
     "symbol": lambda e, c: (runsymbol, e[1]),
-    "group": lambda e, c: compileexp(e[1], c),
+    "group": lambda e, c: compileexp(e[1], c, exprmethods),
 #    ".": buildmember,
     "|": buildfilter,
     "%": buildmap,
     "func": buildfunc,
     }
+
+# methods to interpret top-level template (e.g. {x}, {x|_}, {x % "y"})
+methods = exprmethods.copy()
+methods["integer"] = exprmethods["symbol"]  # '{1}' as variable
 
 funcs = {
     "date": date,
@@ -618,14 +641,25 @@ def _flatten(thing):
                 for j in _flatten(i):
                     yield j
 
-def parsestring(s, quoted=True):
-    '''unwrap quotes if quoted is True'''
-    if quoted:
-        if len(s) < 2 or s[0] != s[-1]:
-            raise SyntaxError(_('unmatched quotes'))
-        return s[1:-1]
-
-    return s
+def unquotestring(s):
+    '''unwrap quotes'''
+    if len(s) < 2 or s[0] != s[-1]:
+        raise SyntaxError(_('unmatched quotes'))
+    # de-backslash-ify only <\">. it is invalid syntax in non-string part of
+    # template, but we are likely to escape <"> in quoted string and it was
+    # accepted before, thanks to issue4290. <\\"> is unmodified because it
+    # is ambiguous and it was processed as such before 2.8.1.
+    #
+    #  template  result
+    #  --------- ------------------------
+    #  {\"\"}    parse error
+    #  "{""}"    {""} -> <>
+    #  "{\"\"}"  {""} -> <>
+    #  {"\""}    {"\""} -> <">
+    #  '{"\""}'  {"\""} -> <">
+    #  "{"\""}"  parse error (don't care)
+    q = s[0]
+    return s[1:-1].replace('\\\\' + q, '\\\\\\' + q).replace('\\' + q, q)
 
 class engine(object):
     '''template expansion engine.
@@ -717,7 +751,7 @@ class templater(object):
                 raise SyntaxError(_('%s: missing value') % conf.source('', key))
             if val[0] in "'\"":
                 try:
-                    self.cache[key] = parsestring(val)
+                    self.cache[key] = unquotestring(val)
                 except SyntaxError, inst:
                     raise SyntaxError('%s: %s' %
                                       (conf.source('', key), inst.args[0]))

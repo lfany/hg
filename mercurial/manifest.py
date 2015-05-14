@@ -760,7 +760,7 @@ class manifest(revlog.revlog):
         opts = getattr(opener, 'options', None)
         if opts is not None:
             cachesize = opts.get('manifestcachesize', cachesize)
-            usetreemanifest = opts.get('usetreemanifest', usetreemanifest)
+            usetreemanifest = opts.get('treemanifest', usetreemanifest)
             usemanifestv2 = opts.get('manifestv2', usemanifestv2)
         self._mancache = util.lrucachedict(cachesize)
         revlog.revlog.__init__(self, opener, "00manifest.i")
@@ -793,7 +793,13 @@ class manifest(revlog.revlog):
         return self._newmanifest(d)
 
     def readfast(self, node):
-        '''use the faster of readdelta or read'''
+        '''use the faster of readdelta or read
+
+        This will return a manifest which is either only the files
+        added/modified relative to p1, or all files in the
+        manifest. Which one is returned depends on the codepath used
+        to retrieve the data.
+        '''
         r = self.rev(node)
         deltaparent = self.deltaparent(r)
         if deltaparent != revlog.nullrev and deltaparent in self.parentrevs(r):

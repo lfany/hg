@@ -39,8 +39,8 @@ failing test
   > EOF
 
   >>> fh = open('test-failure-unicode.t', 'wb')
-  >>> fh.write(u'  $ echo babar\u03b1\n'.encode('utf-8'))
-  >>> fh.write(u'  l\u03b5\u03b5t\n'.encode('utf-8'))
+  >>> fh.write(u'  $ echo babar\u03b1\n'.encode('utf-8')) and None
+  >>> fh.write(u'  l\u03b5\u03b5t\n'.encode('utf-8')) and None
 
   $ $TESTDIR/run-tests.py --with-hg=`which hg`
   
@@ -258,8 +258,8 @@ Parallel runs
 
 failures in parallel with --first should only print one failure
   >>> f = open('test-nothing.t', 'w')
-  >>> f.write('foo\n' * 1024)
-  >>> f.write('  $ sleep 1')
+  >>> f.write('foo\n' * 1024) and None
+  >>> f.write('  $ sleep 1') and None
   $ $TESTDIR/run-tests.py --with-hg=`which hg` --jobs 2 --first
   
   --- $TESTTMP/test-failure*.t (glob)
@@ -496,6 +496,46 @@ test for --json
           "time": "\s*[\d\.]{4,5}" (re)
       }
   } (no-eol)
+
+Test that failed test accepted through interactive are properly reported:
+
+  $ cp test-failure.t backup
+  $ echo y | $TESTDIR/run-tests.py --with-hg=`which hg` --json -i
+  
+  --- $TESTTMP/test-failure.t
+  +++ $TESTTMP/test-failure.t.err
+  @@ -1,4 +1,4 @@
+     $ echo babar
+  -  rataxes
+  +  babar
+   This is a noop statement so that
+   this test is still more bytes than success.
+  Accept this change? [n] ..s
+  Skipped test-skip.t: skipped
+  # Ran 2 tests, 1 skipped, 0 warned, 0 failed.
+
+  $ cat report.json
+  testreport ={
+      "test-failure.t": [\{] (re)
+          "csys": "\s*[\d\.]{4,5}", ? (re)
+          "cuser": "\s*[\d\.]{4,5}", ? (re)
+          "result": "success", ? (re)
+          "time": "\s*[\d\.]{4,5}" (re)
+      }, ? (re)
+      "test-skip.t": {
+          "csys": "\s*[\d\.]{4,5}", ? (re)
+          "cuser": "\s*[\d\.]{4,5}", ? (re)
+          "result": "skip", ? (re)
+          "time": "\s*[\d\.]{4,5}" (re)
+      }, ? (re)
+      "test-success.t": [\{] (re)
+          "csys": "\s*[\d\.]{4,5}", ? (re)
+          "cuser": "\s*[\d\.]{4,5}", ? (re)
+          "result": "success", ? (re)
+          "time": "\s*[\d\.]{4,5}" (re)
+      }
+  } (no-eol)
+  $ mv backup test-failure.t
 
 #endif
 

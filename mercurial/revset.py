@@ -25,23 +25,25 @@ def _revancestors(repo, revs, followfirst):
     cl = repo.changelog
 
     def iterate():
-        revqueue, revsnode = None, None
-        h = []
-
         revs.sort(reverse=True)
-        revqueue = util.deque(revs)
-        if revqueue:
-            revsnode = revqueue.popleft()
-            heapq.heappush(h, -revsnode)
+        irevs = iter(revs)
+        h = []
+        try:
+            inputrev = irevs.next()
+            heapq.heappush(h, -inputrev)
+        except StopIteration:
+            return
 
         seen = set()
         while h:
             current = -heapq.heappop(h)
+            if current == inputrev:
+                try:
+                    inputrev = irevs.next()
+                    heapq.heappush(h, -inputrev)
+                except StopIteration:
+                    pass
             if current not in seen:
-                if revsnode and current == revsnode:
-                    if revqueue:
-                        revsnode = revqueue.popleft()
-                        heapq.heappush(h, -revsnode)
                 seen.add(current)
                 yield current
                 for parent in cl.parentrevs(current)[:cut]:
@@ -333,11 +335,6 @@ def stringset(repo, subset, x):
     if x in subset:
         return baseset([x])
     return baseset()
-
-def symbolset(repo, subset, x):
-    if x in symbols:
-        raise error.ParseError(_("can't use %s here") % x)
-    return stringset(repo, subset, x)
 
 def rangeset(repo, subset, x, y):
     m = getset(repo, fullreposet(repo), x)
@@ -1684,7 +1681,7 @@ def roots(repo, subset, x):
     Changesets in set with no parent changeset in set.
     """
     s = getset(repo, fullreposet(repo), x)
-    subset = baseset([r for r in s if r in subset])
+    subset = subset & s# baseset([r for r in s if r in subset])
     cs = _children(repo, subset, s)
     return subset - cs
 
@@ -2088,7 +2085,7 @@ methods = {
     "range": rangeset,
     "dagrange": dagrange,
     "string": stringset,
-    "symbol": symbolset,
+    "symbol": stringset,
     "and": andset,
     "or": orset,
     "not": notset,
@@ -2947,6 +2944,64 @@ class addset(abstractsmartset):
     If the ascending attribute is set, that means the two structures are
     ordered in either an ascending or descending way. Therefore, we can add
     them maintaining the order by iterating over both at the same time
+
+    >>> xs = baseset([0, 3, 2])
+    >>> ys = baseset([5, 2, 4])
+
+    >>> rs = addset(xs, ys)
+    >>> bool(rs), 0 in rs, 1 in rs, 5 in rs, rs.first(), rs.last()
+    (True, True, False, True, 0, 4)
+    >>> rs = addset(xs, baseset([]))
+    >>> bool(rs), 0 in rs, 1 in rs, rs.first(), rs.last()
+    (True, True, False, 0, 2)
+    >>> rs = addset(baseset([]), baseset([]))
+    >>> bool(rs), 0 in rs, rs.first(), rs.last()
+    (False, False, None, None)
+
+    iterate unsorted:
+    >>> rs = addset(xs, ys)
+    >>> [x for x in rs]  # without _genlist
+    [0, 3, 2, 5, 4]
+    >>> assert not rs._genlist
+    >>> len(rs)
+    5
+    >>> [x for x in rs]  # with _genlist
+    [0, 3, 2, 5, 4]
+    >>> assert rs._genlist
+
+    iterate ascending:
+    >>> rs = addset(xs, ys, ascending=True)
+    >>> [x for x in rs], [x for x in rs.fastasc()]  # without _asclist
+    ([0, 2, 3, 4, 5], [0, 2, 3, 4, 5])
+    >>> assert not rs._asclist
+    >>> len(rs)  # BROKEN
+    6
+    >>> [x for x in rs], [x for x in rs.fastasc()]  # BROKEN with _asclist
+    ([0, 2, 2, 3, 4, 5], [0, 2, 2, 3, 4, 5])
+    >>> assert rs._asclist
+
+    iterate descending:
+    >>> rs = addset(xs, ys, ascending=False)
+    >>> [x for x in rs], [x for x in rs.fastdesc()]  # without _asclist
+    ([5, 4, 3, 2, 0], [5, 4, 3, 2, 0])
+    >>> assert not rs._asclist
+    >>> len(rs)  # BROKEN
+    6
+    >>> [x for x in rs], [x for x in rs.fastdesc()]  # BROKEN with _asclist
+    ([5, 4, 3, 2, 2, 0], [5, 4, 3, 2, 2, 0])
+    >>> assert rs._asclist
+
+    iterate ascending without fastasc:
+    >>> rs = addset(xs, generatorset(ys), ascending=True)
+    >>> assert rs.fastasc is None
+    >>> [x for x in rs]  # BROKEN
+    [0, 2, 2, 3, 4, 5]
+
+    iterate descending without fastdesc:
+    >>> rs = addset(generatorset(xs), ys, ascending=False)
+    >>> assert rs.fastdesc is None
+    >>> [x for x in rs]  # BROKEN
+    [5, 4, 3, 2, 2, 0]
     """
     def __init__(self, revs1, revs2, ascending=None):
         self._r1 = revs1
@@ -3047,10 +3102,6 @@ class addset(abstractsmartset):
 
         val1 = None
         val2 = None
-
-        choice = max
-        if ascending:
-            choice = min
         try:
             # Consume both iterators in an ordered way until one is
             # empty
@@ -3142,7 +3193,12 @@ class generatorset(abstractsmartset):
                 self.__contains__ = self._desccontains
 
     def __nonzero__(self):
-        for r in self:
+        # Do not use 'for r in self' because it will enforce the iteration
+        # order (default ascending), possibly unrolling a whole descending
+        # iterator.
+        if self._genlist:
+            return True
+        for r in self._consumegen():
             return True
         return False
 

@@ -376,14 +376,17 @@ def newcommit(repo, phase, *args, **kwargs):
         if repo.ui.configbool('mq', 'secret', False):
             phase = phases.secret
     if phase is not None:
-        backup = repo.ui.backupconfig('phases', 'new-commit')
+        phasebackup = repo.ui.backupconfig('phases', 'new-commit')
+    allowemptybackup = repo.ui.backupconfig('ui', 'allowemptycommit')
     try:
         if phase is not None:
             repo.ui.setconfig('phases', 'new-commit', phase, 'mq')
+        repo.ui.setconfig('ui', 'allowemptycommit', True)
         return repo.commit(*args, **kwargs)
     finally:
+        repo.ui.restoreconfig(allowemptybackup)
         if phase is not None:
-            repo.ui.restoreconfig(backup)
+            repo.ui.restoreconfig(phasebackup)
 
 class AbortNoCleanup(error.Abort):
     pass
@@ -807,9 +810,10 @@ class queue(object):
     def apply(self, repo, series, list=False, update_status=True,
               strict=False, patchdir=None, merge=None, all_files=None,
               tobackup=None, keepchanges=False):
-        wlock = lock = tr = None
+        wlock = dsguard = lock = tr = None
         try:
             wlock = repo.wlock()
+            dsguard = cmdutil.dirstateguard(repo, 'mq.apply')
             lock = repo.lock()
             tr = repo.transaction("qpush")
             try:
@@ -818,21 +822,22 @@ class queue(object):
                                   tobackup=tobackup, keepchanges=keepchanges)
                 tr.close()
                 self.savedirty()
+                dsguard.close()
                 return ret
             except AbortNoCleanup:
                 tr.close()
                 self.savedirty()
+                dsguard.close()
                 raise
             except: # re-raises
                 try:
                     tr.abort()
                 finally:
                     repo.invalidate()
-                    repo.dirstate.invalidate()
                     self.invalidate()
                 raise
         finally:
-            release(tr, lock, wlock)
+            release(tr, lock, dsguard, wlock)
             self.removeundo(repo)
 
     def _apply(self, repo, series, list=False, update_status=True,
@@ -1681,8 +1686,9 @@ class queue(object):
 
             bmlist = repo[top].bookmarks()
 
+            dsguard = None
             try:
-                repo.dirstate.beginparentchange()
+                dsguard = cmdutil.dirstateguard(repo, 'mq.refresh')
                 if diffopts.git or diffopts.upgrade:
                     copies = {}
                     for dst in a:
@@ -1735,13 +1741,12 @@ class queue(object):
 
                 # assumes strip can roll itself back if interrupted
                 repo.setparents(*cparents)
-                repo.dirstate.endparentchange()
                 self.applied.pop()
                 self.applieddirty = True
                 strip(self.ui, repo, [top], update=False, backup=False)
-            except: # re-raises
-                repo.dirstate.invalidate()
-                raise
+                dsguard.close()
+            finally:
+                release(dsguard)
 
             try:
                 # might be nice to attempt to roll back strip after this

@@ -83,7 +83,7 @@ like CVS' $Log$, are not supported. A keyword template map "Log =
 '''
 
 from mercurial import commands, context, cmdutil, dispatch, filelog, extensions
-from mercurial import localrepo, match, patch, templatefilters, templater, util
+from mercurial import localrepo, match, patch, templatefilters, util
 from mercurial import scmutil, pathutil
 from mercurial.hgweb import webcommands
 from mercurial.i18n import _
@@ -191,8 +191,7 @@ class kwtemplater(object):
 
         kwmaps = self.ui.configitems('keywordmaps')
         if kwmaps: # override default templates
-            self.templates = dict((k, templater.parsestring(v, False))
-                                  for k, v in kwmaps)
+            self.templates = dict(kwmaps)
         else:
             self.templates = _defaultkwmaps(self.ui)
 
@@ -457,9 +456,7 @@ def demo(ui, repo, *args, **opts):
     repo.commit(text=msg)
     ui.status(_('\n\tkeywords expanded\n'))
     ui.write(repo.wread(fn))
-    for root, dirs, files in os.walk(tmpdir):
-        for f in files:
-            util.unlinkpath(repo.vfs.reljoin(root, f))
+    repo.wvfs.rmtree(repo.root)
 
 @command('kwexpand',
     commands.walkopts,

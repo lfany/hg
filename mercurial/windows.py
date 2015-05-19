@@ -139,7 +139,7 @@ def normpath(path):
     return pconvert(os.path.normpath(path))
 
 def normcase(path):
-    return encoding.upper(path)
+    return encoding.upper(path) # NTFS compares via upper()
 
 # see posix.py for definitions
 normcasespec = encoding.normcasespecs.upper
@@ -162,6 +162,18 @@ def samestat(s1, s2):
 _quotere = None
 _needsshellquote = None
 def shellquote(s):
+    r"""
+    >>> shellquote(r'C:\Users\xyz')
+    '"C:\\Users\\xyz"'
+    >>> shellquote(r'C:\Users\xyz/mixed')
+    '"C:\\Users\\xyz/mixed"'
+    >>> # Would be safe not to quote too, since it is all double backslashes
+    >>> shellquote(r'C:\\Users\\xyz')
+    '"C:\\\\Users\\\\xyz"'
+    >>> # But this must be quoted
+    >>> shellquote(r'C:\\Users\\xyz/abc')
+    '"C:\\\\Users\\\\xyz/abc"'
+    """
     global _quotere
     if _quotere is None:
         _quotere = re.compile(r'(\\*)("|\\$)')

@@ -21,7 +21,7 @@ def _rematcher(regex):
     except AttributeError:
         return m.match
 
-def _expandsets(kindpats, ctx):
+def _expandsets(kindpats, ctx, listsubrepos):
     '''Returns the kindpats list with the 'set' patterns expanded.'''
     fset = set()
     other = []
@@ -32,6 +32,12 @@ def _expandsets(kindpats, ctx):
                 raise util.Abort("fileset expression with no context")
             s = ctx.getfileset(pat)
             fset.update(s)
+
+            if listsubrepos:
+                for subpath in ctx.substate:
+                    s = ctx.sub(subpath).getfileset(pat)
+                    fset.update(subpath + '/' + f for f in s)
+
             continue
         other.append((kind, pat))
     return fset, other
@@ -47,7 +53,8 @@ def _kindpatsalwaysmatch(kindpats):
 
 class match(object):
     def __init__(self, root, cwd, patterns, include=[], exclude=[],
-                 default='glob', exact=False, auditor=None, ctx=None):
+                 default='glob', exact=False, auditor=None, ctx=None,
+                 listsubrepos=False):
         """build an object to match a set of file patterns
 
         arguments:
@@ -80,11 +87,13 @@ class match(object):
         matchfns = []
         if include:
             kindpats = self._normalize(include, 'glob', root, cwd, auditor)
-            self.includepat, im = _buildmatch(ctx, kindpats, '(?:/|$)')
+            self.includepat, im = _buildmatch(ctx, kindpats, '(?:/|$)',
+                                              listsubrepos)
             matchfns.append(im)
         if exclude:
             kindpats = self._normalize(exclude, 'glob', root, cwd, auditor)
-            self.excludepat, em = _buildmatch(ctx, kindpats, '(?:/|$)')
+            self.excludepat, em = _buildmatch(ctx, kindpats, '(?:/|$)',
+                                              listsubrepos)
             matchfns.append(lambda f: not em(f))
         if exact:
             if isinstance(patterns, list):
@@ -97,7 +106,8 @@ class match(object):
             if not _kindpatsalwaysmatch(kindpats):
                 self._files = _roots(kindpats)
                 self._anypats = self._anypats or _anypats(kindpats)
-                self.patternspat, pm = _buildmatch(ctx, kindpats, '$')
+                self.patternspat, pm = _buildmatch(ctx, kindpats, '$',
+                                                   listsubrepos)
                 matchfns.append(pm)
 
         if not matchfns:
@@ -113,7 +123,7 @@ class match(object):
                 return True
 
         self.matchfn = m
-        self._fmap = set(self._files)
+        self._fileroots = set(self._files)
 
     def __call__(self, fn):
         return self.matchfn(fn)
@@ -161,21 +171,17 @@ class match(object):
 
     @propertycache
     def _dirs(self):
-        return set(util.dirs(self._fmap)) | set(['.'])
+        return set(util.dirs(self._fileroots)) | set(['.'])
 
     def visitdir(self, dir):
-        '''Helps while traversing a directory tree. Returns the string 'all' if
-        the given directory and all subdirectories should be visited. Otherwise
-        returns True or False indicating whether the given directory should be
-        visited. If 'all' is returned, calling this method on a subdirectory
-        gives an undefined result.'''
-        if not self._fmap or self.exact(dir):
-            return 'all'
-        return dir in self._dirs
+        return (not self._fileroots or '.' in self._fileroots or
+                dir in self._fileroots or dir in self._dirs or
+                any(parentdir in self._fileroots
+                    for parentdir in util.finddirs(dir)))
 
     def exact(self, f):
         '''Returns True if f is in .files().'''
-        return f in self._fmap
+        return f in self._fileroots
 
     def anypats(self):
         '''Matcher uses patterns or include/exclude.'''
@@ -185,6 +191,14 @@ class match(object):
         '''Matcher will match everything and .files() will be empty
         - optimization might be possible and necessary.'''
         return self._always
+
+    def ispartial(self):
+        '''True if the matcher won't always match.
+
+        Although it's just the inverse of _always in this implementation,
+        an extenion such as narrowhg might make it return something
+        slightly different.'''
+        return not self._always
 
     def isexact(self):
         return self.matchfn == self.exact
@@ -264,11 +278,11 @@ class narrowmatcher(match):
         # If the parent repo had a path to this subrepo and no patterns are
         # specified, this submatcher always matches.
         if not self._always and not matcher._anypats:
-            self._always = util.any(f == path for f in matcher._files)
+            self._always = any(f == path for f in matcher._files)
 
         self._anypats = matcher._anypats
         self.matchfn = lambda fn: matcher.matchfn(self._path + "/" + fn)
-        self._fmap = set(self._files)
+        self._fileroots = set(self._files)
 
     def abs(self, f):
         return self._matcher.abs(self._path + "/" + f)
@@ -285,17 +299,17 @@ class icasefsmatcher(match):
     """
 
     def __init__(self, root, cwd, patterns, include, exclude, default, auditor,
-                 ctx):
+                 ctx, listsubrepos=False):
         init = super(icasefsmatcher, self).__init__
         self._dsnormalize = ctx.repo().dirstate.normalize
 
         init(root, cwd, patterns, include, exclude, default, auditor=auditor,
-             ctx=ctx)
+             ctx=ctx, listsubrepos=listsubrepos)
 
         # m.exact(file) must be based off of the actual user input, otherwise
         # inexact case matches are treated as exact, and not noted without -v.
         if self._files:
-            self._fmap = set(_roots(self._kp))
+            self._fileroots = set(_roots(self._kp))
 
     def _normalize(self, patterns, default, root, cwd, auditor):
         self._kp = super(icasefsmatcher, self)._normalize(patterns, default,
@@ -418,10 +432,10 @@ def _regex(kind, pat, globsuffix):
         return '.*' + pat
     return _globre(pat) + globsuffix
 
-def _buildmatch(ctx, kindpats, globsuffix):
+def _buildmatch(ctx, kindpats, globsuffix, listsubrepos):
     '''Return regexp string and a matcher function for kindpats.
     globsuffix is appended to the regexp of globs.'''
-    fset, kindpats = _expandsets(kindpats, ctx)
+    fset, kindpats = _expandsets(kindpats, ctx, listsubrepos)
     if not kindpats:
         return "", fset.__contains__
 
@@ -486,3 +500,49 @@ def _anypats(kindpats):
     for kind, pat in kindpats:
         if kind in ('glob', 're', 'relglob', 'relre', 'set'):
             return True
+
+_commentre = None
+
+def readpatternfile(filepath, warn):
+    '''parse a pattern file, returning a list of
+    patterns. These patterns should be given to compile()
+    to be validated and converted into a match function.'''
+    syntaxes = {'re': 'relre:', 'regexp': 'relre:', 'glob': 'relglob:'}
+    syntax = 'relre:'
+    patterns = []
+
+    fp = open(filepath)
+    for line in fp:
+        if "#" in line:
+            global _commentre
+            if not _commentre:
+                _commentre = re.compile(r'((^|[^\\])(\\\\)*)#.*')
+            # remove comments prefixed by an even number of escapes
+            line = _commentre.sub(r'\1', line)
+            # fixup properly escaped comments that survived the above
+            line = line.replace("\\#", "#")
+        line = line.rstrip()
+        if not line:
+            continue
+
+        if line.startswith('syntax:'):
+            s = line[7:].strip()
+            try:
+                syntax = syntaxes[s]
+            except KeyError:
+                warn(_("%s: ignoring invalid syntax '%s'\n") % (filepath, s))
+            continue
+
+        linesyntax = syntax
+        for s, rels in syntaxes.iteritems():
+            if line.startswith(rels):
+                linesyntax = rels
+                line = line[len(rels):]
+                break
+            elif line.startswith(s+':'):
+                linesyntax = rels
+                line = line[len(s) + 1:]
+                break
+        patterns.append(linesyntax + line)
+    fp.close()
+    return patterns

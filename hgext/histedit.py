@@ -181,6 +181,10 @@ from mercurial.i18n import _
 cmdtable = {}
 command = cmdutil.command(cmdtable)
 
+# Note for extension authors: ONLY specify testedwith = 'internal' for
+# extensions which SHIP WITH MERCURIAL. Non-mainline extensions should
+# be specifying the version(s) of Mercurial they are tested with, or
+# leave the attribute unspecified.
 testedwith = 'internal'
 
 # i18n: command names and abbreviations must remain untranslated
@@ -707,15 +711,15 @@ def _histedit(ui, repo, state, *freeargs, **opts):
     if force and not outg:
         raise util.Abort(_('--force only allowed with --outgoing'))
     if cont:
-        if util.any((outg, abort, revs, freeargs, rules, editplan)):
+        if any((outg, abort, revs, freeargs, rules, editplan)):
             raise util.Abort(_('no arguments allowed with --continue'))
         goal = 'continue'
     elif abort:
-        if util.any((outg, revs, freeargs, rules, editplan)):
+        if any((outg, revs, freeargs, rules, editplan)):
             raise util.Abort(_('no arguments allowed with --abort'))
         goal = 'abort'
     elif editplan:
-        if util.any((outg, revs, freeargs)):
+        if any((outg, revs, freeargs)):
             raise util.Abort(_('only --commands argument allowed with '
                                '--edit-plan'))
         goal = 'edit-plan'

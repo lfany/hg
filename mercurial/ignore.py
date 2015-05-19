@@ -7,50 +7,6 @@
 
 from i18n import _
 import util, match
-import re
-
-_commentre = None
-
-def ignorepats(lines):
-    '''parse lines (iterable) of .hgignore text, returning a tuple of
-    (patterns, parse errors). These patterns should be given to compile()
-    to be validated and converted into a match function.'''
-    syntaxes = {'re': 'relre:', 'regexp': 'relre:', 'glob': 'relglob:'}
-    syntax = 'relre:'
-    patterns = []
-    warnings = []
-
-    for line in lines:
-        if "#" in line:
-            global _commentre
-            if not _commentre:
-                _commentre = re.compile(r'((^|[^\\])(\\\\)*)#.*')
-            # remove comments prefixed by an even number of escapes
-            line = _commentre.sub(r'\1', line)
-            # fixup properly escaped comments that survived the above
-            line = line.replace("\\#", "#")
-        line = line.rstrip()
-        if not line:
-            continue
-
-        if line.startswith('syntax:'):
-            s = line[7:].strip()
-            try:
-                syntax = syntaxes[s]
-            except KeyError:
-                warnings.append(_("ignoring invalid syntax '%s'") % s)
-            continue
-        pat = syntax + line
-        for s, rels in syntaxes.iteritems():
-            if line.startswith(rels):
-                pat = line
-                break
-            elif line.startswith(s+':'):
-                pat = rels + line[len(s) + 1:]
-                break
-        patterns.append(pat)
-
-    return patterns, warnings
 
 def readpats(root, files, warn):
     '''return a dict mapping ignore-file-name to list-of-patterns'''
@@ -60,16 +16,11 @@ def readpats(root, files, warn):
         if f in pats:
             continue
         try:
-            pats[f] = []
-            fp = open(f)
-            pats[f], warnings = ignorepats(fp)
-            fp.close()
-            for warning in warnings:
-                warn("%s: %s\n" % (f, warning))
+            pats[f] = match.readpatternfile(f, warn)
         except IOError, inst:
-            if f != files[0]:
-                warn(_("skipping unreadable ignore file '%s': %s\n") %
-                     (f, inst.strerror))
+            warn(_("skipping unreadable ignore file '%s': %s\n") %
+                 (f, inst.strerror))
+
     return [(f, pats[f]) for f in files if f in pats]
 
 def ignore(root, files, warn):

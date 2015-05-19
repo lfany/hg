@@ -334,18 +334,6 @@ def cachefunc(func):
 
     return f
 
-try:
-    collections.deque.remove
-    deque = collections.deque
-except AttributeError:
-    # python 2.4 lacks deque.remove
-    class deque(collections.deque):
-        def remove(self, val):
-            for i, v in enumerate(self):
-                if v == val:
-                    del self[i]
-                    break
-
 class sortdict(dict):
     '''a simple sorted dictionary'''
     def __init__(self, data=None):
@@ -396,7 +384,7 @@ class lrucachedict(object):
     def __init__(self, maxsize):
         self._cache = {}
         self._maxsize = maxsize
-        self._order = deque()
+        self._order = collections.deque()
 
     def __getitem__(self, key):
         value = self._cache[key]
@@ -418,12 +406,12 @@ class lrucachedict(object):
 
     def clear(self):
         self._cache.clear()
-        self._order = deque()
+        self._order = collections.deque()
 
 def lrucachefunc(func):
     '''cache most recent results of function calls'''
     cache = {}
-    order = deque()
+    order = collections.deque()
     if func.func_code.co_argcount == 1:
         def f(arg):
             if arg not in cache:
@@ -1003,15 +991,13 @@ def checknlink(testfile):
     f2 = testfile + ".hgtmp2"
     fd = None
     try:
-        try:
-            oslink(f1, f2)
-        except OSError:
-            return False
-
+        oslink(f1, f2)
         # nlinks() may behave differently for files on Windows shares if
         # the file is open.
         fd = posixfile(f2)
         return nlinks(f2) > 1
+    except OSError:
+        return False
     finally:
         if fd is not None:
             fd.close()
@@ -1203,7 +1189,7 @@ class chunkbuffer(object):
                 else:
                     yield chunk
         self.iter = splitbig(in_iter)
-        self._queue = deque()
+        self._queue = collections.deque()
 
     def read(self, l=None):
         """Read L bytes of data from the iterator of chunks of data.
@@ -1733,21 +1719,6 @@ def rundetached(args, condfn):
     finally:
         if prevhandler is not None:
             signal.signal(signal.SIGCHLD, prevhandler)
-
-try:
-    any, all = any, all
-except NameError:
-    def any(iterable):
-        for i in iterable:
-            if i:
-                return True
-        return False
-
-    def all(iterable):
-        for i in iterable:
-            if not i:
-                return False
-        return True
 
 def interpolate(prefix, mapping, s, fn=None, escape_prefix=False):
     """Return the result of interpolating items in the mapping into string s.

@@ -979,8 +979,8 @@ def bookmark(ui, repo, *names, **opts):
                     if mark not in marks:
                         raise util.Abort(_("bookmark '%s' does not exist") %
                                          mark)
-                    if mark == repo._bookmarkcurrent:
-                        bookmarks.unsetcurrent(repo)
+                    if mark == repo._activebookmark:
+                        bookmarks.deactivate(repo)
                     del marks[mark]
                 marks.write()
 
@@ -994,8 +994,8 @@ def bookmark(ui, repo, *names, **opts):
                     raise util.Abort(_("bookmark '%s' does not exist") % rename)
                 checkconflict(repo, mark, cur, force)
                 marks[mark] = marks[rename]
-                if repo._bookmarkcurrent == rename and not inactive:
-                    bookmarks.setcurrent(repo, mark)
+                if repo._activebookmark == rename and not inactive:
+                    bookmarks.activate(repo, mark)
                 del marks[rename]
                 marks.write()
 
@@ -1005,8 +1005,8 @@ def bookmark(ui, repo, *names, **opts):
                     mark = checkformat(mark)
                     if newact is None:
                         newact = mark
-                    if inactive and mark == repo._bookmarkcurrent:
-                        bookmarks.unsetcurrent(repo)
+                    if inactive and mark == repo._activebookmark:
+                        bookmarks.deactivate(repo)
                         return
                     tgt = cur
                     if rev:
@@ -1014,18 +1014,18 @@ def bookmark(ui, repo, *names, **opts):
                     checkconflict(repo, mark, cur, force, tgt)
                     marks[mark] = tgt
                 if not inactive and cur == marks[newact] and not rev:
-                    bookmarks.setcurrent(repo, newact)
-                elif cur != tgt and newact == repo._bookmarkcurrent:
-                    bookmarks.unsetcurrent(repo)
+                    bookmarks.activate(repo, newact)
+                elif cur != tgt and newact == repo._activebookmark:
+                    bookmarks.deactivate(repo)
                 marks.write()
 
             elif inactive:
                 if len(marks) == 0:
                     ui.status(_("no bookmarks set\n"))
-                elif not repo._bookmarkcurrent:
+                elif not repo._activebookmark:
                     ui.status(_("no active bookmark\n"))
                 else:
-                    bookmarks.unsetcurrent(repo)
+                    bookmarks.deactivate(repo)
         finally:
             wlock.release()
     else: # show bookmarks
@@ -1035,7 +1035,7 @@ def bookmark(ui, repo, *names, **opts):
         if len(marks) == 0 and not fm:
             ui.status(_("no bookmarks set\n"))
         for bmark, n in sorted(marks.iteritems()):
-            current = repo._bookmarkcurrent
+            current = repo._activebookmark
             if bmark == current:
                 prefix, label = '*', 'bookmarks.current'
             else:
@@ -1506,7 +1506,7 @@ def commit(ui, repo, *pats, **opts):
                                match,
                                extra=extra)
 
-        current = repo._bookmarkcurrent
+        current = repo._activebookmark
         marks = old.bookmarks()
         node = cmdutil.amend(ui, repo, commitfunc, old, extra, pats, opts)
         if node == old.node():
@@ -1519,7 +1519,7 @@ def commit(ui, repo, *pats, **opts):
             for bm in marks:
                 newmarks[bm] = node
                 if bm == current:
-                    bookmarks.setcurrent(repo, bm)
+                    bookmarks.activate(repo, bm)
             newmarks.write()
     else:
         def commitfunc(ui, repo, message, match, opts):
@@ -2056,7 +2056,8 @@ def debugdag(ui, repo, file_=None, *revs, **opts):
 
 @command('debugdata',
     [('c', 'changelog', False, _('open changelog')),
-     ('m', 'manifest', False, _('open manifest'))],
+     ('m', 'manifest', False, _('open manifest')),
+     ('', 'dir', False, _('open directory manifest'))],
     _('-c|-m|FILE REV'))
 def debugdata(ui, repo, file_, rev=None, **opts):
     """dump the contents of a data file revision"""
@@ -2227,6 +2228,7 @@ def debugignore(ui, repo, *values, **opts):
 @command('debugindex',
     [('c', 'changelog', False, _('open changelog')),
      ('m', 'manifest', False, _('open manifest')),
+     ('', 'dir', False, _('open directory manifest')),
      ('f', 'format', 0, _('revlog format'), _('FORMAT'))],
     _('[-f FORMAT] -c|-m|FILE'),
     optionalrepo=True)
@@ -2545,26 +2547,25 @@ def debugobsolete(ui, repo, precursor=None, *successors, **opts):
         try:
             tr = repo.transaction('debugobsolete')
             try:
-                try:
-                    date = opts.get('date')
-                    if date:
-                        date = util.parsedate(date)
-                    else:
-                        date = None
-                    prec = parsenodeid(precursor)
-                    parents = None
-                    if opts['record_parents']:
-                        if prec not in repo.unfiltered():
-                            raise util.Abort('cannot used --record-parents on '
-                                             'unknown changesets')
-                        parents = repo.unfiltered()[prec].parents()
-                        parents = tuple(p.node() for p in parents)
-                    repo.obsstore.create(tr, prec, succs, opts['flags'],
-                                         parents=parents, date=date,
-                                         metadata=metadata)
-                    tr.close()
-                except ValueError, exc:
-                    raise util.Abort(_('bad obsmarker input: %s') % exc)
+                date = opts.get('date')
+                if date:
+                    date = util.parsedate(date)
+                else:
+                    date = None
+                prec = parsenodeid(precursor)
+                parents = None
+                if opts['record_parents']:
+                    if prec not in repo.unfiltered():
+                        raise util.Abort('cannot used --record-parents on '
+                                         'unknown changesets')
+                    parents = repo.unfiltered()[prec].parents()
+                    parents = tuple(p.node() for p in parents)
+                repo.obsstore.create(tr, prec, succs, opts['flags'],
+                                     parents=parents, date=date,
+                                     metadata=metadata)
+                tr.close()
+            except ValueError, exc:
+                raise util.Abort(_('bad obsmarker input: %s') % exc)
             finally:
                 tr.release()
         finally:
@@ -2730,6 +2731,7 @@ def debugrename(ui, repo, file1, *pats, **opts):
 @command('debugrevlog',
     [('c', 'changelog', False, _('open changelog')),
      ('m', 'manifest', False, _('open manifest')),
+     ('', 'dir', False, _('open directory manifest')),
      ('d', 'dump', False, _('dump index data'))],
     _('-c|-m|FILE'),
     optionalrepo=True)
@@ -4045,8 +4047,8 @@ def identify(ui, repo, source=None, rev=None,
             parents = ctx.parents()
             changed = ""
             if default or id or num:
-                if (util.any(repo.status())
-                    or util.any(ctx.sub(s).dirty() for s in ctx.substate)):
+                if (any(repo.status())
+                    or any(ctx.sub(s).dirty() for s in ctx.substate)):
                     changed = '+'
             if default or id:
                 output = ["%s%s" %
@@ -4213,7 +4215,7 @@ def import_(ui, repo, patch1=None, *patches, **opts):
         cmdutil.bailifchanged(repo)
 
     base = opts["base"]
-    wlock = lock = tr = None
+    wlock = dsguard = lock = tr = None
     msgs = []
     ret = 0
 
@@ -4221,7 +4223,7 @@ def import_(ui, repo, patch1=None, *patches, **opts):
     try:
         try:
             wlock = repo.wlock()
-            repo.dirstate.beginparentchange()
+            dsguard = cmdutil.dirstateguard(repo, 'import')
             if not opts.get('no_commit'):
                 lock = repo.lock()
                 tr = repo.transaction('import')
@@ -4262,18 +4264,16 @@ def import_(ui, repo, patch1=None, *patches, **opts):
                 tr.close()
             if msgs:
                 repo.savecommitmessage('\n* * *\n'.join(msgs))
-            repo.dirstate.endparentchange()
+            dsguard.close()
             return ret
-        except: # re-raises
-            # wlock.release() indirectly calls dirstate.write(): since
-            # we're crashing, we do not want to change the working dir
-            # parent after all, so make sure it writes nothing
-            repo.dirstate.invalidate()
-            raise
+        finally:
+            # TODO: get rid of this meaningless try/finally enclosing.
+            # this is kept only to reduce changes in a patch.
+            pass
     finally:
         if tr:
             tr.release()
-        release(lock, wlock)
+        release(lock, dsguard, wlock)
 
 @command('incoming|in',
     [('f', 'force', None,
@@ -4702,9 +4702,9 @@ def merge(ui, repo, node=None, **opts):
     if node:
         node = scmutil.revsingle(repo, node).node()
 
-    if not node and repo._bookmarkcurrent:
-        bmheads = repo.bookmarkheads(repo._bookmarkcurrent)
-        curhead = repo[repo._bookmarkcurrent].node()
+    if not node and repo._activebookmark:
+        bmheads = repo.bookmarkheads(repo._activebookmark)
+        curhead = repo[repo._activebookmark].node()
         if len(bmheads) == 2:
             if curhead == bmheads[0]:
                 node = bmheads[1]
@@ -4719,7 +4719,7 @@ def merge(ui, repo, node=None, **opts):
                 "please merge with an explicit rev or bookmark"),
                 hint=_("run 'hg heads' to see all heads"))
 
-    if not node and not repo._bookmarkcurrent:
+    if not node and not repo._activebookmark:
         branch = repo[None].branch()
         bheads = repo.branchheads(branch)
         nbhs = [bh for bh in bheads if not repo[bh].bookmarks()]
@@ -4952,11 +4952,11 @@ def paths(ui, repo, search=None):
      ('f', 'force', False, _('allow to move boundary backward')),
      ('r', 'rev', [], _('target revision'), _('REV')),
     ],
-    _('[-p|-d|-s] [-f] [-r] REV...'))
+    _('[-p|-d|-s] [-f] [-r] [REV...]'))
 def phase(ui, repo, *revs, **opts):
     """set or show the current phase name
 
-    With no argument, show the phase name of specified revisions.
+    With no argument, show the phase name of the current revision(s).
 
     With one of -p/--public, -d/--draft or -s/--secret, change the
     phase value of the specified revisions.
@@ -4981,7 +4981,9 @@ def phase(ui, repo, *revs, **opts):
     revs = list(revs)
     revs.extend(opts['rev'])
     if not revs:
-        raise util.Abort(_('no revisions specified'))
+        # display both parents as the second parent phase can influence
+        # the phase of a merge commit
+        revs = [c.rev() for c in repo[None].parents()]
 
     revs = scmutil.revrange(repo, revs)
 
@@ -5049,7 +5051,7 @@ def postincoming(ui, repo, modheads, optupdate, checkout):
             return 0
         if not ret and not checkout:
             if bookmarks.update(repo, [movemarkfrom], repo['.'].node()):
-                ui.status(_("updating bookmark %s\n") % repo._bookmarkcurrent)
+                ui.status(_("updating bookmark %s\n") % repo._activebookmark)
         return ret
     if modheads > 1:
         currentbranchheads = len(repo.branchheads())
@@ -5520,7 +5522,7 @@ def revert(ui, repo, *pats, **opts):
             hint = _("uncommitted merge, use --all to discard all changes,"
                      " or 'hg update -C .' to abort the merge")
             raise util.Abort(msg, hint=hint)
-        dirty = util.any(repo.status())
+        dirty = any(repo.status())
         node = ctx.node()
         if node != parent:
             if dirty:
@@ -5872,7 +5874,7 @@ def summary(ui, repo, **opts):
     """summarize working directory state
 
     This generates a brief summary of the working directory state,
-    including parents, branch, commit status, and available updates.
+    including parents, branch, commit status, phase and available updates.
 
     With the --remote option, this will check the default paths for
     incoming and outgoing changes. This can be time-consuming.
@@ -5914,7 +5916,7 @@ def summary(ui, repo, **opts):
         ui.status(m, label='log.branch')
 
     if marks:
-        current = repo._bookmarkcurrent
+        current = repo._activebookmark
         # i18n: column positioning for "hg summary"
         ui.write(_('bookmarks:'), label='log.bookmark')
         if current is not None:
@@ -5999,6 +6001,25 @@ def summary(ui, repo, **opts):
         # i18n: column positioning for "hg summary"
         ui.write(_('update: %d new changesets, %d branch heads (merge)\n') %
                  (new, len(bheads)))
+
+    t = []
+    draft = len(repo.revs('draft()'))
+    if draft:
+        t.append(_('%d draft') % draft)
+    secret = len(repo.revs('secret()'))
+    if secret:
+        t.append(_('%d secret') % secret)
+
+    if parents:
+        parentphase = max(p.phase() for p in parents)
+    else:
+        parentphase = phases.public
+
+    if draft or secret:
+        ui.status(_('phases: %s (%s)\n') % (', '.join(t),
+                                            phases.phasenames[parentphase]))
+    else:
+        ui.note(_('phases: (%s)\n') % phases.phasenames[parentphase])
 
     cmdutil.summaryhooks(ui, repo)
 
@@ -6405,15 +6426,15 @@ def update(ui, repo, node=None, rev=None, clean=False, date=None, check=False,
 
     if not ret and movemarkfrom:
         if bookmarks.update(repo, [movemarkfrom], repo['.'].node()):
-            ui.status(_("updating bookmark %s\n") % repo._bookmarkcurrent)
+            ui.status(_("updating bookmark %s\n") % repo._activebookmark)
     elif brev in repo._bookmarks:
-        bookmarks.setcurrent(repo, brev)
+        bookmarks.activate(repo, brev)
         ui.status(_("(activating bookmark %s)\n") % brev)
     elif brev:
-        if repo._bookmarkcurrent:
+        if repo._activebookmark:
             ui.status(_("(leaving bookmark %s)\n") %
-                      repo._bookmarkcurrent)
-        bookmarks.unsetcurrent(repo)
+                      repo._activebookmark)
+        bookmarks.deactivate(repo)
 
     return ret
 

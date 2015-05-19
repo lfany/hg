@@ -143,7 +143,9 @@ class dirstate(object):
 
     @rootcache('.hgignore')
     def _ignore(self):
-        files = [self._join('.hgignore')]
+        files = []
+        if os.path.exists(self._join('.hgignore')):
+            files.append(self._join('.hgignore'))
         for name, path in self._ui.configitems("ui"):
             if name == 'ignore' or name.startswith('ignore.'):
                 # we need to use os.path.join here rather than self._join
@@ -972,7 +974,7 @@ class dirstate(object):
             # fast path -- filter the other way around, since typically files is
             # much smaller than dmap
             return [f for f in files if f in dmap]
-        if not match.anypats() and util.all(fn in dmap for fn in files):
+        if not match.anypats() and all(fn in dmap for fn in files):
             # fast path -- all the values are known to be files, so just return
             # that
             return list(files)

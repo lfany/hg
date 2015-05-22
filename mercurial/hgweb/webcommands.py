@@ -130,6 +130,8 @@ def _filerevision(web, tmpl, fctx):
                 parent=webutil.parents(fctx),
                 child=webutil.children(fctx),
                 rename=webutil.renamelink(fctx),
+                tags=webutil.nodetagsdict(web.repo, fctx.node()),
+                bookmarks=webutil.nodebookmarksdict(web.repo, fctx.node()),
                 permissions=fctx.manifest().flags(f))
 
 @webcommand('file')
@@ -230,7 +232,7 @@ def _search(web, req, tmpl):
             # no revset syntax used
             return MODE_KEYWORD, query
 
-        if util.any((token, (value or '')[:3]) == ('string', 're:')
+        if any((token, (value or '')[:3]) == ('string', 're:')
                     for token, value, pos in revset.tokenize(revdef)):
             return MODE_KEYWORD, query
 
@@ -546,6 +548,7 @@ def manifest(web, req, tmpl):
                 archives=web.archivelist(hex(node)),
                 tags=webutil.nodetagsdict(web.repo, node),
                 bookmarks=webutil.nodebookmarksdict(web.repo, node),
+                branch=webutil.nodebranchnodefault(ctx),
                 inbranch=webutil.nodeinbranch(web.repo, ctx),
                 branches=webutil.nodebranchdict(web.repo, ctx))
 
@@ -808,6 +811,8 @@ def filediff(web, req, tmpl):
                 branch=webutil.nodebranchnodefault(ctx),
                 parent=webutil.parents(ctx),
                 child=webutil.children(ctx),
+                tags=webutil.nodetagsdict(web.repo, n),
+                bookmarks=webutil.nodebookmarksdict(web.repo, n),
                 diff=diffs)
 
 diff = webcommand('diff')(filediff)
@@ -880,6 +885,8 @@ def comparison(web, req, tmpl):
                 branch=webutil.nodebranchnodefault(ctx),
                 parent=webutil.parents(fctx),
                 child=webutil.children(fctx),
+                tags=webutil.nodetagsdict(web.repo, ctx.node()),
+                bookmarks=webutil.nodebookmarksdict(web.repo, ctx.node()),
                 leftrev=leftrev,
                 leftnode=hex(leftnode),
                 rightrev=rightrev,
@@ -946,6 +953,8 @@ def annotate(web, req, tmpl):
                 branch=webutil.nodebranchnodefault(fctx),
                 parent=webutil.parents(fctx),
                 child=webutil.children(fctx),
+                tags=webutil.nodetagsdict(web.repo, fctx.node()),
+                bookmarks=webutil.nodebookmarksdict(web.repo, fctx.node()),
                 permissions=fctx.manifest().flags(f))
 
 @webcommand('filelog')

@@ -450,14 +450,17 @@ def openrevlog(repo, cmd, file_, opts):
     """opens the changelog, manifest, a filelog or a given revlog"""
     cl = opts['changelog']
     mf = opts['manifest']
+    dir = opts['dir']
     msg = None
     if cl and mf:
         msg = _('cannot specify --changelog and --manifest at the same time')
+    elif cl and dir:
+        msg = _('cannot specify --changelog and --dir at the same time')
     elif cl or mf:
         if file_:
             msg = _('cannot specify filename with --changelog or --manifest')
         elif not repo:
-            msg = _('cannot specify --changelog or --manifest '
+            msg = _('cannot specify --changelog or --manifest or --dir '
                     'without a repository')
     if msg:
         raise util.Abort(msg)
@@ -466,6 +469,13 @@ def openrevlog(repo, cmd, file_, opts):
     if repo:
         if cl:
             r = repo.unfiltered().changelog
+        elif dir:
+            if 'treemanifest' not in repo.requirements:
+                raise util.Abort(_("--dir can only be used on repos with "
+                                   "treemanifest enabled"))
+            dirlog = repo.dirlog(file_)
+            if len(dirlog):
+                r = dirlog
         elif mf:
             r = repo.manifest
         elif file_:
@@ -818,6 +828,7 @@ def tryimportone(ui, repo, hunk, parents, opts, msgs, updatefunc):
     msg = _('applied to working directory')
 
     rejects = False
+    dsguard = None
 
     try:
         cmdline_message = logmessage(ui, opts)
@@ -859,7 +870,7 @@ def tryimportone(ui, repo, hunk, parents, opts, msgs, updatefunc):
 
         n = None
         if update:
-            repo.dirstate.beginparentchange()
+            dsguard = dirstateguard(repo, 'tryimportone')
             if p1 != parents[0]:
                 updatefunc(repo, p1.node())
             if p2 != parents[1]:
@@ -896,10 +907,16 @@ def tryimportone(ui, repo, hunk, parents, opts, msgs, updatefunc):
                     editor = None
                 else:
                     editor = getcommiteditor(editform=editform, **opts)
-                n = repo.commit(message, opts.get('user') or user,
-                                opts.get('date') or date, match=m,
-                                editor=editor, force=partial)
-            repo.dirstate.endparentchange()
+                allowemptyback = repo.ui.backupconfig('ui', 'allowemptycommit')
+                try:
+                    if partial:
+                        repo.ui.setconfig('ui', 'allowemptycommit', True)
+                    n = repo.commit(message, opts.get('user') or user,
+                                    opts.get('date') or date, match=m,
+                                    editor=editor)
+                finally:
+                    repo.ui.restoreconfig(allowemptyback)
+            dsguard.close()
         else:
             if opts.get('exact') or opts.get('import_branch'):
                 branch = branch or 'default'
@@ -937,6 +954,7 @@ def tryimportone(ui, repo, hunk, parents, opts, msgs, updatefunc):
             msg = _('created %s') % short(n)
         return (msg, n, rejects)
     finally:
+        lockmod.release(dsguard)
         os.unlink(tmpname)
 
 def export(repo, revs, template='hg-%h.patch', fp=None, switch_parent=False,
@@ -1443,9 +1461,9 @@ def gettemplate(ui, tmpl, style):
         tmpl = ui.config('ui', 'logtemplate')
         if tmpl:
             try:
-                tmpl = templater.parsestring(tmpl)
+                tmpl = templater.unquotestring(tmpl)
             except SyntaxError:
-                tmpl = templater.parsestring(tmpl, quoted=False)
+                pass
             return tmpl, None
         else:
             style = util.expandpath(ui.config('ui', 'style', ''))
@@ -1477,9 +1495,9 @@ def gettemplate(ui, tmpl, style):
     t = ui.config('templates', tmpl)
     if t:
         try:
-            tmpl = templater.parsestring(t)
+            tmpl = templater.unquotestring(t)
         except SyntaxError:
-            tmpl = templater.parsestring(t, quoted=False)
+            tmpl = t
         return tmpl, None
 
     if tmpl == 'list':
@@ -1825,13 +1843,12 @@ def walkchangerevs(repo, match, opts, prepare):
         for windowsize in increasingwindows():
             nrevs = []
             for i in xrange(windowsize):
-                try:
-                    rev = it.next()
-                    if want(rev):
-                        nrevs.append(rev)
-                except (StopIteration):
+                rev = next(it, None)
+                if rev is None:
                     stopiteration = True
                     break
+                elif want(rev):
+                    nrevs.append(rev)
             for rev in sorted(nrevs):
                 fns = fncache.get(rev)
                 ctx = change(rev)
@@ -1916,10 +1933,7 @@ def _makelogrevset(repo, pats, opts, revs):
     # --follow with FILE behaviour depends on revs...
     it = iter(revs)
     startrev = it.next()
-    try:
-        followdescendants = startrev < it.next()
-    except (StopIteration):
-        followdescendants = False
+    followdescendants = startrev < next(it, startrev)
 
     # branch and only_branch are really aliases and must be handled at
     # the same time
@@ -2113,15 +2127,11 @@ def getlogrevs(repo, pats, opts):
         if not opts.get('rev'):
             revs.sort(reverse=True)
     if limit is not None:
-        count = 0
         limitedrevs = []
-        it = iter(revs)
-        while count < limit:
-            try:
-                limitedrevs.append(it.next())
-            except (StopIteration):
+        for idx, r in enumerate(revs):
+            if limit <= idx:
                 break
-            count += 1
+            limitedrevs.append(r)
         revs = revset.baseset(limitedrevs)
 
     return revs, expr, filematcher
@@ -2287,12 +2297,16 @@ def files(ui, ctx, m, fm, fmt, subrepos):
         fm.write('path', fmt, m.rel(f))
         ret = 0
 
-    if subrepos:
-        for subpath in sorted(ctx.substate):
+    for subpath in sorted(ctx.substate):
+        def matchessubrepo(subpath):
+            return (m.always() or m.exact(subpath)
+                    or any(f.startswith(subpath + '/') for f in m.files()))
+
+        if subrepos or matchessubrepo(subpath):
             sub = ctx.sub(subpath)
             try:
                 submatch = matchmod.narrowmatcher(subpath, m)
-                if sub.printfiles(ui, submatch, fm, fmt) == 0:
+                if sub.printfiles(ui, submatch, fm, fmt, subrepos) == 0:
                     ret = 0
             except error.LookupError:
                 ui.status(_("skipping missing subrepository: %s\n")
@@ -2336,7 +2350,7 @@ def remove(ui, repo, m, prefix, after, force, subrepos):
                     return True
             return False
 
-        isdir = f in deleteddirs or f in wctx.dirs()
+        isdir = f in deleteddirs or wctx.hasdir(f)
         if f in repo.dirstate or isdir or f == '.' or insubrepo():
             continue
 
@@ -2464,9 +2478,10 @@ def amend(ui, repo, commitfunc, old, extra, pats, opts):
     ui.note(_('amending changeset %s\n') % old)
     base = old.p1()
 
-    wlock = lock = newid = None
+    wlock = dsguard = lock = newid = None
     try:
         wlock = repo.wlock()
+        dsguard = dirstateguard(repo, 'amend')
         lock = repo.lock()
         tr = repo.transaction('amend')
         try:
@@ -2480,13 +2495,13 @@ def amend(ui, repo, commitfunc, old, extra, pats, opts):
             # First, do a regular commit to record all changes in the working
             # directory (if there are any)
             ui.callhooks = False
-            currentbookmark = repo._bookmarkcurrent
+            activebookmark = repo._activebookmark
             try:
-                repo._bookmarkcurrent = None
+                repo._activebookmark = None
                 opts['message'] = 'temporary amend commit for %s' % old
                 node = commit(ui, repo, commitfunc, pats, opts)
             finally:
-                repo._bookmarkcurrent = currentbookmark
+                repo._activebookmark = activebookmark
                 ui.callhooks = True
             ctx = repo[node]
 
@@ -2637,6 +2652,7 @@ def amend(ui, repo, commitfunc, old, extra, pats, opts):
             tr.close()
         finally:
             tr.release()
+        dsguard.close()
         if not createmarkers and newid != old.node():
             # Strip the intermediate commit (if there was one) and the amended
             # commit
@@ -2645,9 +2661,7 @@ def amend(ui, repo, commitfunc, old, extra, pats, opts):
             ui.note(_('stripping amended changeset %s\n') % old)
             repair.strip(ui, repo, old.node(), topic='amend-backup')
     finally:
-        if newid is None:
-            repo.dirstate.invalidate()
-        lockmod.release(lock, wlock)
+        lockmod.release(lock, dsguard, wlock)
     return newid
 
 def commiteditor(repo, ctx, subs, editform=''):
@@ -2721,8 +2735,8 @@ def buildcommittext(repo, ctx, subs, extramsg):
         edittext.append(_("HG: branch merge"))
     if ctx.branch():
         edittext.append(_("HG: branch '%s'") % ctx.branch())
-    if bookmarks.iscurrent(repo):
-        edittext.append(_("HG: bookmark '%s'") % repo._bookmarkcurrent)
+    if bookmarks.isactivewdirparent(repo):
+        edittext.append(_("HG: bookmark '%s'") % repo._activebookmark)
     edittext.extend([_("HG: subrepo %s") % s for s in subs])
     edittext.extend([_("HG: added %s") % f for f in added])
     edittext.extend([_("HG: changed %s") % f for f in modified])
@@ -3259,3 +3273,59 @@ def clearunfinished(repo):
     for f, clearable, allowcommit, msg, hint in unfinishedstates:
         if clearable and repo.vfs.exists(f):
             util.unlink(repo.join(f))
+
+class dirstateguard(object):
+    '''Restore dirstate at unexpected failure.
+
+    At the construction, this class does:
+
+    - write current ``repo.dirstate`` out, and
+    - save ``.hg/dirstate`` into the backup file
+
+    This restores ``.hg/dirstate`` from backup file, if ``release()``
+    is invoked before ``close()``.
+
+    This just removes the backup file at ``close()`` before ``release()``.
+    '''
+
+    def __init__(self, repo, name):
+        repo.dirstate.write()
+        self._repo = repo
+        self._filename = 'dirstate.backup.%s.%d' % (name, id(self))
+        repo.vfs.write(self._filename, repo.vfs.tryread('dirstate'))
+        self._active = True
+        self._closed = False
+
+    def __del__(self):
+        if self._active: # still active
+            # this may occur, even if this class is used correctly:
+            # for example, releasing other resources like transaction
+            # may raise exception before ``dirstateguard.release`` in
+            # ``release(tr, ....)``.
+            self._abort()
+
+    def close(self):
+        if not self._active: # already inactivated
+            msg = (_("can't close already inactivated backup: %s")
+                   % self._filename)
+            raise util.Abort(msg)
+
+        self._repo.vfs.unlink(self._filename)
+        self._active = False
+        self._closed = True
+
+    def _abort(self):
+        # this "invalidate()" prevents "wlock.release()" from writing
+        # changes of dirstate out after restoring to original status
+        self._repo.dirstate.invalidate()
+
+        self._repo.vfs.rename(self._filename, 'dirstate')
+        self._active = False
+
+    def release(self):
+        if not self._closed:
+            if not self._active: # already inactivated
+                msg = (_("can't release already inactivated backup: %s")
+                       % self._filename)
+                raise util.Abort(msg)
+            self._abort()

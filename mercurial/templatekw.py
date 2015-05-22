@@ -210,7 +210,7 @@ def showbookmarks(**args):
     """
     repo = args['ctx']._repo
     bookmarks = args['ctx'].bookmarks()
-    current = repo._bookmarkcurrent
+    current = repo._activebookmark
     makemap = lambda v: {'bookmark': v, 'current': current}
     f = _showlist('bookmark', bookmarks, **args)
     return _hybrid(f, bookmarks, makemap, lambda x: x['bookmark'])
@@ -221,15 +221,21 @@ def showchildren(**args):
     childrevs = ['%d:%s' % (cctx, cctx) for cctx in ctx.children()]
     return showlist('children', childrevs, element='child', **args)
 
+# Deprecated, but kept alive for help generation a purpose.
 def showcurrentbookmark(**args):
     """:currentbookmark: String. The active bookmark, if it is
+    associated with the changeset (DEPRECATED)"""
+    return showactivebookmark(**args)
+
+def showactivebookmark(**args):
+    """:activetbookmark: String. The active bookmark, if it is
     associated with the changeset"""
     import bookmarks as bookmarks # to avoid circular import issues
     repo = args['repo']
-    if bookmarks.iscurrent(repo):
-        current = repo._bookmarkcurrent
-        if current in args['ctx'].bookmarks():
-            return current
+    if bookmarks.isactivewdirparent(repo):
+        active = repo._activebookmark
+        if active in args['ctx'].bookmarks():
+            return active
     return ''
 
 def showdate(repo, ctx, templ, **args):
@@ -418,12 +424,14 @@ def showtags(**args):
 # cache - a cache dictionary for the whole templater run
 # revcache - a cache dictionary for the current revision
 keywords = {
+    'activebookmark': showactivebookmark,
     'author': showauthor,
     'bisect': showbisect,
     'branch': showbranch,
     'branches': showbranches,
     'bookmarks': showbookmarks,
     'children': showchildren,
+    # currentbookmark is deprecated
     'currentbookmark': showcurrentbookmark,
     'date': showdate,
     'desc': showdescription,

@@ -192,11 +192,11 @@ class locallegacypeer(localpeer):
 
 class localrepository(object):
 
-    supportedformats = set(('revlogv1', 'generaldelta', 'manifestv2'))
+    supportedformats = set(('revlogv1', 'generaldelta', 'treemanifest',
+                            'manifestv2'))
     _basesupported = supportedformats | set(('store', 'fncache', 'shared',
                                              'dotencode'))
-    openerreqs = set(('revlogv1', 'generaldelta', 'manifestv2'))
-    requirements = ['revlogv1']
+    openerreqs = set(('revlogv1', 'generaldelta', 'treemanifest', 'manifestv2'))
     filtername = None
 
     # a list of (ui, featureset) functions.
@@ -204,9 +204,10 @@ class localrepository(object):
     featuresetupfuncs = set()
 
     def _baserequirements(self, create):
-        return self.requirements[:]
+        return ['revlogv1']
 
     def __init__(self, baseui, path=None, create=False):
+        self.requirements = set()
         self.wvfs = scmutil.vfs(path, expandpath=True, realpath=True)
         self.wopener = self.wvfs
         self.root = self.wvfs.base
@@ -243,14 +244,14 @@ class localrepository(object):
                 if not self.wvfs.exists():
                     self.wvfs.makedirs()
                 self.vfs.makedir(notindexed=True)
-                requirements = self._baserequirements(create)
+                self.requirements.update(self._baserequirements(create))
                 if self.ui.configbool('format', 'usestore', True):
                     self.vfs.mkdir("store")
-                    requirements.append("store")
+                    self.requirements.add("store")
                     if self.ui.configbool('format', 'usefncache', True):
-                        requirements.append("fncache")
+                        self.requirements.add("fncache")
                         if self.ui.configbool('format', 'dotencode', True):
-                            requirements.append('dotencode')
+                            self.requirements.add('dotencode')
                     # create an invalid changelog
                     self.vfs.append(
                         "00changelog.i",
@@ -258,21 +259,22 @@ class localrepository(object):
                         ' dummy changelog to prevent using the old repo layout'
                     )
                 if self.ui.configbool('format', 'generaldelta', False):
-                    requirements.append("generaldelta")
+                    self.requirements.add("generaldelta")
+                if self.ui.configbool('experimental', 'treemanifest', False):
+                    self.requirements.add("treemanifest")
                 if self.ui.configbool('experimental', 'manifestv2', False):
-                    requirements.append("manifestv2")
-                requirements = set(requirements)
+                    self.requirements.add("manifestv2")
             else:
                 raise error.RepoError(_("repository %s not found") % path)
         elif create:
             raise error.RepoError(_("repository %s already exists") % path)
         else:
             try:
-                requirements = scmutil.readrequires(self.vfs, self.supported)
+                self.requirements = scmutil.readrequires(
+                        self.vfs, self.supported)
             except IOError, inst:
                 if inst.errno != errno.ENOENT:
                     raise
-                requirements = set()
 
         self.sharedpath = self.path
         try:
@@ -287,13 +289,14 @@ class localrepository(object):
             if inst.errno != errno.ENOENT:
                 raise
 
-        self.store = store.store(requirements, self.sharedpath, scmutil.vfs)
+        self.store = store.store(
+                self.requirements, self.sharedpath, scmutil.vfs)
         self.spath = self.store.path
         self.svfs = self.store.vfs
         self.sopener = self.svfs
         self.sjoin = self.store.join
         self.vfs.createmode = self.store.createmode
-        self._applyrequirements(requirements)
+        self._applyopenerreqs()
         if create:
             self._writerequirements()
 
@@ -336,9 +339,8 @@ class localrepository(object):
             caps.add('bundle2=' + urllib.quote(capsblob))
         return caps
 
-    def _applyrequirements(self, requirements):
-        self.requirements = requirements
-        self.svfs.options = dict((r, 1) for r in requirements
+    def _applyopenerreqs(self):
+        self.svfs.options = dict((r, 1) for r in self.requirements
                                            if r in self.openerreqs)
         chunkcachesize = self.ui.configint('format', 'chunkcachesize')
         if chunkcachesize is not None:
@@ -349,15 +351,9 @@ class localrepository(object):
         manifestcachesize = self.ui.configint('format', 'manifestcachesize')
         if manifestcachesize is not None:
             self.svfs.options['manifestcachesize'] = manifestcachesize
-        usetreemanifest = self.ui.configbool('experimental', 'treemanifest')
-        if usetreemanifest is not None:
-            self.svfs.options['usetreemanifest'] = usetreemanifest
 
     def _writerequirements(self):
-        reqfile = self.vfs("requires", "w")
-        for r in sorted(self.requirements):
-            reqfile.write("%s\n" % r)
-        reqfile.close()
+        scmutil.writerequires(self.vfs, self.requirements)
 
     def _checknested(self, path):
         """Determine if path is a legal nested repository."""
@@ -419,8 +415,8 @@ class localrepository(object):
         return bookmarks.bmstore(self)
 
     @repofilecache('bookmarks.current')
-    def _bookmarkcurrent(self):
-        return bookmarks.readcurrent(self)
+    def _activebookmark(self):
+        return bookmarks.readactive(self)
 
     def bookmarkheads(self, bookmark):
         name = bookmark.split('@', 1)[0]
@@ -463,6 +459,9 @@ class localrepository(object):
     @storecache('00manifest.i')
     def manifest(self):
         return manifest.manifest(self.svfs)
+
+    def dirlog(self, dir):
+        return self.manifest.dirlog(dir)
 
     @repofilecache('dirstate')
     def dirstate(self):
@@ -628,7 +627,7 @@ class localrepository(object):
 
         if not local:
             m = matchmod.exact(self.root, '', ['.hgtags'])
-            if util.any(self.status(match=m, unknown=True, ignored=True)):
+            if any(self.status(match=m, unknown=True, ignored=True)):
                 raise util.Abort(_('working copy of .hgtags is changed'),
                                  hint=_('please commit .hgtags manually'))
 
@@ -1381,7 +1380,7 @@ class localrepository(object):
             wctx = self[None]
             merge = len(wctx.parents()) > 1
 
-            if not force and merge and not match.always():
+            if not force and merge and match.ispartial():
                 raise util.Abort(_('cannot partially commit a merge '
                                    '(do not specify files or patterns)'))
 
@@ -1466,9 +1465,10 @@ class localrepository(object):
             cctx = context.workingcommitctx(self, status,
                                             text, user, date, extra)
 
-            if (not force and not extra.get("close") and not merge
-                and not cctx.files()
-                and wctx.branch() == wctx.p1().branch()):
+            allowemptycommit = (wctx.branch() != wctx.p1().branch()
+                                or extra.get('close') or merge or cctx.files()
+                                or self.ui.configbool('ui', 'allowemptycommit'))
+            if not allowemptycommit:
                 return None
 
             if merge and cctx.deleted():
@@ -1521,7 +1521,7 @@ class localrepository(object):
         def commithook(node=hex(ret), parent1=hookp1, parent2=hookp2):
             # hack for command that use a temporary commit (eg: histedit)
             # temporary commit got stripped before hook release
-            if node in self:
+            if self.changelog.hasnode(ret):
                 self.hook("commit", node=node, parent1=parent1,
                           parent2=parent2)
         self._afterlock(commithook)
@@ -1754,89 +1754,55 @@ class localrepository(object):
         """
         return util.hooks()
 
-    def stream_in(self, remote, requirements):
+    def stream_in(self, remote, remotereqs):
+        # Save remote branchmap. We will use it later
+        # to speed up branchcache creation
+        rbranchmap = None
+        if remote.capable("branchmap"):
+            rbranchmap = remote.branchmap()
+
+        fp = remote.stream_out()
+        l = fp.readline()
+        try:
+            resp = int(l)
+        except ValueError:
+            raise error.ResponseError(
+                _('unexpected response from remote server:'), l)
+        if resp == 1:
+            raise util.Abort(_('operation forbidden by server'))
+        elif resp == 2:
+            raise util.Abort(_('locking the remote repository failed'))
+        elif resp != 0:
+            raise util.Abort(_('the server sent an unknown error code'))
+
+        self.applystreamclone(remotereqs, rbranchmap, fp)
+        return len(self.heads()) + 1
+
+    def applystreamclone(self, remotereqs, remotebranchmap, fp):
+        """Apply stream clone data to this repository.
+
+        "remotereqs" is a set of requirements to handle the incoming data.
+        "remotebranchmap" is the result of a branchmap lookup on the remote. It
+        can be None.
+        "fp" is a file object containing the raw stream data, suitable for
+        feeding into exchange.consumestreamclone.
+        """
         lock = self.lock()
         try:
-            # Save remote branchmap. We will use it later
-            # to speed up branchcache creation
-            rbranchmap = None
-            if remote.capable("branchmap"):
-                rbranchmap = remote.branchmap()
-
-            fp = remote.stream_out()
-            l = fp.readline()
-            try:
-                resp = int(l)
-            except ValueError:
-                raise error.ResponseError(
-                    _('unexpected response from remote server:'), l)
-            if resp == 1:
-                raise util.Abort(_('operation forbidden by server'))
-            elif resp == 2:
-                raise util.Abort(_('locking the remote repository failed'))
-            elif resp != 0:
-                raise util.Abort(_('the server sent an unknown error code'))
-            self.ui.status(_('streaming all changes\n'))
-            l = fp.readline()
-            try:
-                total_files, total_bytes = map(int, l.split(' ', 1))
-            except (ValueError, TypeError):
-                raise error.ResponseError(
-                    _('unexpected response from remote server:'), l)
-            self.ui.status(_('%d files to transfer, %s of data\n') %
-                           (total_files, util.bytecount(total_bytes)))
-            handled_bytes = 0
-            self.ui.progress(_('clone'), 0, total=total_bytes)
-            start = time.time()
-
-            tr = self.transaction(_('clone'))
-            try:
-                for i in xrange(total_files):
-                    # XXX doesn't support '\n' or '\r' in filenames
-                    l = fp.readline()
-                    try:
-                        name, size = l.split('\0', 1)
-                        size = int(size)
-                    except (ValueError, TypeError):
-                        raise error.ResponseError(
-                            _('unexpected response from remote server:'), l)
-                    if self.ui.debugflag:
-                        self.ui.debug('adding %s (%s)\n' %
-                                      (name, util.bytecount(size)))
-                    # for backwards compat, name was partially encoded
-                    ofp = self.svfs(store.decodedir(name), 'w')
-                    for chunk in util.filechunkiter(fp, limit=size):
-                        handled_bytes += len(chunk)
-                        self.ui.progress(_('clone'), handled_bytes,
-                                         total=total_bytes)
-                        ofp.write(chunk)
-                    ofp.close()
-                tr.close()
-            finally:
-                tr.release()
-
-            # Writing straight to files circumvented the inmemory caches
-            self.invalidate()
-
-            elapsed = time.time() - start
-            if elapsed <= 0:
-                elapsed = 0.001
-            self.ui.progress(_('clone'), None)
-            self.ui.status(_('transferred %s in %.1f seconds (%s/sec)\n') %
-                           (util.bytecount(total_bytes), elapsed,
-                            util.bytecount(total_bytes / elapsed)))
+            exchange.consumestreamclone(self, fp)
 
             # new requirements = old non-format requirements +
-            #                    new format-related
+            #                    new format-related remote requirements
             # requirements from the streamed-in repository
-            requirements.update(set(self.requirements) - self.supportedformats)
-            self._applyrequirements(requirements)
+            self.requirements = remotereqs | (
+                    self.requirements - self.supportedformats)
+            self._applyopenerreqs()
             self._writerequirements()
 
-            if rbranchmap:
+            if remotebranchmap:
                 rbheads = []
                 closed = []
-                for bheads in rbranchmap.itervalues():
+                for bheads in remotebranchmap.itervalues():
                     rbheads.extend(bheads)
                     for h in bheads:
                         r = self.changelog.rev(h)
@@ -1847,7 +1813,7 @@ class localrepository(object):
                 if rbheads:
                     rtiprev = max((int(self.changelog.rev(node))
                             for node in rbheads))
-                    cache = branchmap.branchcache(rbranchmap,
+                    cache = branchmap.branchcache(remotebranchmap,
                                                   self[rtiprev].node(),
                                                   rtiprev,
                                                   closednodes=closed)
@@ -1860,7 +1826,6 @@ class localrepository(object):
                             cache.write(rview)
                             break
             self.invalidate()
-            return len(self.heads()) + 1
         finally:
             lock.release()
 

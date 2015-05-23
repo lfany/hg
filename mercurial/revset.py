@@ -25,23 +25,22 @@ def _revancestors(repo, revs, followfirst):
     cl = repo.changelog
 
     def iterate():
-        revqueue, revsnode = None, None
+        revs.sort(reverse=True)
+        irevs = iter(revs)
         h = []
 
-        revs.sort(reverse=True)
-        revqueue = util.deque(revs)
-        if revqueue:
-            revsnode = revqueue.popleft()
-            heapq.heappush(h, -revsnode)
+        inputrev = next(irevs, None)
+        if inputrev is not None:
+            heapq.heappush(h, -inputrev)
 
         seen = set()
         while h:
             current = -heapq.heappop(h)
+            if current == inputrev:
+                inputrev = next(irevs, None)
+                if inputrev is not None:
+                    heapq.heappush(h, -inputrev)
             if current not in seen:
-                if revsnode and current == revsnode:
-                    if revqueue:
-                        revsnode = revqueue.popleft()
-                        heapq.heappush(h, -revsnode)
                 seen.add(current)
                 yield current
                 for parent in cl.parentrevs(current)[:cut]:
@@ -334,11 +333,6 @@ def stringset(repo, subset, x):
         return baseset([x])
     return baseset()
 
-def symbolset(repo, subset, x):
-    if x in symbols:
-        raise error.ParseError(_("can't use %s here") % x)
-    return stringset(repo, subset, x)
-
 def rangeset(repo, subset, x, y):
     m = getset(repo, fullreposet(repo), x)
     n = getset(repo, fullreposet(repo), y)
@@ -363,7 +357,7 @@ def andset(repo, subset, x, y):
 
 def orset(repo, subset, x, y):
     xl = getset(repo, subset, x)
-    yl = getset(repo, subset - xl, y)
+    yl = getset(repo, subset, y)
     return xl + yl
 
 def notset(repo, subset, x):
@@ -1127,7 +1121,7 @@ def keyword(repo, subset, x):
 
     def matches(r):
         c = repo[r]
-        return util.any(kw in encoding.lower(t) for t in c.files() + [c.user(),
+        return any(kw in encoding.lower(t) for t in c.files() + [c.user(),
             c.description()])
 
     return subset.filter(matches)
@@ -1151,12 +1145,11 @@ def limit(repo, subset, x):
     result = []
     it = iter(os)
     for x in xrange(lim):
-        try:
-            y = it.next()
-            if y in ss:
-                result.append(y)
-        except (StopIteration):
+        y = next(it, None)
+        if y is None:
             break
+        elif y in ss:
+            result.append(y)
     return baseset(result)
 
 def last(repo, subset, x):
@@ -1179,12 +1172,11 @@ def last(repo, subset, x):
     result = []
     it = iter(os)
     for x in xrange(lim):
-        try:
-            y = it.next()
-            if y in ss:
-                result.append(y)
-        except (StopIteration):
+        y = next(it, None)
+        if y is None:
             break
+        elif y in ss:
+            result.append(y)
     return baseset(result)
 
 def maxrev(repo, subset, x):
@@ -1486,6 +1478,20 @@ def present(repo, subset, x):
     except error.RepoLookupError:
         return baseset()
 
+# for internal use
+def _notpublic(repo, subset, x):
+    getargs(x, 0, 0, "_notpublic takes no arguments")
+    if repo._phasecache._phasesets:
+        s = set()
+        for u in repo._phasecache._phasesets[1:]:
+            s.update(u)
+        return subset & s
+    else:
+        phase = repo._phasecache.phase
+        target = phases.public
+        condition = lambda r: phase(repo, r) != target
+        return subset.filter(condition, cache=False)
+
 def public(repo, subset, x):
     """``public()``
     Changeset in public phase."""
@@ -1684,7 +1690,7 @@ def roots(repo, subset, x):
     Changesets in set with no parent changeset in set.
     """
     s = getset(repo, fullreposet(repo), x)
-    subset = baseset([r for r in s if r in subset])
+    subset = subset & s# baseset([r for r in s if r in subset])
     cs = _children(repo, subset, s)
     return subset - cs
 
@@ -1787,7 +1793,7 @@ def subrepo(repo, subset, x):
             return s.added or s.modified or s.removed
 
         if s.added:
-            return util.any(submatches(c.substate.keys()))
+            return any(submatches(c.substate.keys()))
 
         if s.modified:
             subs = set(c.p1().substate.keys())
@@ -1798,7 +1804,7 @@ def subrepo(repo, subset, x):
                     return True
 
         if s.removed:
-            return util.any(submatches(c.p1().substate.keys()))
+            return any(submatches(c.p1().substate.keys()))
 
         return False
 
@@ -1992,6 +1998,7 @@ symbols = {
     "parents": parents,
     "present": present,
     "public": public,
+    "_notpublic": _notpublic,
     "remote": remote,
     "removes": removes,
     "rev": rev,
@@ -2066,6 +2073,7 @@ safesymbols = set([
     "parents",
     "present",
     "public",
+    "_notpublic",
     "remote",
     "removes",
     "rev",
@@ -2088,7 +2096,7 @@ methods = {
     "range": rangeset,
     "dagrange": dagrange,
     "string": stringset,
-    "symbol": symbolset,
+    "symbol": stringset,
     "and": andset,
     "or": orset,
     "not": notset,
@@ -2097,7 +2105,6 @@ methods = {
     "ancestor": ancestorspec,
     "parent": parentspec,
     "parentpost": p1,
-    "only": only,
 }
 
 def optimize(x, small):
@@ -2158,8 +2165,14 @@ def optimize(x, small):
             wb, wa = wa, wb
         return max(wa, wb), (op, ta, tb)
     elif op == 'not':
-        o = optimize(x[1], not small)
-        return o[0], (op, o[1])
+        # Optimize not public() to _notpublic() because we have a fast version
+        if x[1] == ('func', ('symbol', 'public'), None):
+            newsym =  ('func', ('symbol', '_notpublic'), None)
+            o = optimize(newsym, not small)
+            return o[0], o[1]
+        else:
+            o = optimize(x[1], not small)
+            return o[0], (op, o[1])
     elif op == 'parentpost':
         o = optimize(x[1], small)
         return o[0], (op, o[1])
@@ -2496,7 +2509,10 @@ def foldconcat(tree):
 
 def parse(spec, lookup=None):
     p = parser.parser(tokenize, elements)
-    return p.parse(spec, lookup=lookup)
+    tree, pos = p.parse(spec, lookup=lookup)
+    if pos != len(spec):
+        raise error.ParseError(_("invalid token"), pos)
+    return tree
 
 def posttreebuilthook(tree, repo):
     # hook for extensions to execute code on the optimized tree
@@ -2508,9 +2524,7 @@ def match(ui, spec, repo=None):
     lookup = None
     if repo:
         lookup = repo.__contains__
-    tree, pos = parse(spec, lookup)
-    if (pos != len(spec)):
-        raise error.ParseError(_("invalid token"), pos)
+    tree = parse(spec, lookup)
     if ui:
         tree = findaliases(ui, tree, showwarning=ui.warn)
     tree = foldconcat(tree)
@@ -2621,19 +2635,7 @@ def formatspec(expr, *args):
     return ret
 
 def prettyformat(tree):
-    def _prettyformat(tree, level, lines):
-        if not isinstance(tree, tuple) or tree[0] in ('string', 'symbol'):
-            lines.append((level, str(tree)))
-        else:
-            lines.append((level, '(%s' % tree[0]))
-            for s in tree[1:]:
-                _prettyformat(s, level + 1, lines)
-            lines[-1:] = [(lines[-1][0], lines[-1][1] + ')')]
-
-    lines = []
-    _prettyformat(tree, 0, lines)
-    output = '\n'.join(('  '*l + s) for l, s in lines)
-    return output
+    return parser.prettyformat(tree, ('string', 'symbol'))
 
 def depth(tree):
     if isinstance(tree, tuple):
@@ -2939,6 +2941,42 @@ class filteredset(abstractsmartset):
     def __repr__(self):
         return '<%s %r>' % (type(self).__name__, self._subset)
 
+def _iterordered(ascending, iter1, iter2):
+    """produce an ordered iteration from two iterators with the same order
+
+    The ascending is used to indicated the iteration direction.
+    """
+    choice = max
+    if ascending:
+        choice = min
+
+    val1 = None
+    val2 = None
+    try:
+        # Consume both iterators in an ordered way until one is empty
+        while True:
+            if val1 is None:
+                val1 = iter1.next()
+            if val2 is None:
+                val2 = iter2.next()
+            next = choice(val1, val2)
+            yield next
+            if val1 == next:
+                val1 = None
+            if val2 == next:
+                val2 = None
+    except StopIteration:
+        # Flush any remaining values and consume the other one
+        it = iter2
+        if val1 is not None:
+            yield val1
+            it = iter1
+        elif val2 is not None:
+            # might have been equality and both are empty
+            yield val2
+        for val in it:
+            yield val
+
 class addset(abstractsmartset):
     """Represent the addition of two sets
 
@@ -2948,6 +2986,64 @@ class addset(abstractsmartset):
     If the ascending attribute is set, that means the two structures are
     ordered in either an ascending or descending way. Therefore, we can add
     them maintaining the order by iterating over both at the same time
+
+    >>> xs = baseset([0, 3, 2])
+    >>> ys = baseset([5, 2, 4])
+
+    >>> rs = addset(xs, ys)
+    >>> bool(rs), 0 in rs, 1 in rs, 5 in rs, rs.first(), rs.last()
+    (True, True, False, True, 0, 4)
+    >>> rs = addset(xs, baseset([]))
+    >>> bool(rs), 0 in rs, 1 in rs, rs.first(), rs.last()
+    (True, True, False, 0, 2)
+    >>> rs = addset(baseset([]), baseset([]))
+    >>> bool(rs), 0 in rs, rs.first(), rs.last()
+    (False, False, None, None)
+
+    iterate unsorted:
+    >>> rs = addset(xs, ys)
+    >>> [x for x in rs]  # without _genlist
+    [0, 3, 2, 5, 4]
+    >>> assert not rs._genlist
+    >>> len(rs)
+    5
+    >>> [x for x in rs]  # with _genlist
+    [0, 3, 2, 5, 4]
+    >>> assert rs._genlist
+
+    iterate ascending:
+    >>> rs = addset(xs, ys, ascending=True)
+    >>> [x for x in rs], [x for x in rs.fastasc()]  # without _asclist
+    ([0, 2, 3, 4, 5], [0, 2, 3, 4, 5])
+    >>> assert not rs._asclist
+    >>> len(rs)
+    5
+    >>> [x for x in rs], [x for x in rs.fastasc()]
+    ([0, 2, 3, 4, 5], [0, 2, 3, 4, 5])
+    >>> assert rs._asclist
+
+    iterate descending:
+    >>> rs = addset(xs, ys, ascending=False)
+    >>> [x for x in rs], [x for x in rs.fastdesc()]  # without _asclist
+    ([5, 4, 3, 2, 0], [5, 4, 3, 2, 0])
+    >>> assert not rs._asclist
+    >>> len(rs)
+    5
+    >>> [x for x in rs], [x for x in rs.fastdesc()]
+    ([5, 4, 3, 2, 0], [5, 4, 3, 2, 0])
+    >>> assert rs._asclist
+
+    iterate ascending without fastasc:
+    >>> rs = addset(xs, generatorset(ys), ascending=True)
+    >>> assert rs.fastasc is None
+    >>> [x for x in rs]
+    [0, 2, 3, 4, 5]
+
+    iterate descending without fastdesc:
+    >>> rs = addset(generatorset(xs), ys, ascending=False)
+    >>> assert rs.fastdesc is None
+    >>> [x for x in rs]
+    [5, 4, 3, 2, 0]
     """
     def __init__(self, revs1, revs2, ascending=None):
         self._r1 = revs1
@@ -2966,10 +3062,10 @@ class addset(abstractsmartset):
     @util.propertycache
     def _list(self):
         if not self._genlist:
-            self._genlist = baseset(self._iterator())
+            self._genlist = baseset(iter(self))
         return self._genlist
 
-    def _iterator(self):
+    def __iter__(self):
         """Iterate over both collections without repeating elements
 
         If the ascending attribute is not set, iterate over the first one and
@@ -2980,35 +3076,41 @@ class addset(abstractsmartset):
         same time, yielding only one value at a time in the given order.
         """
         if self._ascending is None:
-            def gen():
+            if self._genlist:
+                return iter(self._genlist)
+            def arbitraryordergen():
                 for r in self._r1:
                     yield r
                 inr1 = self._r1.__contains__
                 for r in self._r2:
                     if not inr1(r):
                         yield r
-            gen = gen()
-        else:
-            iter1 = iter(self._r1)
-            iter2 = iter(self._r2)
-            gen = self._iterordered(self._ascending, iter1, iter2)
-        return gen
-
-    def __iter__(self):
-        if self._ascending is None:
-            if self._genlist:
-                return iter(self._genlist)
-            return iter(self._iterator())
+            return arbitraryordergen()
+        # try to use our own fast iterator if it exists
         self._trysetasclist()
         if self._ascending:
-            it = self.fastasc
+            attr = 'fastasc'
         else:
-            it = self.fastdesc
-        if it is None:
-            # consume the gen and try again
-            self._list
-            return iter(self)
-        return it()
+            attr = 'fastdesc'
+        it = getattr(self, attr)
+        if it is not None:
+            return it()
+        # maybe half of the component supports fast
+        # get iterator for _r1
+        iter1 = getattr(self._r1, attr)
+        if iter1 is None:
+            # let's avoid side effect (not sure it matters)
+            iter1 = iter(sorted(self._r1, reverse=not self._ascending))
+        else:
+            iter1 = iter1()
+        # get iterator for _r2
+        iter2 = getattr(self._r2, attr)
+        if iter2 is None:
+            # let's avoid side effect (not sure it matters)
+            iter2 = iter(sorted(self._r2, reverse=not self._ascending))
+        else:
+            iter2 = iter2()
+        return _iterordered(self._ascending, iter1, iter2)
 
     def _trysetasclist(self):
         """populate the _asclist attribute if possible and necessary"""
@@ -3024,7 +3126,7 @@ class addset(abstractsmartset):
         iter2 = self._r2.fastasc
         if None in (iter1, iter2):
             return None
-        return lambda: self._iterordered(True, iter1(), iter2())
+        return lambda: _iterordered(True, iter1(), iter2())
 
     @property
     def fastdesc(self):
@@ -3035,48 +3137,7 @@ class addset(abstractsmartset):
         iter2 = self._r2.fastdesc
         if None in (iter1, iter2):
             return None
-        return lambda: self._iterordered(False, iter1(), iter2())
-
-    def _iterordered(self, ascending, iter1, iter2):
-        """produce an ordered iteration from two iterators with the same order
-
-        The ascending is used to indicated the iteration direction.
-        """
-        choice = max
-        if ascending:
-            choice = min
-
-        val1 = None
-        val2 = None
-
-        choice = max
-        if ascending:
-            choice = min
-        try:
-            # Consume both iterators in an ordered way until one is
-            # empty
-            while True:
-                if val1 is None:
-                    val1 = iter1.next()
-                if val2 is None:
-                    val2 = iter2.next()
-                next = choice(val1, val2)
-                yield next
-                if val1 == next:
-                    val1 = None
-                if val2 == next:
-                    val2 = None
-        except StopIteration:
-            # Flush any remaining values and consume the other one
-            it = iter2
-            if val1 is not None:
-                yield val1
-                it = iter1
-            elif val2 is not None:
-                # might have been equality and both are empty
-                yield val2
-            for val in it:
-                yield val
+        return lambda: _iterordered(False, iter1(), iter2())
 
     def __contains__(self, x):
         return x in self._r1 or x in self._r2
@@ -3143,7 +3204,12 @@ class generatorset(abstractsmartset):
                 self.__contains__ = self._desccontains
 
     def __nonzero__(self):
-        for r in self:
+        # Do not use 'for r in self' because it will enforce the iteration
+        # order (default ascending), possibly unrolling a whole descending
+        # iterator.
+        if self._genlist:
+            return True
+        for r in self._consumegen():
             return True
         return False
 
@@ -3267,9 +3333,7 @@ class generatorset(abstractsmartset):
             for x in self._consumegen():
                 pass
             return self.first()
-        if self:
-            return it().next()
-        return None
+        return next(it(), None)
 
     def last(self):
         if self._ascending:
@@ -3281,9 +3345,7 @@ class generatorset(abstractsmartset):
             for x in self._consumegen():
                 pass
             return self.first()
-        if self:
-            return it().next()
-        return None
+        return next(it(), None)
 
     def __repr__(self):
         d = {False: '-', True: '+'}[self._ascending]

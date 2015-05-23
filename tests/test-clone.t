@@ -64,7 +64,7 @@ Invalid dest '' must abort:
 No update, with debug option:
 
 #if hardlink
-  $ hg --debug clone -U . ../c
+  $ hg --debug clone -U . ../c --config progress.debug=true
   linking: 1
   linking: 2
   linking: 3
@@ -75,7 +75,7 @@ No update, with debug option:
   linking: 8
   linked 8 files
 #else
-  $ hg --debug clone -U . ../c
+  $ hg --debug clone -U . ../c --config progress.debug=true
   linking: 1
   copying: 2
   copying: 3

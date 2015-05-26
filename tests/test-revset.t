@@ -1,5 +1,27 @@
   $ HGENCODING=utf-8
   $ export HGENCODING
+  $ cat > testrevset.py << EOF
+  > import mercurial.revset
+  > 
+  > baseset = mercurial.revset.baseset
+  > 
+  > def r3232(repo, subset, x):
+  >     """"simple revset that return [3,2,3,2]
+  > 
+  >     revisions duplicated on purpose.
+  >     """
+  >     if 3 not in subset:
+  >        if 2 in subset:
+  >            return baseset([2,2])
+  >        return baseset()
+  >     return baseset([3,3,2,2])
+  > 
+  > mercurial.revset.symbols['r3232'] = r3232
+  > EOF
+  $ cat >> $HGRCPATH << EOF
+  > [extensions]
+  > testrevset=$TESTTMP/testrevset.py
+  > EOF
 
   $ try() {
   >   hg debugrevspec --debug "$@"
@@ -281,7 +303,7 @@ quoting needed
   hg: parse error: date requires a string
   [255]
   $ log 'date'
-  hg: parse error: can't use date here
+  abort: unknown revision 'date'!
   [255]
   $ log 'date('
   hg: parse error at 5: not a prefix: end
@@ -289,11 +311,40 @@ quoting needed
   $ log 'date(tip)'
   abort: invalid date: 'tip'
   [255]
-  $ log '"date"'
+  $ log '0:date'
   abort: unknown revision 'date'!
   [255]
+  $ log '::"date"'
+  abort: unknown revision 'date'!
+  [255]
+  $ hg book date -r 4
+  $ log '0:date'
+  0
+  1
+  2
+  3
+  4
+  $ log '::date'
+  0
+  1
+  2
+  4
+  $ log '::"date"'
+  0
+  1
+  2
+  4
   $ log 'date(2005) and 1::'
   4
+  $ hg book -d date
+
+Test that symbols only get parsed as functions if there's an opening
+parenthesis.
+
+  $ hg book only -r 9
+  $ log 'only(only)'   # Outer "only" is a function, inner "only" is the bookmark
+  8
+  9
 
 ancestor can accept 0 or more arguments
 
@@ -311,6 +362,9 @@ ancestor can accept 0 or more arguments
   0
   $ log 'ancestor(1,2,3,4,5)'
   1
+
+test ancestors
+
   $ log 'ancestors(5)'
   0
   1
@@ -318,6 +372,12 @@ ancestor can accept 0 or more arguments
   5
   $ log 'ancestor(ancestors(5))'
   0
+  $ log '::r3232()'
+  0
+  1
+  2
+  3
+
   $ log 'author(bob)'
   2
   $ log 'author("re:bob|test")'
@@ -553,6 +613,24 @@ Test opreand of '%' is optimized recursively (issue4670)
         ('symbol', '8'))))
   * set:
   <baseset+ [8, 9]>
+  8
+  9
+  $ try --optimize '(9)%(5)'
+  (only
+    (group
+      ('symbol', '9'))
+    (group
+      ('symbol', '5')))
+  * optimized:
+  (func
+    ('symbol', 'only')
+    (list
+      ('symbol', '9')
+      ('symbol', '5')))
+  * set:
+  <baseset+ [8, 9, 2, 4]>
+  2
+  4
   8
   9
 
@@ -791,6 +869,51 @@ test that `or` operation combines elements in the right order:
   4
   5
   $ log 'sort(3:4 or 5:2)'
+  2
+  3
+  4
+  5
+
+test that `or` operation skips duplicated revisions from right-hand side
+
+  $ try 'reverse(1::5) or ancestors(4)'
+  (or
+    (func
+      ('symbol', 'reverse')
+      (dagrange
+        ('symbol', '1')
+        ('symbol', '5')))
+    (func
+      ('symbol', 'ancestors')
+      ('symbol', '4')))
+  * set:
+  <addset
+    <baseset [5, 3, 1]>,
+    <generatorset+>>
+  5
+  3
+  1
+  0
+  2
+  4
+  $ try 'sort(ancestors(4) or reverse(1::5))'
+  (func
+    ('symbol', 'sort')
+    (or
+      (func
+        ('symbol', 'ancestors')
+        ('symbol', '4'))
+      (func
+        ('symbol', 'reverse')
+        (dagrange
+          ('symbol', '1')
+          ('symbol', '5')))))
+  * set:
+  <addset+
+    <generatorset+>,
+    <baseset [5, 3, 1]>>
+  0
+  1
   2
   3
   4
@@ -1306,8 +1429,7 @@ far away.
   <addset
     <baseset [9]>,
     <filteredset
-      <filteredset
-        <fullreposet+ 0:9>>>>
+      <fullreposet+ 0:9>>>
   9
 
   $ try 'd(2:5)'

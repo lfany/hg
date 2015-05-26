@@ -27,10 +27,7 @@ class parser(object):
     def _advance(self):
         'advance the tokenizer'
         t = self.current
-        try:
-            self.current = self._iter.next()
-        except StopIteration:
-            pass
+        self.current = next(self._iter, None)
         return t
     def _match(self, m, pos):
         'make sure the tokenizer matches an end condition'
@@ -96,3 +93,18 @@ class parser(object):
         if self._methods:
             return self.eval(t)
         return t
+
+def _prettyformat(tree, leafnodes, level, lines):
+    if not isinstance(tree, tuple) or tree[0] in leafnodes:
+        lines.append((level, str(tree)))
+    else:
+        lines.append((level, '(%s' % tree[0]))
+        for s in tree[1:]:
+            _prettyformat(s, leafnodes, level + 1, lines)
+        lines[-1:] = [(lines[-1][0], lines[-1][1] + ')')]
+
+def prettyformat(tree, leafnodes):
+    lines = []
+    _prettyformat(tree, leafnodes, 0, lines)
+    output = '\n'.join(('  ' * l + s) for l, s in lines)
+    return output

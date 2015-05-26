@@ -7,8 +7,9 @@
 
 from node import nullid
 from i18n import _
-import scmutil, util, ignore, osutil, parsers, encoding, pathutil
+import scmutil, util, osutil, parsers, encoding, pathutil
 import os, stat, errno
+import match as matchmod
 
 propertycache = util.propertycache
 filecache = scmutil.filecache
@@ -47,6 +48,7 @@ class dirstate(object):
         self._ui = ui
         self._filecache = {}
         self._parentwriters = 0
+        self._filename = 'dirstate'
 
     def beginparentchange(self):
         '''Marks the beginning of a set of changes that involve changing
@@ -121,7 +123,7 @@ class dirstate(object):
     @propertycache
     def _pl(self):
         try:
-            fp = self._opener("dirstate")
+            fp = self._opener(self._filename)
             st = fp.read(40)
             fp.close()
             l = len(st)
@@ -143,13 +145,20 @@ class dirstate(object):
 
     @rootcache('.hgignore')
     def _ignore(self):
-        files = [self._join('.hgignore')]
+        files = []
+        if os.path.exists(self._join('.hgignore')):
+            files.append(self._join('.hgignore'))
         for name, path in self._ui.configitems("ui"):
             if name == 'ignore' or name.startswith('ignore.'):
                 # we need to use os.path.join here rather than self._join
                 # because path is arbitrary and user-specified
                 files.append(os.path.join(self._rootdir, util.expandpath(path)))
-        return ignore.ignore(self._root, files, self._ui.warn)
+
+        if not files:
+            return util.never
+
+        pats = ['include:%s' % f for f in files]
+        return matchmod.match(self._root, '', [], pats, warn=self._ui.warn)
 
     @propertycache
     def _slash(self):
@@ -317,7 +326,11 @@ class dirstate(object):
         self._map = {}
         self._copymap = {}
         try:
-            st = self._opener.read("dirstate")
+            fp = self._opener.open(self._filename)
+            try:
+                st = fp.read()
+            finally:
+                fp.close()
         except IOError, err:
             if err.errno != errno.ENOENT:
                 raise
@@ -584,7 +597,7 @@ class dirstate(object):
             import time # to avoid useless import
             time.sleep(delaywrite)
 
-        st = self._opener("dirstate", "w", atomictemp=True)
+        st = self._opener(self._filename, "w", atomictemp=True)
         # use the modification time of the newly created temporary file as the
         # filesystem's notion of 'now'
         now = util.fstat(st).st_mtime
@@ -746,7 +759,7 @@ class dirstate(object):
         if match.isexact(): # match.exact
             exact = True
             dirignore = util.always # skip step 2
-        elif match.files() and not match.anypats(): # match.match, no patterns
+        elif match.prefix(): # match.match, no patterns
             skipstep3 = True
 
         if not exact and self._checkcase:
@@ -972,7 +985,7 @@ class dirstate(object):
             # fast path -- filter the other way around, since typically files is
             # much smaller than dmap
             return [f for f in files if f in dmap]
-        if not match.anypats() and util.all(fn in dmap for fn in files):
+        if not match.anypats() and all(fn in dmap for fn in files):
             # fast path -- all the values are known to be files, so just return
             # that
             return list(files)

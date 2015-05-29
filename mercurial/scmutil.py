@@ -803,7 +803,7 @@ def matchandpats(ctx, pats=[], opts={}, globbed=False, default='relpath'):
         pats = expandpats(pats or [])
 
     m = ctx.match(pats, opts.get('include'), opts.get('exclude'),
-                         default)
+                         default, listsubrepos=opts.get('subrepos'))
     def badfn(f, msg):
         ctx.repo().ui.warn("%s: %s\n" % (m.rel(f), msg))
     m.bad = badfn
@@ -1010,6 +1010,12 @@ def readrequires(opener, supported):
             hint=_("see http://mercurial.selenic.com/wiki/MissingRequirement"
                    " for more information"))
     return requirements
+
+def writerequires(opener, requirements):
+    reqfile = opener("requires", "w")
+    for r in sorted(requirements):
+        reqfile.write("%s\n" % r)
+    reqfile.close()
 
 class filecachesubentry(object):
     def __init__(self, path, stat):

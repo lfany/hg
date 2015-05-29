@@ -5,10 +5,11 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+import time
 from i18n import _
 from node import hex, nullid
 import errno, urllib
-import util, scmutil, changegroup, base85, error
+import util, scmutil, changegroup, base85, error, store
 import discovery, phases, obsolete, bookmarks as bookmod, bundle2, pushkey
 import lock as lockmod
 
@@ -304,6 +305,20 @@ def _pushdiscoveryphase(pushop):
     unfi = pushop.repo.unfiltered()
     remotephases = pushop.remote.listkeys('phases')
     publishing = remotephases.get('publishing', False)
+    if (pushop.ui.configbool('ui', '_usedassubrepo', False)
+        and remotephases    # server supports phases
+        and not pushop.outgoing.missing # no changesets to be pushed
+        and publishing):
+        # When:
+        # - this is a subrepo push
+        # - and remote support phase
+        # - and no changeset are to be pushed
+        # - and remote is publishing
+        # We may be in issue 3871 case!
+        # We drop the possible phase synchronisation done by
+        # courtesy to publish changesets possibly locally draft
+        # on the remote.
+        remotephases = {'publishing': 'True'}
     ana = phases.analyzeremotephases(pushop.repo,
                                      pushop.fallbackheads,
                                      remotephases)
@@ -536,7 +551,8 @@ def _pushb2obsmarkers(pushop, bundler):
         return
     pushop.stepsdone.add('obsmarkers')
     if pushop.outobsmarkers:
-        buildobsmarkerspart(bundler, pushop.outobsmarkers)
+        markers = sorted(pushop.outobsmarkers)
+        buildobsmarkerspart(bundler, markers)
 
 @b2partsgenerator('bookmarks')
 def _pushb2bookmarks(pushop, bundler):
@@ -751,7 +767,7 @@ def _pushobsolete(pushop):
     pushop.stepsdone.add('obsmarkers')
     if pushop.outobsmarkers:
         rslts = []
-        remotedata = obsolete._pushkeyescape(pushop.outobsmarkers)
+        remotedata = obsolete._pushkeyescape(sorted(pushop.outobsmarkers))
         for key in sorted(remotedata, reverse=True):
             # reverse sort to ensure we end with dump0
             data = remotedata[key]
@@ -1180,7 +1196,7 @@ def getbundle(repo, source, heads=None, common=None, bundlecaps=None,
     # bundle10 case
     usebundle2 = False
     if bundlecaps is not None:
-        usebundle2 = util.any((cap.startswith('HG2') for cap in bundlecaps))
+        usebundle2 = any((cap.startswith('HG2') for cap in bundlecaps))
     if not usebundle2:
         if bundlecaps and not kwargs.get('cg', True):
             raise ValueError(_('request for bundle10 must include changegroup'))
@@ -1257,6 +1273,7 @@ def _getbundleobsmarkerpart(bundler, repo, source, bundlecaps=None,
             heads = repo.heads()
         subset = [c.node() for c in repo.set('::%ln', heads)]
         markers = repo.obsstore.relevantmarkers(subset)
+        markers = sorted(markers)
         buildobsmarkerspart(bundler, markers)
 
 def check_heads(repo, their_heads, context):
@@ -1313,7 +1330,7 @@ def unbundle(repo, cg, heads, source, url):
                         def recordout(output):
                             r.newpart('output', data=output, mandatory=False)
                 tr.close()
-            except Exception, exc:
+            except BaseException, exc:
                 exc.duringunbundle2 = True
                 if captureoutput and r is not None:
                     parts = exc._bundle2salvagedoutput = r.salvageoutput()
@@ -1330,3 +1347,131 @@ def unbundle(repo, cg, heads, source, url):
         if recordout is not None:
             recordout(repo.ui.popbuffer())
     return r
+
+# This is it's own function so extensions can override it.
+def _walkstreamfiles(repo):
+    return repo.store.walk()
+
+def generatestreamclone(repo):
+    """Emit content for a streaming clone.
+
+    This is a generator of raw chunks that constitute a streaming clone.
+
+    The stream begins with a line of 2 space-delimited integers containing the
+    number of entries and total bytes size.
+
+    Next, are N entries for each file being transferred. Each file entry starts
+    as a line with the file name and integer size delimited by a null byte.
+    The raw file data follows. Following the raw file data is the next file
+    entry, or EOF.
+
+    When used on the wire protocol, an additional line indicating protocol
+    success will be prepended to the stream. This function is not responsible
+    for adding it.
+
+    This function will obtain a repository lock to ensure a consistent view of
+    the store is captured. It therefore may raise LockError.
+    """
+    entries = []
+    total_bytes = 0
+    # Get consistent snapshot of repo, lock during scan.
+    lock = repo.lock()
+    try:
+        repo.ui.debug('scanning\n')
+        for name, ename, size in _walkstreamfiles(repo):
+            if size:
+                entries.append((name, size))
+                total_bytes += size
+    finally:
+            lock.release()
+
+    repo.ui.debug('%d files, %d bytes to transfer\n' %
+                  (len(entries), total_bytes))
+    yield '%d %d\n' % (len(entries), total_bytes)
+
+    sopener = repo.svfs
+    oldaudit = sopener.mustaudit
+    debugflag = repo.ui.debugflag
+    sopener.mustaudit = False
+
+    try:
+        for name, size in entries:
+            if debugflag:
+                repo.ui.debug('sending %s (%d bytes)\n' % (name, size))
+            # partially encode name over the wire for backwards compat
+            yield '%s\0%d\n' % (store.encodedir(name), size)
+            if size <= 65536:
+                fp = sopener(name)
+                try:
+                    data = fp.read(size)
+                finally:
+                    fp.close()
+                yield data
+            else:
+                for chunk in util.filechunkiter(sopener(name), limit=size):
+                    yield chunk
+    finally:
+        sopener.mustaudit = oldaudit
+
+def consumestreamclone(repo, fp):
+    """Apply the contents from a streaming clone file.
+
+    This takes the output from "streamout" and applies it to the specified
+    repository.
+
+    Like "streamout," the status line added by the wire protocol is not handled
+    by this function.
+    """
+    lock = repo.lock()
+    try:
+        repo.ui.status(_('streaming all changes\n'))
+        l = fp.readline()
+        try:
+            total_files, total_bytes = map(int, l.split(' ', 1))
+        except (ValueError, TypeError):
+            raise error.ResponseError(
+                _('unexpected response from remote server:'), l)
+        repo.ui.status(_('%d files to transfer, %s of data\n') %
+                       (total_files, util.bytecount(total_bytes)))
+        handled_bytes = 0
+        repo.ui.progress(_('clone'), 0, total=total_bytes)
+        start = time.time()
+
+        tr = repo.transaction(_('clone'))
+        try:
+            for i in xrange(total_files):
+                # XXX doesn't support '\n' or '\r' in filenames
+                l = fp.readline()
+                try:
+                    name, size = l.split('\0', 1)
+                    size = int(size)
+                except (ValueError, TypeError):
+                    raise error.ResponseError(
+                        _('unexpected response from remote server:'), l)
+                if repo.ui.debugflag:
+                    repo.ui.debug('adding %s (%s)\n' %
+                                  (name, util.bytecount(size)))
+                # for backwards compat, name was partially encoded
+                ofp = repo.svfs(store.decodedir(name), 'w')
+                for chunk in util.filechunkiter(fp, limit=size):
+                    handled_bytes += len(chunk)
+                    repo.ui.progress(_('clone'), handled_bytes,
+                                     total=total_bytes)
+                    ofp.write(chunk)
+                ofp.close()
+            tr.close()
+        finally:
+            tr.release()
+
+        # Writing straight to files circumvented the inmemory caches
+        repo.invalidate()
+
+        elapsed = time.time() - start
+        if elapsed <= 0:
+            elapsed = 0.001
+        repo.ui.progress(_('clone'), None)
+        repo.ui.status(_('transferred %s in %.1f seconds (%s/sec)\n') %
+                       (util.bytecount(total_bytes), elapsed,
+                        util.bytecount(total_bytes / elapsed)))
+    finally:
+        lock.release()

@@ -52,7 +52,7 @@ Revert interactive tests
   reverting folder1/g (glob)
   removing folder1/i (glob)
   reverting folder2/h (glob)
-  diff -r 89ac3d72e4a4 f
+  diff --git a/f b/f
   2 hunks, 2 lines changed
   examine changes to 'f'? [Ynesfdaq?] y
   
@@ -74,7 +74,7 @@ Revert interactive tests
   -b
   record change 2/6 to 'f'? [Ynesfdaq?] y
   
-  diff -r 89ac3d72e4a4 folder1/g
+  diff --git a/folder1/g b/folder1/g
   2 hunks, 2 lines changed
   examine changes to 'folder1/g'? [Ynesfdaq?] y
   
@@ -96,7 +96,7 @@ Revert interactive tests
   -d
   record change 4/6 to 'folder1/g'? [Ynesfdaq?] n
   
-  diff -r 89ac3d72e4a4 folder2/h
+  diff --git a/folder2/h b/folder2/h
   2 hunks, 2 lines changed
   examine changes to 'folder2/h'? [Ynesfdaq?] n
   
@@ -127,7 +127,7 @@ Test that --interactive lift the need for --all
   $ echo q | hg revert -i -r 2
   reverting folder1/g (glob)
   reverting folder2/h (glob)
-  diff -r 89ac3d72e4a4 folder1/g
+  diff --git a/folder1/g b/folder1/g
   1 hunks, 1 lines changed
   examine changes to 'folder1/g'? [Ynesfdaq?] q
   
@@ -151,7 +151,7 @@ Test that --interactive lift the need for --all
   reverting folder1/g (glob)
   removing folder1/i (glob)
   reverting folder2/h (glob)
-  diff -r 89ac3d72e4a4 f
+  diff --git a/f b/f
   2 hunks, 2 lines changed
   examine changes to 'f'? [Ynesfdaq?] y
   
@@ -173,7 +173,7 @@ Test that --interactive lift the need for --all
   -b
   record change 2/6 to 'f'? [Ynesfdaq?] y
   
-  diff -r 89ac3d72e4a4 folder1/g
+  diff --git a/folder1/g b/folder1/g
   2 hunks, 2 lines changed
   examine changes to 'folder1/g'? [Ynesfdaq?] y
   
@@ -195,7 +195,7 @@ Test that --interactive lift the need for --all
   -d
   record change 4/6 to 'folder1/g'? [Ynesfdaq?] n
   
-  diff -r 89ac3d72e4a4 folder2/h
+  diff --git a/folder2/h b/folder2/h
   2 hunks, 2 lines changed
   examine changes to 'folder2/h'? [Ynesfdaq?] n
   
@@ -230,7 +230,7 @@ Test that --interactive lift the need for --all
   > n
   > n
   > EOF
-  diff -r 59dd6e4ab63a f
+  diff --git a/f b/f
   2 hunks, 2 lines changed
   examine changes to 'f'? [Ynesfdaq?] y
   
@@ -270,3 +270,53 @@ Test that --interactive lift the need for --all
   3
   4
   5
+  $ rm f.orig
+  $ hg update -C .
+  3 files updated, 0 files merged, 0 files removed, 0 files unresolved
+
+Check editing files newly added by a revert
+
+1) Create a dummy editor changing 1 to 42
+  $ cat > $TESTTMP/editor.sh << '__EOF__'
+  > cat "$1"  | sed "s/1/42/g"  > tt
+  > mv tt  "$1"
+  > __EOF__
+
+2) Remove f
+  $ hg rm f
+  $ hg commit -m "remove f"
+
+3) Do another commit on top
+  $ touch k; hg add k
+  $ hg commit -m "add k"
+  $ hg st
+
+4) Use interactive revert to recover f and change it on the fly
+  $ HGEDITOR="\"sh\" \"${TESTTMP}/editor.sh\"" hg revert -i -r ".^^"  <<EOF
+  > y
+  > e
+  > EOF
+  adding f
+  removing k
+  diff --git a/f b/f
+  new file mode 100644
+  examine changes to 'f'? [Ynesfdaq?] y
+  
+  @@ -0,0 +1,7 @@
+  +a
+  +1
+  +2
+  +3
+  +4
+  +5
+  +b
+  record this change to 'f'? [Ynesfdaq?] e
+  
+  $ cat f
+  a
+  42
+  2
+  3
+  4
+  5
+  b

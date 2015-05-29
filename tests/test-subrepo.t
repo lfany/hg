@@ -38,6 +38,7 @@ Issue2232: committing a subrepo without .hgsub
   branch: default
   commit: 1 added, 1 subrepos
   update: (current)
+  phases: 1 draft (draft)
   $ hg ci -m1
 
 test handling .hgsubstate "added" explicitly.
@@ -83,6 +84,7 @@ Issue2022: update -C
   branch: default
   commit: 1 subrepos
   update: (current)
+  phases: 2 draft (draft)
   $ hg co -C 1
   1 files updated, 0 files merged, 0 files removed, 0 files unresolved
   $ hg sum
@@ -91,6 +93,7 @@ Issue2022: update -C
   branch: default
   commit: (clean)
   update: (current)
+  phases: 2 draft (draft)
 
 commands that require a clean repo should respect subrepos
 
@@ -113,6 +116,7 @@ add sub sub
   branch: default
   commit: 1 subrepos
   update: (current)
+  phases: 2 draft (draft)
   $ hg ci -m2
   committing subrepository s
   committing subrepository s/ss (glob)
@@ -122,6 +126,7 @@ add sub sub
   branch: default
   commit: (clean)
   update: (current)
+  phases: 3 draft (draft)
 
 test handling .hgsubstate "modified" explicitly.
 
@@ -255,7 +260,6 @@ merge tests
    branchmerge: True, force: False, partial: False
    ancestor: 1f14a2e2d3ec, local: f0d2028bf86d+, remote: 1831e14459c4
    .hgsubstate: versions differ -> m
-  updating: .hgsubstate 1/1 files (100.00%)
   subrepo merge f0d2028bf86d+ 1831e14459c4 1f14a2e2d3ec
     subrepo t: other changed, get t:6747d179aa9a688023c4b0cad32e4c92bb7f34ad:hg
   getting subrepo t
@@ -264,7 +268,6 @@ merge tests
    ancestor: 60ca1237c194, local: 60ca1237c194+, remote: 6747d179aa9a
    t: remote is newer -> g
   getting t
-  updating: t 1/1 files (100.00%)
   0 files updated, 0 files merged, 0 files removed, 0 files unresolved
   (branch merge, don't forget to commit)
   $ hg debugsub
@@ -283,7 +286,6 @@ merge tests
    branchmerge: True, force: False, partial: False
    ancestor: 1831e14459c4, local: e45c8b14af55+, remote: f94576341bcf
    .hgsubstate: versions differ -> m
-  updating: .hgsubstate 1/1 files (100.00%)
   subrepo merge e45c8b14af55+ f94576341bcf 1831e14459c4
     subrepo t: both sides changed 
    subrepository t diverged (local revision: 20a0db6fbf6c, remote revision: 7af322bc1198)
@@ -295,7 +297,6 @@ merge tests
    ancestor: 6747d179aa9a, local: 20a0db6fbf6c+, remote: 7af322bc1198
    preserving t for resolve of t
    t: versions differ -> m
-  updating: t 1/1 files (100.00%)
   picked tool 'internal:merge' for t (binary False symlink False)
   merging t
   my t@20a0db6fbf6c+ other t@7af322bc1198 ancestor t@6747d179aa9a
@@ -1489,7 +1490,17 @@ Courtesy phases synchronisation to publishing server does not block the push
   > [paths]
   > default=../issue3781-dest/
   > EOF
-  $ hg push
+  $ hg push --config experimental.bundle2-exp=False
+  pushing to $TESTTMP/issue3781-dest (glob)
+  pushing subrepo s to $TESTTMP/issue3781-dest/s
+  searching for changes
+  no changes found
+  searching for changes
+  no changes found
+  [1]
+# clean the push cache
+  $ rm s/.hg/cache/storehash/*
+  $ hg push --config experimental.bundle2-exp=True
   pushing to $TESTTMP/issue3781-dest (glob)
   pushing subrepo s to $TESTTMP/issue3781-dest/s
   searching for changes

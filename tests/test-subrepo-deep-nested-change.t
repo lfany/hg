@@ -209,14 +209,22 @@ Files sees uncommitted adds and removes in subrepos
   sub1/sub2/folder/bar (glob)
   sub1/sub2/x.txt (glob)
 
-  $ hg files -S -r '.^' sub1/sub2/folder
-  sub1/sub2/folder/test.txt (glob)
+  $ hg files -S "set:eol('dos') or eol('unix') or size('<= 0')"
+  .hgsub
+  .hgsubstate
+  foo/bar/abc (glob)
+  main
+  sub1/.hgsub (glob)
+  sub1/.hgsubstate (glob)
+  sub1/foo (glob)
+  sub1/sub1 (glob)
+  sub1/sub2/folder/bar (glob)
+  sub1/sub2/x.txt (glob)
 
-  $ hg files -S -r '.^' sub1/sub2/missing
-  sub1/sub2/missing: no such file in rev 78026e779ea6 (glob)
-  [1]
-
-  $ hg files -S -r '.^' sub1/
+  $ hg files -r '.^' -S "set:eol('dos') or eol('unix')"
+  .hgsub
+  .hgsubstate
+  main
   sub1/.hgsub (glob)
   sub1/.hgsubstate (glob)
   sub1/sub1 (glob)
@@ -224,7 +232,34 @@ Files sees uncommitted adds and removes in subrepos
   sub1/sub2/sub2 (glob)
   sub1/sub2/test.txt (glob)
 
-  $ hg files -S -r '.^' sub1/sub2
+  $ hg files sub1
+  sub1/.hgsub (glob)
+  sub1/.hgsubstate (glob)
+  sub1/foo (glob)
+  sub1/sub1 (glob)
+  sub1/sub2/folder/bar (glob)
+  sub1/sub2/x.txt (glob)
+
+  $ hg files sub1/sub2
+  sub1/sub2/folder/bar (glob)
+  sub1/sub2/x.txt (glob)
+
+  $ hg files -S -r '.^' sub1/sub2/folder
+  sub1/sub2/folder/test.txt (glob)
+
+  $ hg files -S -r '.^' sub1/sub2/missing
+  sub1/sub2/missing: no such file in rev 78026e779ea6 (glob)
+  [1]
+
+  $ hg files -r '.^' sub1/
+  sub1/.hgsub (glob)
+  sub1/.hgsubstate (glob)
+  sub1/sub1 (glob)
+  sub1/sub2/folder/test.txt (glob)
+  sub1/sub2/sub2 (glob)
+  sub1/sub2/test.txt (glob)
+
+  $ hg files -r '.^' sub1/sub2
   sub1/sub2/folder/test.txt (glob)
   sub1/sub2/sub2 (glob)
   sub1/sub2/test.txt (glob)
@@ -329,17 +364,17 @@ Exclude large files from main and sub-sub repo
 
 Exclude normal files from main and sub-sub repo
 
-  $ hg --config extensions.largefiles= archive -S -X '**.txt' ../archive_lf.tgz
+  $ hg --config extensions.largefiles= archive -S -X '**.txt' -p '.' ../archive_lf.tgz
   $ tar -tzf ../archive_lf.tgz | sort
-  archive_lf/.hgsub
-  archive_lf/.hgsubstate
-  archive_lf/large.bin
-  archive_lf/main
-  archive_lf/sub1/.hgsub
-  archive_lf/sub1/.hgsubstate
-  archive_lf/sub1/sub1
-  archive_lf/sub1/sub2/large.bin
-  archive_lf/sub1/sub2/sub2
+  .hgsub
+  .hgsubstate
+  large.bin
+  main
+  sub1/.hgsub
+  sub1/.hgsubstate
+  sub1/sub1
+  sub1/sub2/large.bin
+  sub1/sub2/sub2
 
 Include normal files from within a largefiles subrepo
 

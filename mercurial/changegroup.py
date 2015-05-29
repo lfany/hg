@@ -283,8 +283,6 @@ class cg1packer(object):
         if bundlecaps is None:
             bundlecaps = set()
         self._bundlecaps = bundlecaps
-        self._changelog = repo.changelog
-        self._manifest = repo.manifest
         reorder = repo.ui.config('bundle', 'reorder', 'auto')
         if reorder == 'auto':
             reorder = None
@@ -304,7 +302,7 @@ class cg1packer(object):
     def fileheader(self, fname):
         return chunkheader(len(fname)) + fname
 
-    def group(self, nodelist, revlog, lookup, units=None, reorder=None):
+    def group(self, nodelist, revlog, lookup, units=None):
         """Calculate a delta group, yielding a sequence of changegroup chunks
         (strings).
 
@@ -325,7 +323,7 @@ class cg1packer(object):
 
         # for generaldelta revlogs, we linearize the revs; this will both be
         # much quicker and generate a much smaller bundle
-        if (revlog._generaldelta and reorder is not False) or reorder:
+        if (revlog._generaldelta and self._reorder is None) or self._reorder:
             dag = dagutil.revlogdag(revlog)
             revs = set(revlog.rev(n) for n in nodelist)
             revs = dag.linearize(revs)
@@ -347,23 +345,20 @@ class cg1packer(object):
             for c in self.revchunk(revlog, curr, prev, linknode):
                 yield c
 
+        if units is not None:
+            self._progress(msgbundling, None)
         yield self.close()
 
     # filter any nodes that claim to be part of the known set
-    def prune(self, revlog, missing, commonrevs, source):
+    def prune(self, revlog, missing, commonrevs):
         rr, rl = revlog.rev, revlog.linkrev
         return [n for n in missing if rl(rr(n)) not in commonrevs]
 
     def generate(self, commonrevs, clnodes, fastpathlinkrev, source):
         '''yield a sequence of changegroup chunks (strings)'''
         repo = self._repo
-        cl = self._changelog
-        mf = self._manifest
-        reorder = self._reorder
-        progress = self._progress
-
-        # for progress output
-        msgbundling = _('bundling')
+        cl = repo.changelog
+        ml = repo.manifest
 
         clrevorder = {}
         mfs = {} # needed manifests
@@ -383,20 +378,34 @@ class cg1packer(object):
 
         self._verbosenote(_('uncompressed size of bundle content:\n'))
         size = 0
-        for chunk in self.group(clnodes, cl, lookupcl, units=_('changesets'),
-                                reorder=reorder):
+        for chunk in self.group(clnodes, cl, lookupcl, units=_('changesets')):
             size += len(chunk)
             yield chunk
         self._verbosenote(_('%8.i (changelog)\n') % size)
-        progress(msgbundling, None)
 
+        # We need to make sure that the linkrev in the changegroup refers to
+        # the first changeset that introduced the manifest or file revision.
+        # The fastpath is usually safer than the slowpath, because the filelogs
+        # are walked in revlog order.
+        #
+        # When taking the slowpath with reorder=None and the manifest revlog
+        # uses generaldelta, the manifest may be walked in the "wrong" order.
+        # Without 'clrevorder', we would get an incorrect linkrev (see fix in
+        # cc0ff93d0c0c).
+        #
+        # When taking the fastpath, we are only vulnerable to reordering
+        # of the changelog itself. The changelog never uses generaldelta, so
+        # it is only reordered when reorder=True. To handle this case, we
+        # simply take the slowpath, which already has the 'clrevorder' logic.
+        # This was also fixed in cc0ff93d0c0c.
+        fastpathlinkrev = fastpathlinkrev and not self._reorder
         # Callback for the manifest, used to collect linkrevs for filelog
         # revisions.
         # Returns the linkrev node (collected in lookupcl).
         def lookupmf(x):
             clnode = mfs[x]
-            if not fastpathlinkrev or reorder:
-                mdata = mf.readfast(x)
+            if not fastpathlinkrev:
+                mdata = ml.readfast(x)
                 for f, n in mdata.iteritems():
                     if f in changedfiles:
                         # record the first changeset introducing this filelog
@@ -407,25 +416,23 @@ class cg1packer(object):
                             fclnodes[n] = clnode
             return clnode
 
-        mfnodes = self.prune(mf, mfs, commonrevs, source)
+        mfnodes = self.prune(ml, mfs, commonrevs)
         size = 0
-        for chunk in self.group(mfnodes, mf, lookupmf, units=_('manifests'),
-                                reorder=reorder):
+        for chunk in self.group(mfnodes, ml, lookupmf, units=_('manifests')):
             size += len(chunk)
             yield chunk
         self._verbosenote(_('%8.i (manifests)\n') % size)
-        progress(msgbundling, None)
 
         mfs.clear()
-        needed = set(cl.rev(x) for x in clnodes)
+        clrevs = set(cl.rev(x) for x in clnodes)
 
         def linknodes(filerevlog, fname):
-            if fastpathlinkrev and not reorder:
+            if fastpathlinkrev:
                 llr = filerevlog.linkrev
                 def genfilenodes():
                     for r in filerevlog:
                         linkrev = llr(r)
-                        if linkrev in needed:
+                        if linkrev in clrevs:
                             yield filerevlog.node(r), cl.node(linkrev)
                 return dict(genfilenodes())
             return fnodes.get(fname, {})
@@ -435,15 +442,14 @@ class cg1packer(object):
             yield chunk
 
         yield self.close()
-        progress(msgbundling, None)
 
         if clnodes:
             repo.hook('outgoing', node=hex(clnodes[0]), source=source)
 
+    # The 'source' parameter is useful for extensions
     def generatefiles(self, changedfiles, linknodes, commonrevs, source):
         repo = self._repo
         progress = self._progress
-        reorder = self._reorder
         msgbundling = _('bundling')
 
         total = len(changedfiles)
@@ -460,18 +466,18 @@ class cg1packer(object):
             def lookupfilelog(x):
                 return linkrevnodes[x]
 
-            filenodes = self.prune(filerevlog, linkrevnodes, commonrevs, source)
+            filenodes = self.prune(filerevlog, linkrevnodes, commonrevs)
             if filenodes:
                 progress(msgbundling, i + 1, item=fname, unit=msgfiles,
                          total=total)
                 h = self.fileheader(fname)
                 size = len(h)
                 yield h
-                for chunk in self.group(filenodes, filerevlog, lookupfilelog,
-                                        reorder=reorder):
+                for chunk in self.group(filenodes, filerevlog, lookupfilelog):
                     size += len(chunk)
                     yield chunk
                 self._verbosenote(_('%8.i  %s\n') % (size, fname))
+        progress(msgbundling, None)
 
     def deltaparent(self, revlog, rev, p1, p2, prev):
         return prev
@@ -513,11 +519,13 @@ class cg2packer(cg1packer):
     version = '02'
     deltaheader = _CHANGEGROUPV2_DELTA_HEADER
 
-    def group(self, nodelist, revlog, lookup, units=None, reorder=None):
-        if (revlog._generaldelta and reorder is not True):
-            reorder = False
-        return super(cg2packer, self).group(nodelist, revlog, lookup,
-                                            units=units, reorder=reorder)
+    def __init__(self, repo, bundlecaps=None):
+        super(cg2packer, self).__init__(repo, bundlecaps)
+        if self._reorder is None:
+            # Since generaldelta is directly supported by cg2, reordering
+            # generally doesn't help, so we disable it by default (treating
+            # bundle.reorder=auto just like bundle.reorder=False).
+            self._reorder = False
 
     def deltaparent(self, revlog, rev, p1, p2, prev):
         dp = revlog.deltaparent(rev)
@@ -788,8 +796,8 @@ def addchangegroup(repo, source, srctype, url, emptyok=False,
         if repo.ui.configbool('server', 'validate', default=False):
             # validate incoming csets have their manifests
             for cset in xrange(clstart, clend):
-                mfest = repo.changelog.read(repo.changelog.node(cset))[0]
-                mfest = repo.manifest.readdelta(mfest)
+                mfnode = repo.changelog.read(repo.changelog.node(cset))[0]
+                mfest = repo.manifest.readdelta(mfnode)
                 # store file nodes we must see
                 for f, n in mfest.iteritems():
                     needfiles.setdefault(f, set()).add(n)

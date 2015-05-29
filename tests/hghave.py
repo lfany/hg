@@ -225,12 +225,11 @@ def has_hardlink():
     os.close(fh)
     name = tempfile.mktemp(dir='.', prefix=tempprefix)
     try:
-        try:
-            util.oslink(fn, name)
-            os.unlink(name)
-            return True
-        except OSError:
-            return False
+        util.oslink(fn, name)
+        os.unlink(name)
+        return True
+    except OSError:
+        return False
     finally:
         os.unlink(fn)
 
@@ -281,10 +280,6 @@ def has_pygments():
         return True
     except ImportError:
         return False
-
-@check("python243", "python >= 2.4.3")
-def has_python243():
-    return sys.version_info >= (2, 4, 3)
 
 @check("json", "some json module available")
 def has_json():

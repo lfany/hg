@@ -11,6 +11,7 @@ import difflib
 import util, commands, hg, fancyopts, extensions, hook, error
 import cmdutil, encoding
 import ui as uimod
+import demandimport
 
 class request(object):
     def __init__(self, args, ui=None, repo=None, fin=None, fout=None,
@@ -137,10 +138,11 @@ def _runcatch(req):
                 # This import can be slow for fancy debuggers, so only
                 # do it when absolutely necessary, i.e. when actual
                 # debugging has been requested
-                try:
-                    debugmod = __import__(debugger)
-                except ImportError:
-                    pass # Leave debugmod = pdb
+                with demandimport.deactivated():
+                    try:
+                        debugmod = __import__(debugger)
+                    except ImportError:
+                        pass # Leave debugmod = pdb
 
             debugtrace[debugger] = debugmod.set_trace
             debugmortem[debugger] = debugmod.post_mortem
@@ -193,8 +195,15 @@ def _runcatch(req):
             ui.warn(_("hg: %s\n") % inst.args[1])
             commands.help_(ui, 'shortlist')
     except error.OutOfBandError, inst:
-        ui.warn(_("abort: remote error:\n"))
-        ui.warn(''.join(inst.args))
+        if inst.args:
+            msg = _("abort: remote error:\n")
+        else:
+            msg = _("abort: remote error\n")
+        ui.warn(msg)
+        if inst.args:
+            ui.warn(''.join(inst.args))
+        if inst.hint:
+            ui.warn('(%s)\n' % inst.hint)
     except error.RepoError, inst:
         ui.warn(_("abort: %s!\n") % inst)
         if inst.hint:
@@ -891,7 +900,7 @@ def lsprofile(ui, func, fp):
     format = ui.config('profiling', 'format', default='text')
     field = ui.config('profiling', 'sort', default='inlinetime')
     limit = ui.configint('profiling', 'limit', default=30)
-    climit = ui.configint('profiling', 'nested', default=5)
+    climit = ui.configint('profiling', 'nested', default=0)
 
     if format not in ['text', 'kcachegrind']:
         ui.warn(_("unrecognized profiling format '%s'"
@@ -920,6 +929,30 @@ def lsprofile(ui, func, fp):
             stats = lsprof.Stats(p.getstats())
             stats.sort(field)
             stats.pprint(limit=limit, file=fp, climit=climit)
+
+def flameprofile(ui, func, fp):
+    try:
+        from flamegraph import flamegraph
+    except ImportError:
+        raise util.Abort(_(
+            'flamegraph not available - install from '
+            'https://github.com/evanhempel/python-flamegraph'))
+    freq = ui.configint('profiling', 'freq', default=1000)
+    filter_ = None
+    collapse_recursion = True
+    thread = flamegraph.ProfileThread(fp, 1.0 / freq,
+                                      filter_, collapse_recursion)
+    start_time = time.clock()
+    try:
+        thread.start()
+        func()
+    finally:
+        thread.stop()
+        thread.join()
+        print 'Collected %d stack frames (%d unique) in %2.2f seconds.' % (
+            time.clock() - start_time, thread.num_frames(),
+            thread.num_frames(unique=True))
+
 
 def statprofile(ui, func, fp):
     try:
@@ -952,7 +985,7 @@ def _runcommand(ui, options, cmd, cmdfunc):
         profiler = os.getenv('HGPROF')
         if profiler is None:
             profiler = ui.config('profiling', 'type', default='ls')
-        if profiler not in ('ls', 'stat'):
+        if profiler not in ('ls', 'stat', 'flame'):
             ui.warn(_("unrecognized profiler '%s' - ignored\n") % profiler)
             profiler = 'ls'
 
@@ -967,6 +1000,8 @@ def _runcommand(ui, options, cmd, cmdfunc):
         try:
             if profiler == 'ls':
                 return lsprofile(ui, checkargs, fp)
+            elif profiler == 'flame':
+                return flameprofile(ui, checkargs, fp)
             else:
                 return statprofile(ui, checkargs, fp)
         finally:

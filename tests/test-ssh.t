@@ -398,7 +398,7 @@ Test hg-ssh in read-only mode:
   pushing to ssh://user@dummy/*/remote (glob)
   searching for changes
   remote: Permission denied
-  remote: abort: prechangegroup.hg-ssh hook failed
+  remote: abort: pretxnopen.hg-ssh hook failed
   remote: Permission denied
   remote: pushkey-abort: prepushkey.hg-ssh hook failed
   updating 6c0482d977a3 to public failed!
@@ -445,6 +445,32 @@ stderr from remote commands should be printed before stdout from local code (iss
   remote: KABOOM
   local stdout
 
+debug output
+
+  $ hg pull --debug ssh://user@dummy/remote
+  pulling from ssh://user@dummy/remote
+  running python "*/dummyssh" user@dummy 'hg -R remote serve --stdio' (glob)
+  sending hello command
+  sending between command
+  remote: 271
+  remote: capabilities: lookup changegroupsubset branchmap pushkey known getbundle unbundlehash batch stream bundle2=HG20%0Achangegroup%3D01%2C02%0Adigests%3Dmd5%2Csha1%2Csha512%0Alistkeys%0Apushkey%0Aremote-changegroup%3Dhttp%2Chttps unbundle=HG10GZ,HG10BZ,HG10UN httpheader=1024
+  remote: 1
+  preparing listkeys for "bookmarks"
+  sending listkeys command
+  received listkey for "bookmarks": 45 bytes
+  preparing listkeys for "bookmarks"
+  sending listkeys command
+  received listkey for "bookmarks": 45 bytes
+  query 1; heads
+  sending batch command
+  searching for changes
+  all remote heads known locally
+  no changes found
+  preparing listkeys for "phases"
+  sending listkeys command
+  received listkey for "phases": 15 bytes
+  checking for updated bookmarks
+
   $ cd ..
 
   $ cat dummylog
@@ -478,3 +504,4 @@ stderr from remote commands should be printed before stdout from local code (iss
   Got arguments 1:user@dummy 2:hg -R 'a repo' serve --stdio
   Got arguments 1:user@dummy 2:hg -R remote serve --stdio
   changegroup-in-remote hook: HG_NODE=65c38f4125f9602c8db4af56530cc221d93b8ef8 HG_SOURCE=serve HG_TXNID=TXN:* HG_URL=remote:ssh:127.0.0.1 (glob)
+  Got arguments 1:user@dummy 2:hg -R remote serve --stdio

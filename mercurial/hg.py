@@ -92,6 +92,10 @@ def _peerlookup(path):
     try:
         return thing(path)
     except TypeError:
+        # we can't test callable(thing) because 'thing' can be an unloaded
+        # module that implements __call__
+        if not util.safehasattr(thing, 'instance'):
+            raise
         return thing
 
 def islocal(repo):
@@ -497,7 +501,7 @@ def clone(ui, peeropts, source, dest=None, pull=False, rev=None,
                 destrepo.ui.status(status)
                 _update(destrepo, uprev)
                 if update in destrepo._bookmarks:
-                    bookmarks.setcurrent(destrepo, update)
+                    bookmarks.activate(destrepo, update)
     finally:
         release(srclock, destlock)
         if cleandir is not None:

@@ -500,7 +500,11 @@ class abstractsubrepo(object):
         """return file flags"""
         return ''
 
-    def printfiles(self, ui, m, fm, fmt):
+    def getfileset(self, expr):
+        """Resolve the fileset expression for this repo"""
+        return set()
+
+    def printfiles(self, ui, m, fm, fmt, subrepos):
         """handle the files command for this subrepo"""
         return 1
 
@@ -592,21 +596,14 @@ class hgsubrepo(abstractsubrepo):
     def _storeclean(self, path):
         clean = True
         itercache = self._calcstorehash(path)
-        try:
-            for filehash in self._readstorehashcache(path):
-                if filehash != itercache.next():
-                    clean = False
-                    break
-        except StopIteration:
-            # the cached and current pull states have a different size
-            clean = False
-        if clean:
-            try:
-                itercache.next()
-                # the cached and current pull states have a different size
+        for filehash in self._readstorehashcache(path):
+            if filehash != next(itercache, None):
                 clean = False
-            except StopIteration:
-                pass
+                break
+        if clean:
+            # if not empty:
+            # the cached and current pull states have a different size
+            clean = next(itercache, None) is None
         return clean
 
     def _calcstorehash(self, remotepath):
@@ -907,7 +904,7 @@ class hgsubrepo(abstractsubrepo):
         return ctx.flags(name)
 
     @annotatesubrepoerror
-    def printfiles(self, ui, m, fm, fmt):
+    def printfiles(self, ui, m, fm, fmt, subrepos):
         # If the parent context is a workingctx, use the workingctx here for
         # consistency.
         if self._ctx.rev() is None:
@@ -915,7 +912,27 @@ class hgsubrepo(abstractsubrepo):
         else:
             rev = self._state[1]
             ctx = self._repo[rev]
-        return cmdutil.files(ui, ctx, m, fm, fmt, True)
+        return cmdutil.files(ui, ctx, m, fm, fmt, subrepos)
+
+    @annotatesubrepoerror
+    def getfileset(self, expr):
+        if self._ctx.rev() is None:
+            ctx = self._repo[None]
+        else:
+            rev = self._state[1]
+            ctx = self._repo[rev]
+
+        files = ctx.getfileset(expr)
+
+        for subpath in ctx.substate:
+            sub = ctx.sub(subpath)
+
+            try:
+                files.extend(subpath + '/' + f for f in sub.getfileset(expr))
+            except error.LookupError:
+                self.ui.status(_("skipping missing subrepository: %s\n")
+                               % self.wvfs.reljoin(reporelpath(self), subpath))
+        return files
 
     def walk(self, match):
         ctx = self._repo[None]
@@ -1711,7 +1728,7 @@ class gitsubrepo(abstractsubrepo):
         modified, added, removed = [], [], []
         self._gitupdatestat()
         if rev2:
-            command = ['diff-tree', rev1, rev2]
+            command = ['diff-tree', '-r', rev1, rev2]
         else:
             command = ['diff-index', rev1]
         out = self._gitcommand(command)

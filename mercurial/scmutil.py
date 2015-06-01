@@ -709,14 +709,12 @@ def revrange(repo, revs):
             return defval
         return repo[val].rev()
 
-    seen, l = set(), revset.baseset([])
+    subsets = []
 
     revsetaliases = [alias for (alias, _) in
                      repo.ui.configitems("revsetalias")]
 
     for spec in revs:
-        if l and not seen:
-            seen = set(l)
         # attempt to parse old-style ranges first to deal with
         # things like old-tag which contain query metacharacters
         try:
@@ -727,8 +725,7 @@ def revrange(repo, revs):
                 raise error.RepoLookupError
 
             if isinstance(spec, int):
-                seen.add(spec)
-                l = l + revset.baseset([spec])
+                subsets.append(revset.baseset([spec]))
                 continue
 
             if _revrangesep in spec:
@@ -740,40 +737,24 @@ def revrange(repo, revs):
                 end = revfix(repo, end, len(repo) - 1)
                 if end == nullrev and start < 0:
                     start = nullrev
-                rangeiter = repo.changelog.revs(start, end)
-                if not seen and not l:
-                    # by far the most common case: revs = ["-1:0"]
-                    l = revset.baseset(rangeiter)
-                    # defer syncing seen until next iteration
-                    continue
-                newrevs = set(rangeiter)
-                if seen:
-                    newrevs.difference_update(seen)
-                    seen.update(newrevs)
+                if start < end:
+                    l = revset.spanset(repo, start, end + 1)
                 else:
-                    seen = newrevs
-                l = l + revset.baseset(sorted(newrevs, reverse=start > end))
+                    l = revset.spanset(repo, start, end - 1)
+                subsets.append(l)
                 continue
             elif spec and spec in repo: # single unquoted rev
                 rev = revfix(repo, spec, None)
-                if rev in seen:
-                    continue
-                seen.add(rev)
-                l = l + revset.baseset([rev])
+                subsets.append(revset.baseset([rev]))
                 continue
         except error.RepoLookupError:
             pass
 
         # fall through to new-style queries if old-style fails
         m = revset.match(repo.ui, spec, repo)
-        if seen or l:
-            dl = [r for r in m(repo) if r not in seen]
-            l = l + revset.baseset(dl)
-            seen.update(dl)
-        else:
-            l = m(repo)
+        subsets.append(m(repo))
 
-    return l
+    return revset._combinesets(subsets)
 
 def expandpats(pats):
     '''Expand bare globs when running on windows.
@@ -803,7 +784,7 @@ def matchandpats(ctx, pats=[], opts={}, globbed=False, default='relpath'):
         pats = expandpats(pats or [])
 
     m = ctx.match(pats, opts.get('include'), opts.get('exclude'),
-                         default)
+                         default, listsubrepos=opts.get('subrepos'))
     def badfn(f, msg):
         ctx.repo().ui.warn("%s: %s\n" % (m.rel(f), msg))
     m.bad = badfn
@@ -1010,6 +991,12 @@ def readrequires(opener, supported):
             hint=_("see http://mercurial.selenic.com/wiki/MissingRequirement"
                    " for more information"))
     return requirements
+
+def writerequires(opener, requirements):
+    reqfile = opener("requires", "w")
+    for r in sorted(requirements):
+        reqfile.write("%s\n" % r)
+    reqfile.close()
 
 class filecachesubentry(object):
     def __init__(self, path, stat):

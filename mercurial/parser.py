@@ -27,10 +27,7 @@ class parser(object):
     def _advance(self):
         'advance the tokenizer'
         t = self.current
-        try:
-            self.current = self._iter.next()
-        except StopIteration:
-            pass
+        self.current = next(self._iter, None)
         return t
     def _match(self, m, pos):
         'make sure the tokenizer matches an end condition'
@@ -96,3 +93,95 @@ class parser(object):
         if self._methods:
             return self.eval(t)
         return t
+
+def _prettyformat(tree, leafnodes, level, lines):
+    if not isinstance(tree, tuple) or tree[0] in leafnodes:
+        lines.append((level, str(tree)))
+    else:
+        lines.append((level, '(%s' % tree[0]))
+        for s in tree[1:]:
+            _prettyformat(s, leafnodes, level + 1, lines)
+        lines[-1:] = [(lines[-1][0], lines[-1][1] + ')')]
+
+def prettyformat(tree, leafnodes):
+    lines = []
+    _prettyformat(tree, leafnodes, 0, lines)
+    output = '\n'.join(('  ' * l + s) for l, s in lines)
+    return output
+
+def simplifyinfixops(tree, targetnodes):
+    """Flatten chained infix operations to reduce usage of Python stack
+
+    >>> def f(tree):
+    ...     print prettyformat(simplifyinfixops(tree, ('or',)), ('symbol',))
+    >>> f(('or',
+    ...     ('or',
+    ...       ('symbol', '1'),
+    ...       ('symbol', '2')),
+    ...     ('symbol', '3')))
+    (or
+      ('symbol', '1')
+      ('symbol', '2')
+      ('symbol', '3'))
+    >>> f(('func',
+    ...     ('symbol', 'p1'),
+    ...     ('or',
+    ...       ('or',
+    ...         ('func',
+    ...           ('symbol', 'sort'),
+    ...           ('list',
+    ...             ('or',
+    ...               ('or',
+    ...                 ('symbol', '1'),
+    ...                 ('symbol', '2')),
+    ...               ('symbol', '3')),
+    ...             ('negate',
+    ...               ('symbol', 'rev')))),
+    ...         ('and',
+    ...           ('symbol', '4'),
+    ...           ('group',
+    ...             ('or',
+    ...               ('or',
+    ...                 ('symbol', '5'),
+    ...                 ('symbol', '6')),
+    ...               ('symbol', '7'))))),
+    ...       ('symbol', '8'))))
+    (func
+      ('symbol', 'p1')
+      (or
+        (func
+          ('symbol', 'sort')
+          (list
+            (or
+              ('symbol', '1')
+              ('symbol', '2')
+              ('symbol', '3'))
+            (negate
+              ('symbol', 'rev'))))
+        (and
+          ('symbol', '4')
+          (group
+            (or
+              ('symbol', '5')
+              ('symbol', '6')
+              ('symbol', '7'))))
+        ('symbol', '8')))
+    """
+    if not isinstance(tree, tuple):
+        return tree
+    op = tree[0]
+    if op not in targetnodes:
+        return (op,) + tuple(simplifyinfixops(x, targetnodes) for x in tree[1:])
+
+    # walk down left nodes taking each right node. no recursion to left nodes
+    # because infix operators are left-associative, i.e. left tree is deep.
+    # e.g. '1 + 2 + 3' -> (+ (+ 1 2) 3) -> (+ 1 2 3)
+    simplified = []
+    x = tree
+    while x[0] == op:
+        l, r = x[1:]
+        simplified.append(simplifyinfixops(r, targetnodes))
+        x = l
+    simplified.append(simplifyinfixops(x, targetnodes))
+    simplified.append(op)
+    return tuple(reversed(simplified))

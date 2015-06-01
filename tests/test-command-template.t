@@ -95,7 +95,7 @@ Template should precede style option
   8
 
 Add a commit with empty description, to ensure that the templates
-following below omit it properly.
+below will omit the description line.
 
   $ echo c >> c
   $ hg add c
@@ -108,32 +108,52 @@ as default style, except for extra phase lines.
   $ hg log --style default > style.out
   $ cmp log.out style.out || diff -u log.out style.out
   $ hg log -T phases > phases.out
-  $ diff -u log.out phases.out | grep "phase:"
+  $ diff -U 0 log.out phases.out | grep -v '^---\|^+++'
+  @@ -2,0 +3 @@
   +phase:       draft
+  @@ -6,0 +8 @@
   +phase:       draft
+  @@ -11,0 +14 @@
   +phase:       draft
+  @@ -17,0 +21 @@
   +phase:       draft
+  @@ -24,0 +29 @@
   +phase:       draft
+  @@ -31,0 +37 @@
   +phase:       draft
+  @@ -36,0 +43 @@
   +phase:       draft
+  @@ -41,0 +49 @@
   +phase:       draft
+  @@ -46,0 +55 @@
   +phase:       draft
+  @@ -51,0 +61 @@
   +phase:       draft
 
   $ hg log -v > log.out
   $ hg log -v --style default > style.out
   $ cmp log.out style.out || diff -u log.out style.out
   $ hg log -v -T phases > phases.out
-  $ diff -u log.out phases.out | grep phase:
+  $ diff -U 0 log.out phases.out | grep -v '^---\|^+++'
+  @@ -2,0 +3 @@
   +phase:       draft
+  @@ -7,0 +9 @@
   +phase:       draft
+  @@ -15,0 +18 @@
   +phase:       draft
+  @@ -24,0 +28 @@
   +phase:       draft
+  @@ -33,0 +38 @@
   +phase:       draft
+  @@ -43,0 +49 @@
   +phase:       draft
+  @@ -50,0 +57 @@
   +phase:       draft
+  @@ -58,0 +66 @@
   +phase:       draft
+  @@ -66,0 +75 @@
   +phase:       draft
+  @@ -77,0 +87 @@
   +phase:       draft
 
   $ hg log -q > log.out
@@ -160,32 +180,52 @@ Default style should also preserve color information (issue2866):
   $ hg --color=debug log --style default > style.out
   $ cmp log.out style.out || diff -u log.out style.out
   $ hg --color=debug log -T phases > phases.out
-  $ diff -u log.out phases.out | grep phase:
+  $ diff -U 0 log.out phases.out | grep -v '^---\|^+++'
+  @@ -2,0 +3 @@
   +[log.phase|phase:       draft]
+  @@ -6,0 +8 @@
   +[log.phase|phase:       draft]
+  @@ -11,0 +14 @@
   +[log.phase|phase:       draft]
+  @@ -17,0 +21 @@
   +[log.phase|phase:       draft]
+  @@ -24,0 +29 @@
   +[log.phase|phase:       draft]
+  @@ -31,0 +37 @@
   +[log.phase|phase:       draft]
+  @@ -36,0 +43 @@
   +[log.phase|phase:       draft]
+  @@ -41,0 +49 @@
   +[log.phase|phase:       draft]
+  @@ -46,0 +55 @@
   +[log.phase|phase:       draft]
+  @@ -51,0 +61 @@
   +[log.phase|phase:       draft]
 
   $ hg --color=debug -v log > log.out
   $ hg --color=debug -v log --style default > style.out
   $ cmp log.out style.out || diff -u log.out style.out
   $ hg --color=debug -v log -T phases > phases.out
-  $ diff -u log.out phases.out | grep phase:
+  $ diff -U 0 log.out phases.out | grep -v '^---\|^+++'
+  @@ -2,0 +3 @@
   +[log.phase|phase:       draft]
+  @@ -7,0 +9 @@
   +[log.phase|phase:       draft]
+  @@ -15,0 +18 @@
   +[log.phase|phase:       draft]
+  @@ -24,0 +28 @@
   +[log.phase|phase:       draft]
+  @@ -33,0 +38 @@
   +[log.phase|phase:       draft]
+  @@ -43,0 +49 @@
   +[log.phase|phase:       draft]
+  @@ -50,0 +57 @@
   +[log.phase|phase:       draft]
+  @@ -58,0 +66 @@
   +[log.phase|phase:       draft]
+  @@ -66,0 +75 @@
   +[log.phase|phase:       draft]
+  @@ -77,0 +87 @@
   +[log.phase|phase:       draft]
 
   $ hg --color=debug -q log > log.out
@@ -952,11 +992,11 @@ Error if no style:
 
   $ hg log --style notexist
   abort: style 'notexist' not found
-  (available styles: bisect, changelog, compact, default, phases, xml)
+  (available styles: bisect, changelog, compact, default, phases, status, xml)
   [255]
 
   $ hg log -T list
-  available styles: bisect, changelog, compact, default, phases, xml
+  available styles: bisect, changelog, compact, default, phases, status, xml
   abort: specify a template
   [255]
 
@@ -1898,6 +1938,8 @@ Formatnode filter works:
 
 Age filter:
 
+  $ hg init unstable-hash
+  $ cd unstable-hash
   $ hg log --template '{date|age}\n' > /dev/null || exit 1
 
   >>> from datetime import datetime, timedelta
@@ -1910,6 +1952,15 @@ Age filter:
 
   $ hg log -l1 --template '{date|age}\n'
   7 years from now
+
+  $ cd ..
+  $ rm -rf unstable-hash
+
+Add a dummy commit to make up for the instability of the above:
+
+  $ echo a > a
+  $ hg add a
+  $ hg ci -m future
 
 Count filter:
 
@@ -1952,6 +2003,476 @@ Upper/lower filters:
   $ hg log -r0 --template '{date|upper}\n'
   abort: template filter 'upper' is not compatible with keyword 'date'
   [255]
+
+Add a commit that does all possible modifications at once
+
+  $ echo modify >> third
+  $ touch b
+  $ hg add b
+  $ hg mv fourth fifth
+  $ hg rm a
+  $ hg ci -m "Modify, add, remove, rename"
+
+Check the status template
+
+  $ cat <<EOF >> $HGRCPATH
+  > [extensions]
+  > color=
+  > EOF
+
+  $ hg log -T status -r 10
+  changeset:   10:0f9759ec227a
+  tag:         tip
+  user:        test
+  date:        Thu Jan 01 00:00:00 1970 +0000
+  summary:     Modify, add, remove, rename
+  files:
+  M third
+  A b
+  A fifth
+  R a
+  R fourth
+  
+  $ hg log -T status -C -r 10
+  changeset:   10:0f9759ec227a
+  tag:         tip
+  user:        test
+  date:        Thu Jan 01 00:00:00 1970 +0000
+  summary:     Modify, add, remove, rename
+  files:
+  M third
+  A b
+  A fifth
+    fourth
+  R a
+  R fourth
+  
+  $ hg log -T status -C -r 10 -v
+  changeset:   10:0f9759ec227a
+  tag:         tip
+  user:        test
+  date:        Thu Jan 01 00:00:00 1970 +0000
+  description:
+  Modify, add, remove, rename
+  
+  files:
+  M third
+  A b
+  A fifth
+    fourth
+  R a
+  R fourth
+  
+  $ hg log -T status -C -r 10 --debug
+  changeset:   10:0f9759ec227a4859c2014a345cd8a859022b7c6c
+  tag:         tip
+  phase:       secret
+  parent:      9:bf9dfba36635106d6a73ccc01e28b762da60e066
+  parent:      -1:0000000000000000000000000000000000000000
+  manifest:    8:89dd546f2de0a9d6d664f58d86097eb97baba567
+  user:        test
+  date:        Thu Jan 01 00:00:00 1970 +0000
+  extra:       branch=default
+  description:
+  Modify, add, remove, rename
+  
+  files:
+  M third
+  A b
+  A fifth
+    fourth
+  R a
+  R fourth
+  
+  $ hg log -T status -C -r 10 --quiet
+  10:0f9759ec227a
+  $ hg --color=debug log -T status -r 10
+  [log.changeset changeset.secret|changeset:   10:0f9759ec227a]
+  [log.tag|tag:         tip]
+  [log.user|user:        test]
+  [log.date|date:        Thu Jan 01 00:00:00 1970 +0000]
+  [log.summary|summary:     Modify, add, remove, rename]
+  [ui.note log.files|files:]
+  [status.modified|M third]
+  [status.added|A b]
+  [status.added|A fifth]
+  [status.removed|R a]
+  [status.removed|R fourth]
+  
+  $ hg --color=debug log -T status -C -r 10
+  [log.changeset changeset.secret|changeset:   10:0f9759ec227a]
+  [log.tag|tag:         tip]
+  [log.user|user:        test]
+  [log.date|date:        Thu Jan 01 00:00:00 1970 +0000]
+  [log.summary|summary:     Modify, add, remove, rename]
+  [ui.note log.files|files:]
+  [status.modified|M third]
+  [status.added|A b]
+  [status.added|A fifth]
+  [status.copied|  fourth]
+  [status.removed|R a]
+  [status.removed|R fourth]
+  
+  $ hg --color=debug log -T status -C -r 10 -v
+  [log.changeset changeset.secret|changeset:   10:0f9759ec227a]
+  [log.tag|tag:         tip]
+  [log.user|user:        test]
+  [log.date|date:        Thu Jan 01 00:00:00 1970 +0000]
+  [ui.note log.description|description:]
+  [ui.note log.description|Modify, add, remove, rename]
+  
+  [ui.note log.files|files:]
+  [status.modified|M third]
+  [status.added|A b]
+  [status.added|A fifth]
+  [status.copied|  fourth]
+  [status.removed|R a]
+  [status.removed|R fourth]
+  
+  $ hg --color=debug log -T status -C -r 10 --debug
+  [log.changeset changeset.secret|changeset:   10:0f9759ec227a4859c2014a345cd8a859022b7c6c]
+  [log.tag|tag:         tip]
+  [log.phase|phase:       secret]
+  [log.parent changeset.secret|parent:      9:bf9dfba36635106d6a73ccc01e28b762da60e066]
+  [log.parent changeset.public|parent:      -1:0000000000000000000000000000000000000000]
+  [ui.debug log.manifest|manifest:    8:89dd546f2de0a9d6d664f58d86097eb97baba567]
+  [log.user|user:        test]
+  [log.date|date:        Thu Jan 01 00:00:00 1970 +0000]
+  [ui.debug log.extra|extra:       branch=default]
+  [ui.note log.description|description:]
+  [ui.note log.description|Modify, add, remove, rename]
+  
+  [ui.note log.files|files:]
+  [status.modified|M third]
+  [status.added|A b]
+  [status.added|A fifth]
+  [status.copied|  fourth]
+  [status.removed|R a]
+  [status.removed|R fourth]
+  
+  $ hg --color=debug log -T status -C -r 10 --quiet
+  [log.node|10:0f9759ec227a]
+
+Check the bisect template
+
+  $ hg bisect -g 1
+  $ hg bisect -b 3 --noupdate
+  Testing changeset 2:97054abb4ab8 (2 changesets remaining, ~1 tests)
+  $ hg log -T bisect -r 0:4
+  changeset:   0:1e4e1b8f71e0
+  bisect:      good (implicit)
+  user:        User Name <user@hostname>
+  date:        Mon Jan 12 13:46:40 1970 +0000
+  summary:     line 1
+  
+  changeset:   1:b608e9d1a3f0
+  bisect:      good
+  user:        A. N. Other <other@place>
+  date:        Tue Jan 13 17:33:20 1970 +0000
+  summary:     other 1
+  
+  changeset:   2:97054abb4ab8
+  bisect:      untested
+  user:        other@place
+  date:        Wed Jan 14 21:20:00 1970 +0000
+  summary:     no person
+  
+  changeset:   3:10e46f2dcbf4
+  bisect:      bad
+  user:        person
+  date:        Fri Jan 16 01:06:40 1970 +0000
+  summary:     no user, no domain
+  
+  changeset:   4:bbe44766e73d
+  bisect:      bad (implicit)
+  branch:      foo
+  user:        person
+  date:        Sat Jan 17 04:53:20 1970 +0000
+  summary:     new branch
+  
+  $ hg log --debug -T bisect -r 0:4
+  changeset:   0:1e4e1b8f71e05681d422154f5421e385fec3454f
+  bisect:      good (implicit)
+  phase:       public
+  parent:      -1:0000000000000000000000000000000000000000
+  parent:      -1:0000000000000000000000000000000000000000
+  manifest:    0:a0c8bcbbb45c63b90b70ad007bf38961f64f2af0
+  user:        User Name <user@hostname>
+  date:        Mon Jan 12 13:46:40 1970 +0000
+  files+:      a
+  extra:       branch=default
+  description:
+  line 1
+  line 2
+  
+  
+  changeset:   1:b608e9d1a3f0273ccf70fb85fd6866b3482bf965
+  bisect:      good
+  phase:       public
+  parent:      0:1e4e1b8f71e05681d422154f5421e385fec3454f
+  parent:      -1:0000000000000000000000000000000000000000
+  manifest:    1:4e8d705b1e53e3f9375e0e60dc7b525d8211fe55
+  user:        A. N. Other <other@place>
+  date:        Tue Jan 13 17:33:20 1970 +0000
+  files+:      b
+  extra:       branch=default
+  description:
+  other 1
+  other 2
+  
+  other 3
+  
+  
+  changeset:   2:97054abb4ab824450e9164180baf491ae0078465
+  bisect:      untested
+  phase:       public
+  parent:      1:b608e9d1a3f0273ccf70fb85fd6866b3482bf965
+  parent:      -1:0000000000000000000000000000000000000000
+  manifest:    2:6e0e82995c35d0d57a52aca8da4e56139e06b4b1
+  user:        other@place
+  date:        Wed Jan 14 21:20:00 1970 +0000
+  files+:      c
+  extra:       branch=default
+  description:
+  no person
+  
+  
+  changeset:   3:10e46f2dcbf4823578cf180f33ecf0b957964c47
+  bisect:      bad
+  phase:       public
+  parent:      2:97054abb4ab824450e9164180baf491ae0078465
+  parent:      -1:0000000000000000000000000000000000000000
+  manifest:    3:cb5a1327723bada42f117e4c55a303246eaf9ccc
+  user:        person
+  date:        Fri Jan 16 01:06:40 1970 +0000
+  files:       c
+  extra:       branch=default
+  description:
+  no user, no domain
+  
+  
+  changeset:   4:bbe44766e73d5f11ed2177f1838de10c53ef3e74
+  bisect:      bad (implicit)
+  branch:      foo
+  phase:       draft
+  parent:      3:10e46f2dcbf4823578cf180f33ecf0b957964c47
+  parent:      -1:0000000000000000000000000000000000000000
+  manifest:    3:cb5a1327723bada42f117e4c55a303246eaf9ccc
+  user:        person
+  date:        Sat Jan 17 04:53:20 1970 +0000
+  extra:       branch=foo
+  description:
+  new branch
+  
+  
+  $ hg log -v -T bisect -r 0:4
+  changeset:   0:1e4e1b8f71e0
+  bisect:      good (implicit)
+  user:        User Name <user@hostname>
+  date:        Mon Jan 12 13:46:40 1970 +0000
+  files:       a
+  description:
+  line 1
+  line 2
+  
+  
+  changeset:   1:b608e9d1a3f0
+  bisect:      good
+  user:        A. N. Other <other@place>
+  date:        Tue Jan 13 17:33:20 1970 +0000
+  files:       b
+  description:
+  other 1
+  other 2
+  
+  other 3
+  
+  
+  changeset:   2:97054abb4ab8
+  bisect:      untested
+  user:        other@place
+  date:        Wed Jan 14 21:20:00 1970 +0000
+  files:       c
+  description:
+  no person
+  
+  
+  changeset:   3:10e46f2dcbf4
+  bisect:      bad
+  user:        person
+  date:        Fri Jan 16 01:06:40 1970 +0000
+  files:       c
+  description:
+  no user, no domain
+  
+  
+  changeset:   4:bbe44766e73d
+  bisect:      bad (implicit)
+  branch:      foo
+  user:        person
+  date:        Sat Jan 17 04:53:20 1970 +0000
+  description:
+  new branch
+  
+  
+  $ hg --color=debug log -T bisect -r 0:4
+  [log.changeset changeset.public|changeset:   0:1e4e1b8f71e0]
+  [log.bisect bisect.good|bisect:      good (implicit)]
+  [log.user|user:        User Name <user@hostname>]
+  [log.date|date:        Mon Jan 12 13:46:40 1970 +0000]
+  [log.summary|summary:     line 1]
+  
+  [log.changeset changeset.public|changeset:   1:b608e9d1a3f0]
+  [log.bisect bisect.good|bisect:      good]
+  [log.user|user:        A. N. Other <other@place>]
+  [log.date|date:        Tue Jan 13 17:33:20 1970 +0000]
+  [log.summary|summary:     other 1]
+  
+  [log.changeset changeset.public|changeset:   2:97054abb4ab8]
+  [log.bisect bisect.untested|bisect:      untested]
+  [log.user|user:        other@place]
+  [log.date|date:        Wed Jan 14 21:20:00 1970 +0000]
+  [log.summary|summary:     no person]
+  
+  [log.changeset changeset.public|changeset:   3:10e46f2dcbf4]
+  [log.bisect bisect.bad|bisect:      bad]
+  [log.user|user:        person]
+  [log.date|date:        Fri Jan 16 01:06:40 1970 +0000]
+  [log.summary|summary:     no user, no domain]
+  
+  [log.changeset changeset.draft|changeset:   4:bbe44766e73d]
+  [log.bisect bisect.bad|bisect:      bad (implicit)]
+  [log.branch|branch:      foo]
+  [log.user|user:        person]
+  [log.date|date:        Sat Jan 17 04:53:20 1970 +0000]
+  [log.summary|summary:     new branch]
+  
+  $ hg --color=debug log --debug -T bisect -r 0:4
+  [log.changeset changeset.public|changeset:   0:1e4e1b8f71e05681d422154f5421e385fec3454f]
+  [log.bisect bisect.good|bisect:      good (implicit)]
+  [log.phase|phase:       public]
+  [log.parent changeset.public|parent:      -1:0000000000000000000000000000000000000000]
+  [log.parent changeset.public|parent:      -1:0000000000000000000000000000000000000000]
+  [ui.debug log.manifest|manifest:    0:a0c8bcbbb45c63b90b70ad007bf38961f64f2af0]
+  [log.user|user:        User Name <user@hostname>]
+  [log.date|date:        Mon Jan 12 13:46:40 1970 +0000]
+  [ui.debug log.files|files+:      a]
+  [ui.debug log.extra|extra:       branch=default]
+  [ui.note log.description|description:]
+  [ui.note log.description|line 1
+  line 2]
+  
+  
+  [log.changeset changeset.public|changeset:   1:b608e9d1a3f0273ccf70fb85fd6866b3482bf965]
+  [log.bisect bisect.good|bisect:      good]
+  [log.phase|phase:       public]
+  [log.parent changeset.public|parent:      0:1e4e1b8f71e05681d422154f5421e385fec3454f]
+  [log.parent changeset.public|parent:      -1:0000000000000000000000000000000000000000]
+  [ui.debug log.manifest|manifest:    1:4e8d705b1e53e3f9375e0e60dc7b525d8211fe55]
+  [log.user|user:        A. N. Other <other@place>]
+  [log.date|date:        Tue Jan 13 17:33:20 1970 +0000]
+  [ui.debug log.files|files+:      b]
+  [ui.debug log.extra|extra:       branch=default]
+  [ui.note log.description|description:]
+  [ui.note log.description|other 1
+  other 2
+  
+  other 3]
+  
+  
+  [log.changeset changeset.public|changeset:   2:97054abb4ab824450e9164180baf491ae0078465]
+  [log.bisect bisect.untested|bisect:      untested]
+  [log.phase|phase:       public]
+  [log.parent changeset.public|parent:      1:b608e9d1a3f0273ccf70fb85fd6866b3482bf965]
+  [log.parent changeset.public|parent:      -1:0000000000000000000000000000000000000000]
+  [ui.debug log.manifest|manifest:    2:6e0e82995c35d0d57a52aca8da4e56139e06b4b1]
+  [log.user|user:        other@place]
+  [log.date|date:        Wed Jan 14 21:20:00 1970 +0000]
+  [ui.debug log.files|files+:      c]
+  [ui.debug log.extra|extra:       branch=default]
+  [ui.note log.description|description:]
+  [ui.note log.description|no person]
+  
+  
+  [log.changeset changeset.public|changeset:   3:10e46f2dcbf4823578cf180f33ecf0b957964c47]
+  [log.bisect bisect.bad|bisect:      bad]
+  [log.phase|phase:       public]
+  [log.parent changeset.public|parent:      2:97054abb4ab824450e9164180baf491ae0078465]
+  [log.parent changeset.public|parent:      -1:0000000000000000000000000000000000000000]
+  [ui.debug log.manifest|manifest:    3:cb5a1327723bada42f117e4c55a303246eaf9ccc]
+  [log.user|user:        person]
+  [log.date|date:        Fri Jan 16 01:06:40 1970 +0000]
+  [ui.debug log.files|files:       c]
+  [ui.debug log.extra|extra:       branch=default]
+  [ui.note log.description|description:]
+  [ui.note log.description|no user, no domain]
+  
+  
+  [log.changeset changeset.draft|changeset:   4:bbe44766e73d5f11ed2177f1838de10c53ef3e74]
+  [log.bisect bisect.bad|bisect:      bad (implicit)]
+  [log.branch|branch:      foo]
+  [log.phase|phase:       draft]
+  [log.parent changeset.public|parent:      3:10e46f2dcbf4823578cf180f33ecf0b957964c47]
+  [log.parent changeset.public|parent:      -1:0000000000000000000000000000000000000000]
+  [ui.debug log.manifest|manifest:    3:cb5a1327723bada42f117e4c55a303246eaf9ccc]
+  [log.user|user:        person]
+  [log.date|date:        Sat Jan 17 04:53:20 1970 +0000]
+  [ui.debug log.extra|extra:       branch=foo]
+  [ui.note log.description|description:]
+  [ui.note log.description|new branch]
+  
+  
+  $ hg --color=debug log -v -T bisect -r 0:4
+  [log.changeset changeset.public|changeset:   0:1e4e1b8f71e0]
+  [log.bisect bisect.good|bisect:      good (implicit)]
+  [log.user|user:        User Name <user@hostname>]
+  [log.date|date:        Mon Jan 12 13:46:40 1970 +0000]
+  [ui.note log.files|files:       a]
+  [ui.note log.description|description:]
+  [ui.note log.description|line 1
+  line 2]
+  
+  
+  [log.changeset changeset.public|changeset:   1:b608e9d1a3f0]
+  [log.bisect bisect.good|bisect:      good]
+  [log.user|user:        A. N. Other <other@place>]
+  [log.date|date:        Tue Jan 13 17:33:20 1970 +0000]
+  [ui.note log.files|files:       b]
+  [ui.note log.description|description:]
+  [ui.note log.description|other 1
+  other 2
+  
+  other 3]
+  
+  
+  [log.changeset changeset.public|changeset:   2:97054abb4ab8]
+  [log.bisect bisect.untested|bisect:      untested]
+  [log.user|user:        other@place]
+  [log.date|date:        Wed Jan 14 21:20:00 1970 +0000]
+  [ui.note log.files|files:       c]
+  [ui.note log.description|description:]
+  [ui.note log.description|no person]
+  
+  
+  [log.changeset changeset.public|changeset:   3:10e46f2dcbf4]
+  [log.bisect bisect.bad|bisect:      bad]
+  [log.user|user:        person]
+  [log.date|date:        Fri Jan 16 01:06:40 1970 +0000]
+  [ui.note log.files|files:       c]
+  [ui.note log.description|description:]
+  [ui.note log.description|no user, no domain]
+  
+  
+  [log.changeset changeset.draft|changeset:   4:bbe44766e73d]
+  [log.bisect bisect.bad|bisect:      bad (implicit)]
+  [log.branch|branch:      foo]
+  [log.user|user:        person]
+  [log.date|date:        Sat Jan 17 04:53:20 1970 +0000]
+  [ui.note log.description|description:]
+  [ui.note log.description|new branch]
+  
+  
+  $ hg bisect --reset
 
 Error on syntax:
 
@@ -2242,6 +2763,39 @@ Test invalid date:
   hg: parse error: date expects a date information
   [255]
 
+Test integer literal:
+
+  $ hg log -Ra -r0 -T '{(0)}\n'
+  0
+  $ hg log -Ra -r0 -T '{(123)}\n'
+  123
+  $ hg log -Ra -r0 -T '{(-4)}\n'
+  -4
+  $ hg log -Ra -r0 -T '{(-)}\n'
+  hg: parse error at 2: integer literal without digits
+  [255]
+  $ hg log -Ra -r0 -T '{(-a)}\n'
+  hg: parse error at 2: integer literal without digits
+  [255]
+
+top-level integer literal is interpreted as symbol (i.e. variable name):
+
+  $ hg log -Ra -r0 -T '{1}\n'
+  
+  $ hg log -Ra -r0 -T '{if("t", "{1}")}\n'
+  
+  $ hg log -Ra -r0 -T '{1|stringify}\n'
+  
+
+unless explicit symbol is expected:
+
+  $ hg log -Ra -r0 -T '{desc|1}\n'
+  hg: parse error: expected a symbol, got 'integer'
+  [255]
+  $ hg log -Ra -r0 -T '{1()}\n'
+  hg: parse error: expected a symbol, got 'integer'
+  [255]
+
 Test string escaping:
 
   $ hg log -R latesttag -r 0 --template '>\n<>\\n<{if(rev, "[>\n<>\\n<]")}>\n<>\\n<\n'
@@ -2272,6 +2826,25 @@ Test string escaping:
   <>\n<[>
   <>\n<]>
   <>\n<
+
+Test exception in quoted template. single backslash before quotation mark is
+stripped before parsing:
+
+  $ cat <<'EOF' > escquotetmpl
+  > changeset = "\" \\" \\\" \\\\" {files % \"{file}\"}\n"
+  > EOF
+  $ cd latesttag
+  $ hg log -r 2 --style ../escquotetmpl
+  " \" \" \\" head1
+
+  $ hg log -r 2 -T esc --config templates.esc='{\"invalid\"}\n'
+  hg: parse error at 1: syntax error
+  [255]
+  $ hg log -r 2 -T esc --config templates.esc='"{\"valid\"}\n"'
+  valid
+  $ hg log -r 2 -T esc --config templates.esc="'"'{\'"'"'valid\'"'"'}\n'"'"
+  valid
+  $ cd ..
 
 Test leading backslashes:
 
@@ -2509,20 +3082,20 @@ Test revset function
   Rev: 0
   Ancestor: 0
   
-Test current bookmark templating
+Test active bookmark templating
 
   $ hg book foo
   $ hg book bar
-  $ hg log --template "{rev} {bookmarks % '{bookmark}{ifeq(bookmark, current, \"*\")} '}\n"
+  $ hg log --template "{rev} {bookmarks % '{bookmark}{ifeq(bookmark, active, \"*\")} '}\n"
   2 bar* foo 
   1 
   0 
-  $ hg log --template "{rev} {currentbookmark}\n"
+  $ hg log --template "{rev} {activebookmark}\n"
   2 bar
   1 
   0 
   $ hg bookmarks --inactive bar
-  $ hg log --template "{rev} {currentbookmark}\n"
+  $ hg log --template "{rev} {activebookmark}\n"
   2 
   1 
   0 
@@ -2547,7 +3120,9 @@ Test stringify on sub expressions
 Test splitlines
 
   $ hg log -Gv -R a --template "{splitlines(desc) % 'foo {line}\n'}"
-  @  foo future
+  @  foo Modify, add, remove, rename
+  |
+  o  foo future
   |
   o  foo third
   |
@@ -2581,6 +3156,8 @@ Test startswith
   o
   |
   o
+  |
+  o
   
   o
   |\
@@ -2606,7 +3183,9 @@ Test bad template with better error message
 Test word function (including index out of bounds graceful failure)
 
   $ hg log -Gv -R a --template "{word('1', desc)}"
-  @
+  @  add,
+  |
+  o
   |
   o
   |
@@ -2630,7 +3209,9 @@ Test word function (including index out of bounds graceful failure)
 Test word third parameter used as splitter
 
   $ hg log -Gv -R a --template "{word('0', desc, 'o')}"
-  @  future
+  @  M
+  |
+  o  future
   |
   o  third
   |
@@ -2661,8 +3242,13 @@ Test word error messages for not enough and too many arguments
   hg: parse error: word expects two or three arguments, got 7
   [255]
 
+Test word for integer literal
+
+  $ hg log -R a --template "{word(2, desc)}\n" -r0
+  line
+
 Test word for invalid numbers
 
-  $ hg log -Gv -R a --template "{word(2, desc)}"
-  hg: parse error: Use strings like '3' for numbers passed to word function
+  $ hg log -Gv -R a --template "{word('a', desc)}"
+  hg: parse error: word expects an integer index
   [255]

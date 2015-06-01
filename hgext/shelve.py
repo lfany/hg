@@ -21,6 +21,7 @@ shelved change has a distinct name. For details, see the help for "hg
 shelve".
 """
 
+import collections
 from mercurial.i18n import _
 from mercurial.node import nullid, nullrev, bin, hex
 from mercurial import changegroup, cmdutil, scmutil, phases, commands
@@ -32,6 +33,10 @@ import errno
 
 cmdtable = {}
 command = cmdutil.command(cmdtable)
+# Note for extension authors: ONLY specify testedwith = 'internal' for
+# extensions which SHIP WITH MERCURIAL. Non-mainline extensions should
+# be specifying the version(s) of Mercurial they are tested with, or
+# leave the attribute unspecified.
 testedwith = 'internal'
 
 class shelvedfile(object):
@@ -143,7 +148,7 @@ def createcmd(ui, repo, pats, opts):
 
         Much faster than the revset ancestors(ctx) & draft()"""
         seen = set([nullrev])
-        visit = util.deque()
+        visit = collections.deque()
         visit.append(ctx)
         while visit:
             ctx = visit.popleft()
@@ -163,7 +168,7 @@ def createcmd(ui, repo, pats, opts):
 
     # we never need the user, so we use a generic user for all shelve operations
     user = 'shelve@localhost'
-    label = repo._bookmarkcurrent or parent.branch() or 'default'
+    label = repo._activebookmark or parent.branch() or 'default'
 
     # slashes aren't allowed in filenames, therefore we rename it
     label = label.replace('/', '_')
@@ -284,17 +289,15 @@ def deletecmd(ui, repo, pats):
     """subcommand that deletes a specific shelve"""
     if not pats:
         raise util.Abort(_('no shelved changes specified!'))
-    wlock = None
+    wlock = repo.wlock()
     try:
-        wlock = repo.wlock()
-        try:
-            for name in pats:
-                for suffix in 'hg patch'.split():
-                    shelvedfile(repo, name, suffix).unlink()
-        except OSError, err:
-            if err.errno != errno.ENOENT:
-                raise
-            raise util.Abort(_("shelved change '%s' not found") % name)
+        for name in pats:
+            for suffix in 'hg patch'.split():
+                shelvedfile(repo, name, suffix).unlink()
+    except OSError, err:
+        if err.errno != errno.ENOENT:
+            raise
+        raise util.Abort(_("shelved change '%s' not found") % name)
     finally:
         lockmod.release(wlock)
 
@@ -362,6 +365,17 @@ def listcmd(ui, repo, pats, opts):
                     ui.write(chunk, label=label)
         finally:
             fp.close()
+
+def singlepatchcmds(ui, repo, pats, opts, subcommand):
+    """subcommand that displays a single shelf"""
+    if len(pats) != 1:
+        raise util.Abort(_("--%s expects a single shelf") % subcommand)
+    shelfname = pats[0]
+
+    if not shelvedfile(repo, shelfname, 'patch').exists():
+        raise util.Abort(_("cannot find shelf %s") % shelfname)
+
+    listcmd(ui, repo, pats, opts)
 
 def checkparents(repo, state):
     """check parent while resuming an unshelve"""
@@ -658,8 +672,7 @@ def unshelve(ui, repo, *shelved, **opts):
           ('p', 'patch', None,
            _('show patch')),
           ('i', 'interactive', None,
-           _('interactive mode, only works while creating a shelve'
-                   '(EXPERIMENTAL)')),
+           _('interactive mode, only works while creating a shelve')),
           ('', 'stat', None,
            _('output diffstat-style summary of changes'))] + commands.walkopts,
          _('hg shelve [OPTION]... [FILE]...'))
@@ -693,21 +706,21 @@ def shelvecmd(ui, repo, *pats, **opts):
     cmdutil.checkunfinished(repo)
 
     allowables = [
-        ('addremove', 'create'), # 'create' is pseudo action
-        ('cleanup', 'cleanup'),
-#       ('date', 'create'), # ignored for passing '--date "0 0"' in tests
-        ('delete', 'delete'),
-        ('edit', 'create'),
-        ('list', 'list'),
-        ('message', 'create'),
-        ('name', 'create'),
-        ('patch', 'list'),
-        ('stat', 'list'),
+        ('addremove', set(['create'])), # 'create' is pseudo action
+        ('cleanup', set(['cleanup'])),
+#       ('date', set(['create'])), # ignored for passing '--date "0 0"' in tests
+        ('delete', set(['delete'])),
+        ('edit', set(['create'])),
+        ('list', set(['list'])),
+        ('message', set(['create'])),
+        ('name', set(['create'])),
+        ('patch', set(['patch', 'list'])),
+        ('stat', set(['stat', 'list'])),
     ]
     def checkopt(opt):
         if opts[opt]:
             for i, allowable in allowables:
-                if opts[i] and opt != allowable:
+                if opts[i] and opt not in allowable:
                     raise util.Abort(_("options '--%s' and '--%s' may not be "
                                        "used together") % (opt, i))
             return True
@@ -719,11 +732,11 @@ def shelvecmd(ui, repo, *pats, **opts):
         return deletecmd(ui, repo, pats)
     elif checkopt('list'):
         return listcmd(ui, repo, pats, opts)
+    elif checkopt('patch'):
+        return singlepatchcmds(ui, repo, pats, opts, subcommand='patch')
+    elif checkopt('stat'):
+        return singlepatchcmds(ui, repo, pats, opts, subcommand='stat')
     else:
-        for i in ('patch', 'stat'):
-            if opts[i]:
-                raise util.Abort(_("option '--%s' may not be "
-                                   "used when shelving a change") % (i,))
         return createcmd(ui, repo, pats, opts)
 
 def extsetup(ui):

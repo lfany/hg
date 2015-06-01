@@ -65,7 +65,10 @@ direntry = '
     <td>drwxr-xr-x</td>
     <td></td>
     <td></td>
-    <td><a href="{url|urlescape}file/{node|short}{path|urlescape}{sessionvars%urlparameter}">{basename|escape}</a></td>
+    <td>
+      <a href="{url|urlescape}file/{node|short}{path|urlescape}{sessionvars%urlparameter}">{basename|escape}</a>
+      <a href="{url|urlescape}file/{node|short}{path|urlescape}/{emptydirs|urlescape}{sessionvars%urlparameter}">{emptydirs|escape}</a>
+    </td>
     <td><a href="{url|urlescape}file/{node|short}{path|urlescape}{sessionvars%urlparameter}">files</a></td>
   </tr>'
 fileentry = '
@@ -244,7 +247,12 @@ shortlogentry = '
 filelogentry = '
   <tr class="parity{parity}">
     <td class="nowrap age">{date|rfc822date}</td>
-    <td><a href="{url|urlescape}rev/{node|short}{sessionvars%urlparameter}">{desc|strip|firstline|escape|nonempty}</a></td>
+    <td>
+      <a href="{url|urlescape}rev/{node|short}{sessionvars%urlparameter}">
+        {desc|strip|firstline|escape|nonempty}
+        <span class="logtags">{inbranch%inbranchtag}{branches%branchtag}{tags%tagtag}{bookmarks%bookmarktag}</span>
+      </a>
+    </td>
     <td class="nowrap">
       <a href="{url|urlescape}file/{node|short}/{file|urlescape}{sessionvars%urlparameter}">file</a>&nbsp;|&nbsp;<a href="{url|urlescape}diff/{node|short}/{file|urlescape}{sessionvars%urlparameter}">diff</a>&nbsp;|&nbsp;<a href="{url|urlescape}annotate/{node|short}/{file|urlescape}{sessionvars%urlparameter}">annotate</a>
       {rename%filelogrename}

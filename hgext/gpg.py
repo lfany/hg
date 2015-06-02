@@ -12,6 +12,10 @@ from mercurial.i18n import _
 
 cmdtable = {}
 command = cmdutil.command(cmdtable)
+# Note for extension authors: ONLY specify testedwith = 'internal' for
+# extensions which SHIP WITH MERCURIAL. Non-mainline extensions should
+# be specifying the version(s) of Mercurial they are tested with, or
+# leave the attribute unspecified.
 testedwith = 'internal'
 
 class gpg(object):
@@ -255,7 +259,7 @@ def sign(ui, repo, *revs, **opts):
 
     if not opts["force"]:
         msigs = match.exact(repo.root, '', ['.hgsigs'])
-        if util.any(repo.status(match=msigs, unknown=True, ignored=True)):
+        if any(repo.status(match=msigs, unknown=True, ignored=True)):
             raise util.Abort(_("working copy of .hgsigs is changed "),
                              hint=_("please commit .hgsigs manually"))
 

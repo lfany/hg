@@ -37,6 +37,10 @@ def tidyprefix(dest, kind, prefix):
     prefix = util.pconvert(lpfx)
     if not prefix.endswith('/'):
         prefix += '/'
+    # Drop the leading '.' path component if present, so Windows can read the
+    # zip files (issue4634)
+    if prefix.startswith('./'):
+        prefix = prefix[2:]
     if prefix.startswith('../') or os.path.isabs(lpfx) or '/../' in prefix:
         raise util.Abort(_('archive prefix contains illegal components'))
     return prefix
@@ -50,7 +54,7 @@ exts = {
 
 def guesskind(dest):
     for kind, extensions in exts.iteritems():
-        if util.any(dest.endswith(ext) for ext in extensions):
+        if any(dest.endswith(ext) for ext in extensions):
             return kind
     return None
 

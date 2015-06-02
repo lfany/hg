@@ -59,10 +59,6 @@ You can set patchbomb to always ask for confirmation by setting
 
 import os, errno, socket, tempfile, cStringIO
 import email
-# On python2.4 you have to import these by name or they fail to
-# load. This was not a problem on Python 2.7.
-import email.Generator
-import email.MIMEMultipart
 
 from mercurial import cmdutil, commands, hg, mail, patch, util
 from mercurial import scmutil
@@ -71,6 +67,10 @@ from mercurial.node import bin
 
 cmdtable = {}
 command = cmdutil.command(cmdtable)
+# Note for extension authors: ONLY specify testedwith = 'internal' for
+# extensions which SHIP WITH MERCURIAL. Non-mainline extensions should
+# be specifying the version(s) of Mercurial they are tested with, or
+# leave the attribute unspecified.
 testedwith = 'internal'
 
 def prompt(ui, prompt, default=None, rest=':'):

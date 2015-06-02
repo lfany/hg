@@ -251,11 +251,13 @@ class basectx(object):
     def sub(self, path):
         return subrepo.subrepo(self, path)
 
-    def match(self, pats=[], include=None, exclude=None, default='glob'):
+    def match(self, pats=[], include=None, exclude=None, default='glob',
+              listsubrepos=False):
         r = self._repo
         return matchmod.match(r.root, r.getcwd(), pats,
                               include, exclude, default,
-                              auditor=r.auditor, ctx=self)
+                              auditor=r.auditor, ctx=self,
+                              listsubrepos=listsubrepos)
 
     def diff(self, ctx2=None, match=None, **opts):
         """Returns a diff generator for the given contexts and matcher"""
@@ -338,7 +340,7 @@ class basectx(object):
 
 
 def makememctx(repo, parents, text, user, date, branch, files, store,
-               editor=None):
+               editor=None, extra=None):
     def getfilectx(repo, memctx, path):
         data, mode, copied = store.getfile(path)
         if data is None:
@@ -346,7 +348,8 @@ def makememctx(repo, parents, text, user, date, branch, files, store,
         islink, isexec = mode
         return memfilectx(repo, path, data, islink=islink, isexec=isexec,
                                   copied=copied, memctx=memctx)
-    extra = {}
+    if extra is None:
+        extra = {}
     if branch:
         extra['branch'] = encoding.fromlocal(branch)
     ctx =  memctx(repo, parents, text, files, getfilectx, user,
@@ -459,7 +462,7 @@ class changectx(basectx):
                 pass
         except (error.FilteredIndexError, error.FilteredLookupError,
                 error.FilteredRepoLookupError):
-            if repo.filtername == 'visible':
+            if repo.filtername.startswith('visible'):
                 msg = _("hidden revision '%s'") % changeid
                 hint = _('use --hidden to access hidden revisions')
                 raise error.FilteredRepoLookupError(msg, hint=hint)
@@ -595,8 +598,8 @@ class changectx(basectx):
         def bad(fn, msg):
             # The manifest doesn't know about subrepos, so don't complain about
             # paths into valid subrepos.
-            if util.any(fn == s or fn.startswith(s + '/')
-                        for s in self.substate):
+            if any(fn == s or fn.startswith(s + '/')
+                   for s in self.substate):
                 return
             oldbad(fn, _('no such file in rev %s') % self)
         match.bad = bad
@@ -1443,17 +1446,20 @@ class workingctx(committablectx):
             finally:
                 wlock.release()
 
-    def match(self, pats=[], include=None, exclude=None, default='glob'):
+    def match(self, pats=[], include=None, exclude=None, default='glob',
+              listsubrepos=False):
         r = self._repo
 
         # Only a case insensitive filesystem needs magic to translate user input
         # to actual case in the filesystem.
         if not util.checkcase(r.root):
             return matchmod.icasefsmatcher(r.root, r.getcwd(), pats, include,
-                                           exclude, default, r.auditor, self)
+                                           exclude, default, r.auditor, self,
+                                           listsubrepos=listsubrepos)
         return matchmod.match(r.root, r.getcwd(), pats,
                               include, exclude, default,
-                              auditor=r.auditor, ctx=self)
+                              auditor=r.auditor, ctx=self,
+                              listsubrepos=listsubrepos)
 
     def _filtersuspectsymlink(self, files):
         if not files or self._repo.dirstate._checklink:

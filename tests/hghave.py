@@ -225,12 +225,11 @@ def has_hardlink():
     os.close(fh)
     name = tempfile.mktemp(dir='.', prefix=tempprefix)
     try:
-        try:
-            util.oslink(fn, name)
-            os.unlink(name)
-            return True
-        except OSError:
-            return False
+        util.oslink(fn, name)
+        os.unlink(name)
+        return True
+    except OSError:
+        return False
     finally:
         os.unlink(fn)
 
@@ -282,10 +281,6 @@ def has_pygments():
     except ImportError:
         return False
 
-@check("python243", "python >= 2.4.3")
-def has_python243():
-    return sys.version_info >= (2, 4, 3)
-
 @check("json", "some json module available")
 def has_json():
     try:
@@ -318,6 +313,15 @@ def has_ssl():
         OpenSSL.SSL.Context
         return True
     except ImportError:
+        return False
+
+@check("sslcontext", "python >= 2.7.9 ssl")
+def has_sslcontext():
+    try:
+        import ssl
+        ssl.SSLContext
+        return True
+    except (ImportError, AttributeError):
         return False
 
 @check("defaultcacerts", "can verify SSL certs by system's CA certs store")

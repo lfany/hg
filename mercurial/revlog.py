@@ -12,6 +12,7 @@ and O(changes) merge between branches.
 """
 
 # import stuff from node for others to import from revlog
+import collections
 from node import bin, hex, nullid, nullrev
 from i18n import _
 import ancestor, mdiff, parsers, error, util, templatefilters
@@ -151,6 +152,10 @@ class revlogoldio(object):
 indexformatng = ">Qiiiiii20s12x"
 ngshaoffset = 32
 versionformat = ">I"
+
+# corresponds to uncompressed length of indexformatng (2 gigs, 4-byte
+# signed integer)
+_maxentrysize = 0x7fffffff
 
 class revlogio(object):
     def __init__(self):
@@ -485,7 +490,7 @@ class revlog(object):
 
         # take all ancestors from heads that aren't in has
         missing = set()
-        visit = util.deque(r for r in heads if r not in has)
+        visit = collections.deque(r for r in heads if r not in has)
         while visit:
             r = visit.popleft()
             if r in missing:
@@ -725,7 +730,7 @@ class revlog(object):
             return self._headrevs()
 
     def computephases(self, roots):
-        return self.index.computephases(roots)
+        return self.index.computephasesmapsets(roots)
 
     def _headrevs(self):
         count = len(self)
@@ -1179,6 +1184,12 @@ class revlog(object):
         if link == nullrev:
             raise RevlogError(_("attempted to add linkrev -1 to %s")
                               % self.indexfile)
+
+        if len(text) > _maxentrysize:
+            raise RevlogError(
+                _("%s: size of %d bytes exceeds maximum revlog storage of 2GiB")
+                % (self.indexfile, len(text)))
+
         node = node or self.hash(text, p1, p2)
         if node in self.nodemap:
             return node

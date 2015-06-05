@@ -1,9 +1,5 @@
 #require test-repo
 
-This code uses the ast module, which was new in 2.6, so we'll skip
-this test on anything earlier.
-  $ $PYTHON -c 'import sys ; assert sys.version_info >= (2, 6)' || exit 80
-
   $ import_checker="$TESTDIR"/../contrib/import-checker.py
 
 Run the doctests from the import checker, and make sure
@@ -20,10 +16,7 @@ here that we should still endeavor to fix, and some cycles will be
 hidden by deduplication algorithm in the cycle detector, so fixing
 these may expose other cycles.
 
-  $ hg locate 'mercurial/**.py' | sed 's-\\-/-g' | xargs python "$import_checker"
-  mercurial/crecord.py mixed imports
-     stdlib:    fcntl, termios
-     relative:  curses
+  $ hg locate 'mercurial/**.py' 'hgext/**.py' | sed 's-\\-/-g' | python "$import_checker" -
   mercurial/dispatch.py mixed imports
      stdlib:    commands
      relative:  error, extensions, fancyopts, hg, hook, util
@@ -40,3 +33,5 @@ these may expose other cycles.
      stdlib:    formatter
      relative:  config, error, scmutil, util
   Import cycle: mercurial.cmdutil -> mercurial.context -> mercurial.subrepo -> mercurial.cmdutil
+  Import cycle: hgext.largefiles.basestore -> hgext.largefiles.localstore -> hgext.largefiles.basestore
+  Import cycle: mercurial.commands -> mercurial.commandserver -> mercurial.dispatch -> mercurial.commands

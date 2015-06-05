@@ -80,8 +80,23 @@ def itersubrepos(ctx1, ctx2):
     # has been modified (in ctx2) but not yet committed (in ctx1).
     subpaths = dict.fromkeys(ctx2.substate, ctx2)
     subpaths.update(dict.fromkeys(ctx1.substate, ctx1))
+
+    missing = set()
+
+    for subpath in ctx2.substate:
+        if subpath not in ctx1.substate:
+            del subpaths[subpath]
+            missing.add(subpath)
+
     for subpath, ctx in sorted(subpaths.iteritems()):
         yield subpath, ctx.sub(subpath)
+
+    # Yield an empty subrepo based on ctx1 for anything only in ctx2.  That way,
+    # status and diff will have an accurate result when it does
+    # 'sub.{status|diff}(rev2)'.  Otherwise, the ctx2 subrepo is compared
+    # against itself.
+    for subpath in missing:
+        yield subpath, ctx2.nullsub(subpath, ctx1)
 
 def nochangesfound(ui, repo, excluded=None):
     '''Report no changes for push/pull, excluded is None or a list of
@@ -709,14 +724,12 @@ def revrange(repo, revs):
             return defval
         return repo[val].rev()
 
-    seen, l = set(), revset.baseset([])
+    subsets = []
 
     revsetaliases = [alias for (alias, _) in
                      repo.ui.configitems("revsetalias")]
 
     for spec in revs:
-        if l and not seen:
-            seen = set(l)
         # attempt to parse old-style ranges first to deal with
         # things like old-tag which contain query metacharacters
         try:
@@ -727,8 +740,7 @@ def revrange(repo, revs):
                 raise error.RepoLookupError
 
             if isinstance(spec, int):
-                seen.add(spec)
-                l = l + revset.baseset([spec])
+                subsets.append(revset.baseset([spec]))
                 continue
 
             if _revrangesep in spec:
@@ -740,40 +752,24 @@ def revrange(repo, revs):
                 end = revfix(repo, end, len(repo) - 1)
                 if end == nullrev and start < 0:
                     start = nullrev
-                rangeiter = repo.changelog.revs(start, end)
-                if not seen and not l:
-                    # by far the most common case: revs = ["-1:0"]
-                    l = revset.baseset(rangeiter)
-                    # defer syncing seen until next iteration
-                    continue
-                newrevs = set(rangeiter)
-                if seen:
-                    newrevs.difference_update(seen)
-                    seen.update(newrevs)
+                if start < end:
+                    l = revset.spanset(repo, start, end + 1)
                 else:
-                    seen = newrevs
-                l = l + revset.baseset(sorted(newrevs, reverse=start > end))
+                    l = revset.spanset(repo, start, end - 1)
+                subsets.append(l)
                 continue
             elif spec and spec in repo: # single unquoted rev
                 rev = revfix(repo, spec, None)
-                if rev in seen:
-                    continue
-                seen.add(rev)
-                l = l + revset.baseset([rev])
+                subsets.append(revset.baseset([rev]))
                 continue
         except error.RepoLookupError:
             pass
 
         # fall through to new-style queries if old-style fails
         m = revset.match(repo.ui, spec, repo)
-        if seen or l:
-            dl = [r for r in m(repo) if r not in seen]
-            l = l + revset.baseset(dl)
-            seen.update(dl)
-        else:
-            l = m(repo)
+        subsets.append(m(repo))
 
-    return l
+    return revset._combinesets(subsets)
 
 def expandpats(pats):
     '''Expand bare globs when running on windows.
@@ -803,7 +799,7 @@ def matchandpats(ctx, pats=[], opts={}, globbed=False, default='relpath'):
         pats = expandpats(pats or [])
 
     m = ctx.match(pats, opts.get('include'), opts.get('exclude'),
-                         default)
+                         default, listsubrepos=opts.get('subrepos'))
     def badfn(f, msg):
         ctx.repo().ui.warn("%s: %s\n" % (m.rel(f), msg))
     m.bad = badfn
@@ -854,15 +850,14 @@ def addremove(repo, matcher, prefix, opts={}, dry_run=None, similarity=None):
                                  % join(subpath))
 
     rejected = []
-    origbad = m.bad
     def badfn(f, msg):
         if f in m.files():
-            origbad(f, msg)
+            m.bad(f, msg)
         rejected.append(f)
 
-    m.bad = badfn
-    added, unknown, deleted, removed, forgotten = _interestingfiles(repo, m)
-    m.bad = origbad
+    badmatch = matchmod.badmatch(m, badfn)
+    added, unknown, deleted, removed, forgotten = _interestingfiles(repo,
+                                                                    badmatch)
 
     unknownset = set(unknown + forgotten)
     toprint = unknownset.copy()
@@ -1010,6 +1005,12 @@ def readrequires(opener, supported):
             hint=_("see http://mercurial.selenic.com/wiki/MissingRequirement"
                    " for more information"))
     return requirements
+
+def writerequires(opener, requirements):
+    reqfile = opener("requires", "w")
+    for r in sorted(requirements):
+        reqfile.write("%s\n" % r)
+    reqfile.close()
 
 class filecachesubentry(object):
     def __init__(self, path, stat):

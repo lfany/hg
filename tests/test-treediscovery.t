@@ -2,7 +2,7 @@
 
 Tests discovery against servers without getbundle support:
 
-  $ CAP=getbundle
+  $ CAP="getbundle bundle2"
   $ . "$TESTDIR/notcapable"
   $ cat >> $HGRCPATH <<EOF
   > [ui]
@@ -515,7 +515,6 @@ Both have new stuff in existing named branches:
   "GET /?cmd=branches HTTP/1.1" 200 - x-hgarg-1:nodes=d8f638ac69e9ae8dea4f09f11d696546a912d961
   "GET /?cmd=between HTTP/1.1" 200 - x-hgarg-1:pairs=d8f638ac69e9ae8dea4f09f11d696546a912d961-d57206cc072a18317c1e381fb60aa31bd3401785
   "GET /?cmd=capabilities HTTP/1.1" 200 -
-  "GET /?cmd=listkeys HTTP/1.1" 200 - x-hgarg-1:namespace=bookmarks
   "GET /?cmd=listkeys HTTP/1.1" 200 - x-hgarg-1:namespace=bookmarks
   "GET /?cmd=heads HTTP/1.1" 200 -
   "GET /?cmd=branches HTTP/1.1" 200 - x-hgarg-1:nodes=d8f638ac69e9ae8dea4f09f11d696546a912d961

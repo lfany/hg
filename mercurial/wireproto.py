@@ -9,7 +9,7 @@ import urllib, tempfile, os, sys
 from i18n import _
 from node import bin, hex
 import changegroup as changegroupmod, bundle2, pushkey as pushkeymod
-import peer, error, encoding, util, store, exchange
+import peer, error, encoding, util, exchange
 
 
 class abstractserverproto(object):
@@ -203,11 +203,12 @@ def unescapearg(escaped):
 #
 # :nodes: list of binary nodes
 # :csv:   list of comma-separated values
+# :scsv:  list of comma-separated values return as set
 # :plain: string with no transformation needed.
 gboptsmap = {'heads':  'nodes',
              'common': 'nodes',
              'obsmarkers': 'boolean',
-             'bundlecaps': 'csv',
+             'bundlecaps': 'scsv',
              'listkeys': 'csv',
              'cg': 'boolean'}
 
@@ -324,6 +325,8 @@ class wirepeer(peer.peerrepository):
         self.ui.debug('preparing listkeys for "%s"\n' % namespace)
         yield {'namespace': encoding.fromlocal(namespace)}, f
         d = f.value
+        self.ui.debug('received listkey for "%s": %i bytes\n'
+                      % (namespace, len(d)))
         yield pushkeymod.decodekeys(d)
 
     def stream_out(self):
@@ -345,6 +348,11 @@ class wirepeer(peer.peerrepository):
     def getbundle(self, source, **kwargs):
         self.requirecap('getbundle', _('look up remote changes'))
         opts = {}
+        bundlecaps = kwargs.get('bundlecaps')
+        if bundlecaps is not None:
+            kwargs['bundlecaps'] = sorted(bundlecaps)
+        else:
+            bundlecaps = () # kwargs could have it to None
         for key, value in kwargs.iteritems():
             if value is None:
                 continue
@@ -353,7 +361,7 @@ class wirepeer(peer.peerrepository):
                 assert False, 'unexpected'
             elif keytype == 'nodes':
                 value = encodelist(value)
-            elif keytype == 'csv':
+            elif keytype in ('csv', 'scsv'):
                 value = ','.join(value)
             elif keytype == 'boolean':
                 value = '%i' % bool(value)
@@ -362,10 +370,7 @@ class wirepeer(peer.peerrepository):
                                % keytype)
             opts[key] = value
         f = self._callcompressable("getbundle", **opts)
-        bundlecaps = kwargs.get('bundlecaps')
-        if bundlecaps is None:
-            bundlecaps = () # kwargs could have it to None
-        if util.any((cap.startswith('HG2') for cap in bundlecaps)):
+        if any((cap.startswith('HG2') for cap in bundlecaps)):
             return bundle2.getunbundler(self.ui, f)
         else:
             return changegroupmod.cg1unpacker(f, 'UN')
@@ -661,6 +666,8 @@ def getbundle(repo, proto, others):
         if keytype == 'nodes':
             opts[k] = decodelist(v)
         elif keytype == 'csv':
+            opts[k] = list(v.split(','))
+        elif keytype == 'scsv':
             opts[k] = set(v.split(','))
         elif keytype == 'boolean':
             opts[k] = bool(v)
@@ -742,76 +749,27 @@ def pushkey(repo, proto, namespace, key, old, new):
 def _allowstream(ui):
     return ui.configbool('server', 'uncompressed', True, untrusted=True)
 
-def _walkstreamfiles(repo):
-    # this is it's own function so extensions can override it
-    return repo.store.walk()
-
 @wireprotocommand('stream_out')
 def stream(repo, proto):
     '''If the server supports streaming clone, it advertises the "stream"
     capability with a value representing the version and flags of the repo
     it is serving. Client checks to see if it understands the format.
-
-    The format is simple: the server writes out a line with the amount
-    of files, then the total amount of bytes to be transferred (separated
-    by a space). Then, for each file, the server first writes the filename
-    and file size (separated by the null character), then the file contents.
     '''
-
     if not _allowstream(repo.ui):
         return '1\n'
 
-    entries = []
-    total_bytes = 0
+    def getstream(it):
+        yield '0\n'
+        for chunk in it:
+            yield chunk
+
     try:
-        # get consistent snapshot of repo, lock during scan
-        lock = repo.lock()
-        try:
-            repo.ui.debug('scanning\n')
-            for name, ename, size in _walkstreamfiles(repo):
-                if size:
-                    entries.append((name, size))
-                    total_bytes += size
-        finally:
-            lock.release()
+        # LockError may be raised before the first result is yielded. Don't
+        # emit output until we're sure we got the lock successfully.
+        it = exchange.generatestreamclone(repo)
+        return streamres(getstream(it))
     except error.LockError:
-        return '2\n' # error: 2
-
-    def streamer(repo, entries, total):
-        '''stream out all metadata files in repository.'''
-        yield '0\n' # success
-        repo.ui.debug('%d files, %d bytes to transfer\n' %
-                      (len(entries), total_bytes))
-        yield '%d %d\n' % (len(entries), total_bytes)
-
-        sopener = repo.svfs
-        oldaudit = sopener.mustaudit
-        debugflag = repo.ui.debugflag
-        sopener.mustaudit = False
-
-        try:
-            for name, size in entries:
-                if debugflag:
-                    repo.ui.debug('sending %s (%d bytes)\n' % (name, size))
-                # partially encode name over the wire for backwards compat
-                yield '%s\0%d\n' % (store.encodedir(name), size)
-                if size <= 65536:
-                    fp = sopener(name)
-                    try:
-                        data = fp.read(size)
-                    finally:
-                        fp.close()
-                    yield data
-                else:
-                    for chunk in util.filechunkiter(sopener(name), limit=size):
-                        yield chunk
-        # replace with "finally:" when support for python 2.4 has been dropped
-        except Exception:
-            sopener.mustaudit = oldaudit
-            raise
-        sopener.mustaudit = oldaudit
-
-    return streamres(streamer(repo, entries, total_bytes))
+        return '2\n'
 
 @wireprotocommand('unbundle', 'heads')
 def unbundle(repo, proto, heads):

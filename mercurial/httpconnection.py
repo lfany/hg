@@ -70,11 +70,7 @@ def readauthforuri(ui, uri, user):
         gdict[setting] = val
 
     # Find the best match
-    if '://' in uri:
-        scheme, hostpath = uri.split('://', 1)
-    else:
-        # Python 2.4.1 doesn't provide the full URI
-        scheme, hostpath = 'http', uri
+    scheme, hostpath = uri.split('://', 1)
     bestuser = None
     bestlen = 0
     bestauth = None
@@ -281,7 +277,7 @@ class http2handler(urllib2.HTTPHandler, urllib2.HTTPSHandler):
         kwargs.update(sslutil.sslkwargs(self.ui, host))
 
         con = HTTPConnection(host, port, use_ssl=True,
-                             ssl_wrap_socket=sslutil.ssl_wrap_socket,
+                             ssl_wrap_socket=sslutil.wrapsocket,
                              ssl_validator=sslutil.validator(self.ui, host),
                              **kwargs)
         return con

@@ -84,7 +84,7 @@ effects may be overridden from your configuration file::
   resolve.unresolved = red bold
   resolve.resolved = green bold
 
-  bookmarks.current = green
+  bookmarks.active = green
 
   branches.active = none
   branches.closed = black bold
@@ -162,6 +162,10 @@ from mercurial.i18n import _
 
 cmdtable = {}
 command = cmdutil.command(cmdtable)
+# Note for extension authors: ONLY specify testedwith = 'internal' for
+# extensions which SHIP WITH MERCURIAL. Non-mainline extensions should
+# be specifying the version(s) of Mercurial they are tested with, or
+# leave the attribute unspecified.
 testedwith = 'internal'
 
 # start and stop parameters for effects
@@ -309,7 +313,7 @@ _styles = {'grep.match': 'red bold',
            'grep.filename': 'magenta',
            'grep.user': 'magenta',
            'grep.date': 'magenta',
-           'bookmarks.current': 'green',
+           'bookmarks.active': 'green',
            'branches.active': 'none',
            'branches.closed': 'black bold',
            'branches.current': 'green',

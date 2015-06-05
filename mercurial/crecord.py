@@ -20,7 +20,8 @@ locale.setlocale(locale.LC_ALL, '')
 
 # os.name is one of: 'posix', 'nt', 'dos', 'os2', 'mac', or 'ce'
 if os.name == 'posix':
-    import curses, fcntl, termios
+    import curses
+    import fcntl, termios
 else:
     # I have no idea if wcurses works with crecord...
     try:
@@ -424,9 +425,11 @@ class uihunk(patchnode):
     def __repr__(self):
         return '<hunk %r@%d>' % (self.filename(), self.fromline)
 
-def filterpatch(ui, chunks, chunkselector):
+def filterpatch(ui, chunks, chunkselector, operation=None):
     """interactively filter patch chunks into applied-only chunks"""
 
+    if operation is None:
+        operation = _('confirm')
     chunks = list(chunks)
     # convert chunks list into structure suitable for displaying/modifying
     # with curses.  create a list of headers only.
@@ -1551,6 +1554,8 @@ are you sure you want to review/edit and confirm the selected changes [yn]?
             self.togglefolded(foldparent=True)
         elif keypressed in ["?"]:
             self.helpwindow()
+            self.stdscr.clear()
+            self.stdscr.refresh()
 
     def main(self, stdscr):
         """

@@ -80,8 +80,11 @@ def tokenize(program):
     yield ('end', None, pos)
 
 def parse(expr):
-    p = parser.parser(tokenize, elements)
-    return p.parse(expr)
+    p = parser.parser(elements)
+    tree, pos = p.parse(tokenize(expr))
+    if pos != len(expr):
+        raise error.ParseError(_("invalid token"), pos)
+    return tree
 
 def getstring(x, err):
     if x and (x[0] == 'string' or x[0] == 'symbol'):
@@ -186,7 +189,11 @@ def clean(mctx, x):
 def func(mctx, a, b):
     if a[0] == 'symbol' and a[1] in symbols:
         return symbols[a[1]](mctx, b)
-    raise error.UnknownIdentifier(a[1], symbols.keys())
+
+    keep = lambda fn: getattr(fn, '__doc__', None) is not None
+
+    syms = [s for (s, fn) in symbols.items() if keep(fn)]
+    raise error.UnknownIdentifier(a[1], syms)
 
 def getlist(x):
     if not x:
@@ -273,7 +280,7 @@ def grep(mctx, x):
     try:
         # i18n: "grep" is a keyword
         r = re.compile(getstring(x, _("grep requires a pattern")))
-    except re.error, e:
+    except re.error as e:
         raise error.ParseError(_('invalid match pattern: %s') % e)
     return [f for f in mctx.existing() if r.search(mctx.ctx[f].data())]
 
@@ -491,9 +498,7 @@ _existingcallers = [
 ]
 
 def getfileset(ctx, expr):
-    tree, pos = parse(expr)
-    if (pos != len(expr)):
-        raise error.ParseError(_("invalid token"), pos)
+    tree = parse(expr)
 
     # do we need status info?
     if (_intree(['modified', 'added', 'removed', 'deleted',
@@ -515,6 +520,9 @@ def getfileset(ctx, expr):
         subset = list(ctx.walk(ctx.match([])))
 
     return getset(matchctx(ctx, subset, status), tree)
+
+def prettyformat(tree):
+    return parser.prettyformat(tree, ('string', 'symbol'))
 
 # tell hggettext to extract docstrings from these functions:
 i18nfunctions = symbols.values()

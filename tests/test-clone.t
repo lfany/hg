@@ -64,7 +64,7 @@ Invalid dest '' must abort:
 No update, with debug option:
 
 #if hardlink
-  $ hg --debug clone -U . ../c
+  $ hg --debug clone -U . ../c --config progress.debug=true
   linking: 1
   linking: 2
   linking: 3
@@ -75,7 +75,7 @@ No update, with debug option:
   linking: 8
   linked 8 files
 #else
-  $ hg --debug clone -U . ../c
+  $ hg --debug clone -U . ../c --config progress.debug=true
   linking: 1
   copying: 2
   copying: 3
@@ -357,7 +357,6 @@ Test clone with a branch named "@" (issue3677)
 
   $ hg -R ua branch @
   marked working directory as branch @
-  (branches are permanent and global, did you want a bookmark?)
   $ hg -R ua commit -m 'created branch @'
   $ hg clone ua atbranch
   updating to branch default

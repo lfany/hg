@@ -299,7 +299,7 @@ def _fm1purereadmarkers(data, off):
 
     # Loop on markers
     stop = len(data) - _fm1fsize
-    ufixed = util.unpacker(_fm1fixed)
+    ufixed = struct.Struct(_fm1fixed).unpack
 
     while off <= stop:
         # read fixed part
@@ -718,7 +718,7 @@ def listmarkers(repo):
     """List markers over pushkey"""
     if not repo.obsstore:
         return {}
-    return _pushkeyescape(repo.obsstore)
+    return _pushkeyescape(sorted(repo.obsstore))
 
 def pushmarker(repo, key, old, new):
     """Push markers over pushkey"""
@@ -1110,13 +1110,17 @@ def _computeobsoleteset(repo):
 @cachefor('unstable')
 def _computeunstableset(repo):
     """the set of non obsolete revisions with obsolete parents"""
-    # revset is not efficient enough here
-    # we do (obsolete()::) - obsolete() by hand
-    obs = getrevs(repo, 'obsolete')
-    if not obs:
-        return set()
-    cl = repo.changelog
-    return set(r for r in cl.descendants(obs) if r not in obs)
+    revs = [(ctx.rev(), ctx) for ctx in
+            repo.set('(not public()) and (not obsolete())')]
+    revs.sort(key=lambda x:x[0])
+    unstable = set()
+    for rev, ctx in revs:
+        # A rev is unstable if one of its parent is obsolete or unstable
+        # this works since we traverse following growing rev order
+        if any((x.obsolete() or (x.rev() in unstable))
+                for x in ctx.parents()):
+            unstable.add(rev)
+    return unstable
 
 @cachefor('suspended')
 def _computesuspendedset(repo):
@@ -1139,19 +1143,18 @@ def _computebumpedset(repo):
     public = phases.public
     cl = repo.changelog
     torev = cl.nodemap.get
-    obs = getrevs(repo, 'obsolete')
-    for rev in repo:
+    for ctx in repo.set('(not public()) and (not obsolete())'):
+        rev = ctx.rev()
         # We only evaluate mutable, non-obsolete revision
-        if (public < phase(repo, rev)) and (rev not in obs):
-            node = cl.node(rev)
-            # (future) A cache of precursors may worth if split is very common
-            for pnode in allprecursors(repo.obsstore, [node],
-                                       ignoreflags=bumpedfix):
-                prev = torev(pnode) # unfiltered! but so is phasecache
-                if (prev is not None) and (phase(repo, prev) <= public):
-                    # we have a public precursors
-                    bumped.add(rev)
-                    break # Next draft!
+        node = ctx.node()
+        # (future) A cache of precursors may worth if split is very common
+        for pnode in allprecursors(repo.obsstore, [node],
+                                   ignoreflags=bumpedfix):
+            prev = torev(pnode) # unfiltered! but so is phasecache
+            if (prev is not None) and (phase(repo, prev) <= public):
+                # we have a public precursors
+                bumped.add(rev)
+                break # Next draft!
     return bumped
 
 @cachefor('divergent')
@@ -1211,8 +1214,9 @@ def createmarkers(repo, relations, flag=0, date=None, metadata=None):
                 localmetadata.update(rel[2])
 
             if not prec.mutable():
-                raise util.Abort("cannot obsolete immutable changeset: %s"
-                                 % prec)
+                raise util.Abort("cannot obsolete public changeset: %s"
+                                 % prec,
+                                 hint='see "hg help phases" for details')
             nprec = prec.node()
             nsucs = tuple(s.node() for s in sucs)
             npare = None

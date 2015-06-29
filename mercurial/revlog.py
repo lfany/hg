@@ -12,6 +12,7 @@ and O(changes) merge between branches.
 """
 
 # import stuff from node for others to import from revlog
+import collections
 from node import bin, hex, nullid, nullrev
 from i18n import _
 import ancestor, mdiff, parsers, error, util, templatefilters
@@ -88,7 +89,7 @@ def decompress(bin):
     if t == 'x':
         try:
             return _decompress(bin)
-        except zlib.error, e:
+        except zlib.error as e:
             raise RevlogError(_("revlog decompress error: %s") % str(e))
     if t == 'u':
         return bin[1:]
@@ -151,6 +152,10 @@ class revlogoldio(object):
 indexformatng = ">Qiiiiii20s12x"
 ngshaoffset = 32
 versionformat = ">I"
+
+# corresponds to uncompressed length of indexformatng (2 gigs, 4-byte
+# signed integer)
+_maxentrysize = 0x7fffffff
 
 class revlogio(object):
     def __init__(self):
@@ -241,7 +246,7 @@ class revlog(object):
             if len(i) > 0:
                 v = struct.unpack(versionformat, i[:4])[0]
                 self._initempty = False
-        except IOError, inst:
+        except IOError as inst:
             if inst.errno != errno.ENOENT:
                 raise
 
@@ -485,7 +490,7 @@ class revlog(object):
 
         # take all ancestors from heads that aren't in has
         missing = set()
-        visit = util.deque(r for r in heads if r not in has)
+        visit = collections.deque(r for r in heads if r not in has)
         while visit:
             r = visit.popleft()
             if r in missing:
@@ -725,7 +730,7 @@ class revlog(object):
             return self._headrevs()
 
     def computephases(self, roots):
-        return self.index.computephases(roots)
+        return self.index.computephasesmapsets(roots)
 
     def _headrevs(self):
         count = len(self)
@@ -1179,6 +1184,12 @@ class revlog(object):
         if link == nullrev:
             raise RevlogError(_("attempted to add linkrev -1 to %s")
                               % self.indexfile)
+
+        if len(text) > _maxentrysize:
+            raise RevlogError(
+                _("%s: size of %d bytes exceeds maximum revlog storage of 2GiB")
+                % (self.indexfile, len(text)))
+
         node = node or self.hash(text, p1, p2)
         if node in self.nodemap:
             return node
@@ -1560,7 +1571,7 @@ class revlog(object):
             actual = f.tell()
             f.close()
             dd = actual - expected
-        except IOError, inst:
+        except IOError as inst:
             if inst.errno != errno.ENOENT:
                 raise
             dd = 0
@@ -1579,7 +1590,7 @@ class revlog(object):
                     databytes += max(0, self.length(r))
                 dd = 0
                 di = actual - len(self) * s - databytes
-        except IOError, inst:
+        except IOError as inst:
             if inst.errno != errno.ENOENT:
                 raise
             di = 0

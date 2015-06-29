@@ -197,11 +197,11 @@ class darcs_source(converter_source, commandline):
         try:
             data = util.readfile(path)
             mode = os.lstat(path).st_mode
-        except IOError, inst:
+        except IOError as inst:
             if inst.errno == errno.ENOENT:
                 return None, None
             raise
-        mode = (mode & 0111) and 'x' or ''
+        mode = (mode & 0o111) and 'x' or ''
         return data, mode
 
     def gettags(self):

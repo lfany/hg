@@ -148,7 +148,7 @@ log on directory
 
   $ hg log -f -l1 --style something
   abort: style 'something' not found
-  (available styles: bisect, changelog, compact, default, phases, xml)
+  (available styles: bisect, changelog, compact, default, phases, status, xml)
   [255]
 
 -f, phases style
@@ -1653,7 +1653,7 @@ working-directory revision requires special treatment
     "date": [*, 0], (glob)
     "desc": "",
     "bookmarks": [],
-    "tags": ["tip"],
+    "tags": [],
     "parents": ["65624cd9070a035fa7191a54f2b8af39f16b0c08"]
    }
   ]
@@ -1677,7 +1677,7 @@ working-directory revision requires special treatment
     "date": [*, 0], (glob)
     "desc": "",
     "bookmarks": [],
-    "tags": ["tip"],
+    "tags": [],
     "parents": ["65624cd9070a035fa7191a54f2b8af39f16b0c08"],
     "manifest": null,
     "extra": {"branch": "default"},

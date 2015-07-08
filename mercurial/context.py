@@ -9,7 +9,7 @@ from node import nullid, nullrev, short, hex, bin
 from i18n import _
 import mdiff, error, util, scmutil, subrepo, patch, encoding, phases
 import match as matchmod
-import copy, os, errno, stat
+import os, errno, stat
 import obsolete as obsmod
 import repoview
 import fileset
@@ -249,13 +249,25 @@ class basectx(object):
             return ''
 
     def sub(self, path):
+        '''return a subrepo for the stored revision of path, never wdir()'''
         return subrepo.subrepo(self, path)
 
-    def match(self, pats=[], include=None, exclude=None, default='glob'):
+    def nullsub(self, path, pctx):
+        return subrepo.nullsubrepo(self, path, pctx)
+
+    def workingsub(self, path):
+        '''return a subrepo for the stored revision, or wdir if this is a wdir
+        context.
+        '''
+        return subrepo.subrepo(self, path, allowwdir=True)
+
+    def match(self, pats=[], include=None, exclude=None, default='glob',
+              listsubrepos=False, badfn=None):
         r = self._repo
         return matchmod.match(r.root, r.getcwd(), pats,
                               include, exclude, default,
-                              auditor=r.auditor, ctx=self)
+                              auditor=r.auditor, ctx=self,
+                              listsubrepos=listsubrepos, badfn=badfn)
 
     def diff(self, ctx2=None, match=None, **opts):
         """Returns a diff generator for the given contexts and matcher"""
@@ -338,7 +350,7 @@ class basectx(object):
 
 
 def makememctx(repo, parents, text, user, date, branch, files, store,
-               editor=None):
+               editor=None, extra=None):
     def getfilectx(repo, memctx, path):
         data, mode, copied = store.getfile(path)
         if data is None:
@@ -346,7 +358,8 @@ def makememctx(repo, parents, text, user, date, branch, files, store,
         islink, isexec = mode
         return memfilectx(repo, path, data, islink=islink, isexec=isexec,
                                   copied=copied, memctx=memctx)
-    extra = {}
+    if extra is None:
+        extra = {}
     if branch:
         extra['branch'] = encoding.fromlocal(branch)
     ctx =  memctx(repo, parents, text, files, getfilectx, user,
@@ -459,7 +472,7 @@ class changectx(basectx):
                 pass
         except (error.FilteredIndexError, error.FilteredLookupError,
                 error.FilteredRepoLookupError):
-            if repo.filtername == 'visible':
+            if repo.filtername.startswith('visible'):
                 msg = _("hidden revision '%s'") % changeid
                 hint = _('use --hidden to access hidden revisions')
                 raise error.FilteredRepoLookupError(msg, hint=hint)
@@ -589,19 +602,17 @@ class changectx(basectx):
     def walk(self, match):
         '''Generates matching file names.'''
 
-        # Override match.bad method to have message with nodeid
-        match = copy.copy(match)
-        oldbad = match.bad
+        # Wrap match.bad method to have message with nodeid
         def bad(fn, msg):
             # The manifest doesn't know about subrepos, so don't complain about
             # paths into valid subrepos.
-            if util.any(fn == s or fn.startswith(s + '/')
-                        for s in self.substate):
+            if any(fn == s or fn.startswith(s + '/')
+                   for s in self.substate):
                 return
-            oldbad(fn, _('no such file in rev %s') % self)
-        match.bad = bad
+            match.bad(fn, _('no such file in rev %s') % self)
 
-        return self._manifest.walk(match)
+        m = matchmod.badmatch(match, bad)
+        return self._manifest.walk(m)
 
     def matches(self, match):
         return self.walk(match)
@@ -1236,10 +1247,7 @@ class committablectx(basectx):
         return self._extra
 
     def tags(self):
-        t = []
-        for p in self.parents():
-            t.extend(p.tags())
-        return t
+        return []
 
     def bookmarks(self):
         b = []
@@ -1329,6 +1337,9 @@ class workingctx(committablectx):
 
     def __contains__(self, key):
         return self._repo.dirstate[key] not in "?r"
+
+    def hex(self):
+        return "ff" * 20
 
     @propertycache
     def _parents(self):
@@ -1424,7 +1435,7 @@ class workingctx(committablectx):
     def copy(self, source, dest):
         try:
             st = self._repo.wvfs.lstat(dest)
-        except OSError, err:
+        except OSError as err:
             if err.errno != errno.ENOENT:
                 raise
             self._repo.ui.warn(_("%s does not exist!\n") % dest)
@@ -1443,17 +1454,21 @@ class workingctx(committablectx):
             finally:
                 wlock.release()
 
-    def match(self, pats=[], include=None, exclude=None, default='glob'):
+    def match(self, pats=[], include=None, exclude=None, default='glob',
+              listsubrepos=False, badfn=None):
         r = self._repo
 
         # Only a case insensitive filesystem needs magic to translate user input
         # to actual case in the filesystem.
         if not util.checkcase(r.root):
             return matchmod.icasefsmatcher(r.root, r.getcwd(), pats, include,
-                                           exclude, default, r.auditor, self)
+                                           exclude, default, r.auditor, self,
+                                           listsubrepos=listsubrepos,
+                                           badfn=badfn)
         return matchmod.match(r.root, r.getcwd(), pats,
                               include, exclude, default,
-                              auditor=r.auditor, ctx=self)
+                              auditor=r.auditor, ctx=self,
+                              listsubrepos=listsubrepos, badfn=badfn)
 
     def _filtersuspectsymlink(self, files):
         if not files or self._repo.dirstate._checklink:
@@ -1666,7 +1681,7 @@ class workingfilectx(committablefilectx):
         t, tz = self._changectx.date()
         try:
             return (int(self._repo.wvfs.lstat(self._path).st_mtime), tz)
-        except OSError, err:
+        except OSError as err:
             if err.errno != errno.ENOENT:
                 raise
             return (t, tz)

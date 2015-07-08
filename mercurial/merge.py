@@ -145,7 +145,7 @@ class mergestate(object):
                 else:
                     records.append(('F', l[:-1]))
             f.close()
-        except IOError, err:
+        except IOError as err:
             if err.errno != errno.ENOENT:
                 raise
         return records
@@ -170,7 +170,7 @@ class mergestate(object):
                 off += length
                 records.append((rtype, record))
             f.close()
-        except IOError, err:
+        except IOError as err:
             if err.errno != errno.ENOENT:
                 raise
         return records
@@ -605,7 +605,7 @@ def calculateupdates(repo, wctx, mctx, ancestors, branchmerge, force, partial,
             # Consensus?
             if len(bids) == 1: # all bids are the same kind of method
                 m, l = bids.items()[0]
-                if util.all(a == l[0] for a in l[1:]): # len(bids) is > 1
+                if all(a == l[0] for a in l[1:]): # len(bids) is > 1
                     repo.ui.note(" %s: consensus for %s\n" % (f, m))
                     actions[f] = l[0]
                     continue
@@ -617,7 +617,7 @@ def calculateupdates(repo, wctx, mctx, ancestors, branchmerge, force, partial,
             # If there are gets and they all agree [how could they not?], do it.
             if 'g' in bids:
                 ga0 = bids['g'][0]
-                if util.all(a == ga0 for a in bids['g'][1:]):
+                if all(a == ga0 for a in bids['g'][1:]):
                     repo.ui.note(" %s: picking 'get' action\n" % f)
                     actions[f] = ga0
                     continue
@@ -660,7 +660,7 @@ def batchremove(repo, actions):
         audit(f)
         try:
             unlink(wjoin(f), ignoremissing=True)
-        except OSError, inst:
+        except OSError as inst:
             repo.ui.warn(_("update failed to remove %s: %s!\n") %
                          (f, inst.strerror))
         if i == 100:

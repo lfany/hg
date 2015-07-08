@@ -12,6 +12,10 @@ import errno
 
 cmdtable = {}
 command = cmdutil.command(cmdtable)
+# Note for extension authors: ONLY specify testedwith = 'internal' for
+# extensions which SHIP WITH MERCURIAL. Non-mainline extensions should
+# be specifying the version(s) of Mercurial they are tested with, or
+# leave the attribute unspecified.
 testedwith = 'internal'
 
 @command('share',
@@ -68,7 +72,7 @@ def unshare(ui, repo):
         destlock and destlock.release()
         lock and lock.release()
 
-    # update store, spath, sopener and sjoin of repo
+    # update store, spath, svfs and sjoin of repo
     repo.unfiltered().__init__(repo.baseui, repo.root)
 
 def extsetup(ui):
@@ -80,7 +84,7 @@ def _hassharedbookmarks(repo):
     """Returns whether this repo has shared bookmarks"""
     try:
         shared = repo.vfs.read('shared').splitlines()
-    except IOError, inst:
+    except IOError as inst:
         if inst.errno != errno.ENOENT:
             raise
         return False

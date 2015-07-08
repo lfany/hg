@@ -457,6 +457,53 @@ test sub modules
   $ git init-db >/dev/null 2>/dev/null
   $ git submodule add ${BASE} >/dev/null 2>/dev/null
   $ commit -a -m 'addsubmodule' >/dev/null 2>/dev/null
+
+test non-tab whitespace .gitmodules
+
+  $ cat >> .gitmodules <<EOF
+  > [submodule "git-repo5"]
+  >   path = git-repo5
+  >   url = git-repo5
+  > EOF
+  $ git commit -q -a -m "weird white space submodule"
+  $ cd ..
+  $ hg convert git-repo6 hg-repo6
+  initializing destination hg-repo6 repository
+  scanning source...
+  sorting...
+  converting...
+  1 addsubmodule
+  0 weird white space submodule
+  updating bookmarks
+
+  $ rm -rf hg-repo6
+  $ cd git-repo6
+  $ git reset --hard 'HEAD^' > /dev/null
+
+test missing .gitmodules
+
+  $ git submodule add ../git-repo4 >/dev/null 2>/dev/null
+  $ git checkout HEAD .gitmodules
+  $ git rm .gitmodules
+  rm '.gitmodules'
+  $ git commit -q -m "remove .gitmodules" .gitmodules
+  $ git commit -q -m "missing .gitmodules"
+  $ cd ..
+  $ hg convert git-repo6 hg-repo6 --traceback
+  fatal: Path '.gitmodules' does not exist in '*' (glob)
+  initializing destination hg-repo6 repository
+  scanning source...
+  sorting...
+  converting...
+  2 addsubmodule
+  1 remove .gitmodules
+  0 missing .gitmodules
+  warning: cannot read submodules config file in * (glob)
+  updating bookmarks
+  $ rm -rf hg-repo6
+  $ cd git-repo6
+  $ rm -rf git-repo4
+  $ git reset --hard 'HEAD^^' > /dev/null
   $ cd ..
 
 test invalid splicemap1

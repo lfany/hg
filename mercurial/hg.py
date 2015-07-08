@@ -92,6 +92,10 @@ def _peerlookup(path):
     try:
         return thing(path)
     except TypeError:
+        # we can't test callable(thing) because 'thing' can be an unloaded
+        # module that implements __call__
+        if not util.safehasattr(thing, 'instance'):
+            raise
         return thing
 
 def islocal(repo):
@@ -198,7 +202,7 @@ def share(ui, source, dest=None, update=True, bookmarks=True):
     requirements = ''
     try:
         requirements = srcrepo.vfs.read('requires')
-    except IOError, inst:
+    except IOError as inst:
         if inst.errno != errno.ENOENT:
             raise
 
@@ -249,7 +253,7 @@ def copystore(ui, srcrepo, destpath):
                 closetopic[0] = topic
             else:
                 ui.progress(topic, pos + num)
-        srcpublishing = srcrepo.ui.configbool('phases', 'publish', True)
+        srcpublishing = srcrepo.publishing()
         srcvfs = scmutil.vfs(srcrepo.sharedpath)
         dstvfs = scmutil.vfs(destpath)
         for f in srcrepo.store.copylist():
@@ -384,7 +388,7 @@ def clone(ui, peeropts, source, dest=None, pull=False, rev=None,
             try:
                 destpath = hgdir
                 util.makedir(destpath, notindexed=True)
-            except OSError, inst:
+            except OSError as inst:
                 if inst.errno == errno.EEXIST:
                     cleandir = None
                     raise util.Abort(_("destination '%s' already exists")
@@ -424,7 +428,7 @@ def clone(ui, peeropts, source, dest=None, pull=False, rev=None,
             try:
                 destpeer = peer(srcrepo or ui, peeropts, dest, create=True)
                                 # only pass ui when no srcrepo
-            except OSError, inst:
+            except OSError as inst:
                 if inst.errno == errno.EEXIST:
                     cleandir = None
                     raise util.Abort(_("destination '%s' already exists")
@@ -497,7 +501,7 @@ def clone(ui, peeropts, source, dest=None, pull=False, rev=None,
                 destrepo.ui.status(status)
                 _update(destrepo, uprev)
                 if update in destrepo._bookmarks:
-                    bookmarks.setcurrent(destrepo, update)
+                    bookmarks.activate(destrepo, update)
     finally:
         release(srclock, destlock)
         if cleandir is not None:
@@ -660,7 +664,28 @@ def revert(repo, node, choose):
 
 def verify(repo):
     """verify the consistency of a repository"""
-    return verifymod.verify(repo)
+    ret = verifymod.verify(repo)
+
+    # Broken subrepo references in hidden csets don't seem worth worrying about,
+    # since they can't be pushed/pulled, and --hidden can be used if they are a
+    # concern.
+
+    # pathto() is needed for -R case
+    revs = repo.revs("filelog(%s)",
+                     util.pathto(repo.root, repo.getcwd(), '.hgsubstate'))
+
+    if revs:
+        repo.ui.status(_('checking subrepo links\n'))
+        for rev in revs:
+            ctx = repo[rev]
+            try:
+                for subpath in ctx.substate:
+                    ret = ctx.sub(subpath).verify() or ret
+            except Exception:
+                repo.ui.warn(_('.hgsubstate is corrupt in revision %s\n') %
+                             node.short(ctx.node()))
+
+    return ret
 
 def remoteui(src, opts):
     'build a remote ui from ui or repo and opts'

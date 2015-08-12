@@ -778,7 +778,7 @@ def _histedit(ui, repo, state, *freeargs, **opts):
         return
     elif goal == 'abort':
         state.read()
-        mapping, tmpnodes, leafs, _ntm = processreplacement(state)
+        tmpnodes, leafs = newnodestoabort(state)
         ui.debug('restore wc to old parent %s\n' % node.short(state.topmost))
 
         # Recover our old commits if necessary
@@ -791,13 +791,9 @@ def _histedit(ui, repo, state, *freeargs, **opts):
             os.remove(backupfile)
 
         # check whether we should update away
-        parentnodes = [c.node() for c in repo[None].parents()]
-        for n in leafs | set([state.parentctxnode]):
-            if n in parentnodes:
-                hg.clean(repo, state.topmost)
-                break
-        else:
-            pass
+        if repo.unfiltered().revs('parents() and (%n  or %ln::)',
+                                  state.parentctxnode, leafs | tmpnodes):
+            hg.clean(repo, state.topmost)
         cleanupnode(ui, repo, 'created', tmpnodes)
         cleanupnode(ui, repo, 'temp', leafs)
         state.clear()
@@ -1009,6 +1005,25 @@ def verifyrules(rules, repo, ctxs):
                 hint=_('do you want to use the drop action?'))
     return parsed
 
+def newnodestoabort(state):
+    """process the list of replacements to return
+
+    1) the list of final node
+    2) the list of temporary node
+
+    This meant to be used on abort as less data are required in this case.
+    """
+    replacements = state.replacements
+    allsuccs = set()
+    replaced = set()
+    for rep in replacements:
+        allsuccs.update(rep[1])
+        replaced.add(rep[0])
+    newnodes = allsuccs - replaced
+    tmpnodes = allsuccs & replaced
+    return newnodes, tmpnodes
+
+
 def processreplacement(state):
     """process the list of replacements to return
 
@@ -1113,6 +1128,10 @@ def cleanupnode(ui, repo, name, nodes):
     lock = None
     try:
         lock = repo.lock()
+        # do not let filtering get in the way of the cleanse
+        # we should probably get ride of obsolescence marker created during the
+        # histedit, but we currently do not have such information.
+        repo = repo.unfiltered()
         # Find all node that need to be stripped
         # (we hg %lr instead of %ln to silently ignore unknown item
         nm = repo.changelog.nodemap

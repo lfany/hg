@@ -197,11 +197,53 @@ names that should work without quoting
   <filteredset
     <baseset [7]>>
   7
-  $ try -- '-a-b-c-' # complains
-  hg: parse error at 7: not a prefix: end
-  [255]
-  $ log -a-b-c- # succeeds with fallback
+
+names that should be caught by fallback mechanism
+
+  $ try -- '-a-b-c-'
+  ('symbol', '-a-b-c-')
+  * set:
+  <baseset [4]>
   4
+  $ log -a-b-c-
+  4
+  $ try '+a+b+c+'
+  ('symbol', '+a+b+c+')
+  * set:
+  <baseset [3]>
+  3
+  $ try '+a+b+c+:'
+  (rangepost
+    ('symbol', '+a+b+c+'))
+  * set:
+  <spanset+ 3:9>
+  3
+  4
+  5
+  6
+  7
+  8
+  9
+  $ try ':+a+b+c+'
+  (rangepre
+    ('symbol', '+a+b+c+'))
+  * set:
+  <spanset+ 0:3>
+  0
+  1
+  2
+  3
+  $ try -- '-a-b-c-:+a+b+c+'
+  (range
+    ('symbol', '-a-b-c-')
+    ('symbol', '+a+b+c+'))
+  * set:
+  <spanset- 3:4>
+  4
+  3
+  $ log '-a-b-c-:+a+b+c+'
+  4
+  3
 
   $ try -- -a-b-c--a # complains
   (minus

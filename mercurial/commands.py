@@ -13,7 +13,7 @@ import sys, socket
 import hg, scmutil, util, revlog, copies, error, bookmarks
 import patch, help, encoding, templatekw, discovery
 import archival, changegroup, cmdutil, hbisect
-import sshserver, hgweb, commandserver
+import sshserver, hgweb
 import extensions
 from hgweb import server as hgweb_server
 import merge as mergemod
@@ -2933,7 +2933,7 @@ def debugrevspec(ui, repo, expr, **opts):
     expansion.
     """
     if ui.verbose:
-        tree = revset.parse(expr)
+        tree = revset.parse(expr, lookup=repo.__contains__)
         ui.note(revset.prettyformat(tree), "\n")
         newtree = revset.findaliases(ui, tree)
         if newtree != tree:
@@ -2945,7 +2945,7 @@ def debugrevspec(ui, repo, expr, **opts):
         if opts["optimize"]:
             weight, optimizedtree = revset.optimize(newtree, True)
             ui.note("* optimized:\n", revset.prettyformat(optimizedtree), "\n")
-    func = revset.match(ui, expr)
+    func = revset.match(ui, expr, repo)
     revs = func(repo)
     if ui.verbose:
         ui.note("* set:\n", revset.prettyformatset(revs), "\n")
@@ -5713,6 +5713,7 @@ def serve(ui, repo, **opts):
         s.serve_forever()
 
     if opts["cmdserver"]:
+        import commandserver
         service = commandserver.createservice(ui, repo, opts)
         return cmdutil.service(opts, initfn=service.init, runfn=service.run)
 
@@ -6248,7 +6249,7 @@ def tag(ui, repo, name1, *names, **opts):
                         raise util.Abort(_("tag '%s' is not a global tag") % n)
                     else:
                         raise util.Abort(_("tag '%s' is not a local tag") % n)
-            rev_ = nullid
+            rev_ = 'null'
             if not message:
                 # we don't translate commit messages
                 message = 'Removed tag %s' % ', '.join(names)

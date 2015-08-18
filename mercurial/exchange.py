@@ -571,7 +571,7 @@ def _pushb2obsmarkers(pushop, bundler):
 
 @b2partsgenerator('bookmarks')
 def _pushb2bookmarks(pushop, bundler):
-    """handle phase push through bundle2"""
+    """handle bookmark push through bundle2"""
     if 'bookmarks' in pushop.stepsdone:
         return
     b2caps = bundle2.bundle2caps(pushop.remote)
@@ -1419,7 +1419,7 @@ def unbundle(repo, cg, heads, source, url):
                 op = bundle2.bundleoperation(repo, lambda: tr,
                                              captureoutput=captureoutput)
                 try:
-                    r = bundle2.processbundle(repo, cg, op=op)
+                    op = bundle2.processbundle(repo, cg, op=op)
                 finally:
                     r = op.reply
                     if captureoutput and r is not None:

@@ -60,9 +60,41 @@ We approximate that by reducing the read buffer to 1 byte.
 
   $ cd ..
 
-Test corrupted p1/p2 fields that could cause SEGV at parsers.c:
-
 #if no-pure
+
+Test SEGV caused by bad revision passed to reachableroots() (issue4775):
+
+  $ cd a
+
+  $ python <<EOF
+  > from mercurial import changelog, scmutil
+  > cl = changelog.changelog(scmutil.vfs('.hg/store'))
+  > print 'goods:'
+  > for head in [0, len(cl) - 1, -1]:
+  >     print'%s: %r' % (head, cl.reachableroots(0, [head], set([0])))
+  > print 'bads:'
+  > for head in [len(cl), 10000, -2, -10000, None]:
+  >     print '%s:' % head,
+  >     try:
+  >         cl.reachableroots(0, [head], set([0]))
+  >         print 'uncaught buffer overflow?'
+  >     except (IndexError, TypeError) as inst:
+  >         print inst
+  > EOF
+  goods:
+  0: <baseset [0]>
+  1: <baseset [0]>
+  -1: <baseset []>
+  bads:
+  2: head out of range
+  10000: head out of range
+  -2: head out of range
+  -10000: head out of range
+  None: an integer is required
+
+  $ cd ..
+
+Test corrupted p1/p2 fields that could cause SEGV at parsers.c:
 
   $ mkdir invalidparent
   $ cd invalidparent
@@ -94,6 +126,8 @@ Test corrupted p1/p2 fields that could cause SEGV at parsers.c:
   > cl = changelog.changelog(scmutil.vfs(sys.argv[1]))
   > n0, n1 = cl.node(0), cl.node(1)
   > ops = [
+  >     ('reachableroots',
+  >      lambda: cl.index.reachableroots(0, [1], set([0]), False)),
   >     ('compute_phases_map_sets', lambda: cl.computephases([[0], []])),
   >     ('index_headrevs', lambda: cl.headrevs()),
   >     ('find_gca_candidates', lambda: cl.commonancestorsheads(n0, n1)),
@@ -109,11 +143,13 @@ Test corrupted p1/p2 fields that could cause SEGV at parsers.c:
   > EOF
 
   $ python test.py limit/.hg/store
+  reachableroots: parent out of range
   compute_phases_map_sets: parent out of range
   index_headrevs: parent out of range
   find_gca_candidates: parent out of range
   find_deepest: parent out of range
   $ python test.py segv/.hg/store
+  reachableroots: parent out of range
   compute_phases_map_sets: parent out of range
   index_headrevs: parent out of range
   find_gca_candidates: parent out of range

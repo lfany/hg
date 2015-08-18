@@ -1105,6 +1105,153 @@ static inline void set_phase_from_parents(char *phases, int parent_1,
 		phases[i] = phases[parent_2];
 }
 
+static PyObject *reachableroots(indexObject *self, PyObject *args)
+{
+
+	/* Input */
+	long minroot;
+	PyObject *includepatharg = NULL;
+	int includepath = 0;
+	/* heads is a list */
+	PyObject *heads = NULL;
+	/* roots is a set */
+	PyObject *roots = NULL;
+	PyObject *reachable = NULL;
+
+	PyObject *val;
+	Py_ssize_t len = index_length(self) - 1;
+	long revnum;
+	Py_ssize_t k;
+	Py_ssize_t i;
+	Py_ssize_t l;
+	int r;
+	int minidx;
+	int parents[2];
+
+	/* Internal data structure:
+	 * tovisit: array of length len+1 (all revs + nullrev), filled upto lentovisit
+	 * revstates: array of length len+1 (all revs + nullrev) */
+	int *tovisit = NULL;
+	long lentovisit = 0;
+	enum { RS_SEEN = 1 };
+	char *revstates = NULL;
+
+	/* Get arguments */
+	if (!PyArg_ParseTuple(args, "lO!O!O!", &minroot, &PyList_Type, &heads,
+				&PySet_Type, &roots, &PyBool_Type, &includepatharg))
+		goto bail;
+
+	if (includepatharg == Py_True)
+		includepath = 1;
+
+	/* Initialize return set */
+	reachable = PySet_New(NULL);
+	if (reachable == NULL) {
+		PyErr_NoMemory();
+		goto bail;
+	}
+
+	/* Initialize internal datastructures */
+	tovisit = (int *)malloc((len + 1) * sizeof(int));
+	if (tovisit == NULL) {
+		PyErr_NoMemory();
+		goto bail;
+	}
+
+	revstates = (char *)calloc(len + 1, 1);
+	if (revstates == NULL) {
+		PyErr_NoMemory();
+		goto bail;
+	}
+
+	/* Populate tovisit with all the heads */
+	l = PyList_GET_SIZE(heads);
+	for (i = 0; i < l; i++) {
+		revnum = PyInt_AsLong(PyList_GET_ITEM(heads, i));
+		if (revnum == -1 && PyErr_Occurred())
+			goto bail;
+		if (revnum + 1 < 0 || revnum + 1 >= len + 1) {
+			PyErr_SetString(PyExc_IndexError, "head out of range");
+			goto bail;
+		}
+		if (!(revstates[revnum + 1] & RS_SEEN)) {
+			tovisit[lentovisit++] = revnum;
+			revstates[revnum + 1] |= RS_SEEN;
+		}
+	}
+
+	/* Visit the tovisit list and find the reachable roots */
+	k = 0;
+	while (k < lentovisit) {
+		/* Add the node to reachable if it is a root*/
+		revnum = tovisit[k++];
+		val = PyInt_FromLong(revnum);
+		if (val == NULL)
+			goto bail;
+		if (PySet_Contains(roots, val) == 1) {
+			PySet_Add(reachable, val);
+			if (includepath == 0) {
+				Py_DECREF(val);
+				continue;
+			}
+		}
+		Py_DECREF(val);
+
+		/* Add its parents to the list of nodes to visit */
+		if (revnum == -1)
+			continue;
+		r = index_get_parents(self, revnum, parents, (int)len - 1);
+		if (r < 0)
+			goto bail;
+		for (i = 0; i < 2; i++) {
+			if (!(revstates[parents[i] + 1] & RS_SEEN)
+			    && parents[i] >= minroot) {
+				tovisit[lentovisit++] = parents[i];
+				revstates[parents[i] + 1] |= RS_SEEN;
+			}
+		}
+	}
+
+	/* Find all the nodes in between the roots we found and the heads
+	 * and add them to the reachable set */
+	if (includepath == 1) {
+		minidx = minroot;
+		if (minidx < 0)
+			minidx = 0;
+		for (i = minidx; i < len; i++) {
+			if (!(revstates[i + 1] & RS_SEEN))
+				continue;
+			r = index_get_parents(self, i, parents, (int)len - 1);
+			/* Corrupted index file, error is set from
+			 * index_get_parents */
+			if (r < 0)
+				goto bail;
+			for (k = 0; k < 2; k++) {
+				PyObject *p = PyInt_FromLong(parents[k]);
+				if (p == NULL)
+					goto bail;
+				if (PySet_Contains(reachable, p) == 1) {
+					val = PyInt_FromLong(i);
+					if (val == NULL)
+						goto bail;
+					PySet_Add(reachable, val);
+					Py_DECREF(val);
+				}
+				Py_DECREF(p);
+			}
+		}
+	}
+
+	free(revstates);
+	free(tovisit);
+	return reachable;
+bail:
+	Py_XDECREF(reachable);
+	free(revstates);
+	free(tovisit);
+	return NULL;
+}
+
 static PyObject *compute_phases_map_sets(indexObject *self, PyObject *args)
 {
 	PyObject *roots = Py_None;
@@ -2282,6 +2429,8 @@ static PyMethodDef index_methods[] = {
 	 "get an index entry"},
 	{"computephasesmapsets", (PyCFunction)compute_phases_map_sets,
 			METH_VARARGS, "compute phases"},
+	{"reachableroots", (PyCFunction)reachableroots, METH_VARARGS,
+		"reachableroots"},
 	{"headrevs", (PyCFunction)index_headrevs, METH_VARARGS,
 	 "get head revisions"}, /* Can do filtering since 3.2 */
 	{"headrevsfiltered", (PyCFunction)index_headrevs, METH_VARARGS,

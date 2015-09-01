@@ -10,7 +10,7 @@ from i18n import _
 import os, sys, errno, re, tempfile, cStringIO, shutil
 import util, scmutil, templater, patch, error, templatekw, revlog, copies
 import match as matchmod
-import context, repair, graphmod, revset, phases, obsolete, pathutil
+import repair, graphmod, revset, phases, obsolete, pathutil
 import changelog
 import bookmarks
 import encoding
@@ -848,6 +848,8 @@ def tryimportone(ui, repo, hunk, parents, opts, msgs, updatefunc):
     :updatefunc: a function that update a repo to a given node
                  updatefunc(<repo>, <node>)
     """
+    # avoid cycle context -> subrepo -> cmdutil
+    import context
     tmpname, message, user, date, branch, nodeid, p1, p2 = \
         patch.extract(ui, hunk)
 
@@ -1412,15 +1414,32 @@ class changeset_templater(changeset_printer):
 
         self.cache = {}
 
+        # find correct templates for current mode
+        tmplmodes = [
+            (True, None),
+            (self.ui.verbose, 'verbose'),
+            (self.ui.quiet, 'quiet'),
+            (self.ui.debugflag, 'debug'),
+        ]
+
+        self._parts = {'header': '', 'footer': '', 'changeset': 'changeset'}
+        for mode, postfix in tmplmodes:
+            for t in self._parts:
+                cur = t
+                if postfix:
+                    cur += "_" + postfix
+                if mode and cur in self.t:
+                    self._parts[t] = cur
+
     def _show(self, ctx, copies, matchfn, props):
         '''show a single changeset or file revision'''
 
         showlist = templatekw.showlist
 
-        # showparents() behaviour depends on ui trace level which
-        # causes unexpected behaviours at templating level and makes
+        # showparents() behavior depends on ui trace level which
+        # causes unexpected behaviors at templating level and makes
         # it harder to extract it in a standalone function. Its
-        # behaviour cannot be changed so leave it here for now.
+        # behavior cannot be changed so leave it here for now.
         def showparents(**args):
             ctx = args['ctx']
             parents = [[('rev', p.rev()),
@@ -1438,27 +1457,10 @@ class changeset_templater(changeset_printer):
         props['revcache'] = {'copies': copies}
         props['cache'] = self.cache
 
-        # find correct templates for current mode
-
-        tmplmodes = [
-            (True, None),
-            (self.ui.verbose, 'verbose'),
-            (self.ui.quiet, 'quiet'),
-            (self.ui.debugflag, 'debug'),
-        ]
-
-        types = {'header': '', 'footer':'', 'changeset': 'changeset'}
-        for mode, postfix  in tmplmodes:
-            for type in types:
-                cur = postfix and ('%s_%s' % (type, postfix)) or type
-                if mode and cur in self.t:
-                    types[type] = cur
-
         try:
-
             # write header
-            if types['header']:
-                h = templater.stringify(self.t(types['header'], **props))
+            if self._parts['header']:
+                h = templater.stringify(self.t(self._parts['header'], **props))
                 if self.buffered:
                     self.header[ctx.rev()] = h
                 else:
@@ -1467,15 +1469,14 @@ class changeset_templater(changeset_printer):
                         self.ui.write(h)
 
             # write changeset metadata, then patch if requested
-            key = types['changeset']
+            key = self._parts['changeset']
             self.ui.write(templater.stringify(self.t(key, **props)))
             self.showpatch(ctx.node(), matchfn)
 
-            if types['footer']:
+            if self._parts['footer']:
                 if not self.footer:
-                    self.footer = templater.stringify(self.t(types['footer'],
-                                                      **props))
-
+                    self.footer = templater.stringify(
+                        self.t(self._parts['footer'], **props))
         except KeyError as inst:
             msg = _("%s: no key named '%s'")
             raise util.Abort(msg % (self.t.mapfile, inst.args[0]))
@@ -1928,7 +1929,7 @@ def _makelogrevset(repo, pats, opts, revs):
         followfirst = 1
     else:
         followfirst = 0
-    # --follow with FILE behaviour depends on revs...
+    # --follow with FILE behavior depends on revs...
     it = iter(revs)
     startrev = it.next()
     followdescendants = startrev < next(it, startrev)
@@ -2049,7 +2050,7 @@ def _makelogrevset(repo, pats, opts, revs):
     return expr, filematcher
 
 def _logrevs(repo, opts):
-    # Default --rev value depends on --follow but --follow behaviour
+    # Default --rev value depends on --follow but --follow behavior
     # depends on revisions resolved from --rev...
     follow = opts.get('follow') or opts.get('follow_first')
     if opts.get('rev'):
@@ -2464,6 +2465,9 @@ def commit(ui, repo, commitfunc, pats, opts):
     return commitfunc(ui, repo, message, matcher, opts)
 
 def amend(ui, repo, commitfunc, old, extra, pats, opts):
+    # avoid cycle context -> subrepo -> cmdutil
+    import context
+
     # amend will reuse the existing user if not specified, but the obsolete
     # marker creation requires that the current user's name is specified.
     if obsolete.isenabled(repo, obsolete.createmarkersopt):

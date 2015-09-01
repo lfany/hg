@@ -38,7 +38,7 @@ file open in your editor::
  #  f, fold = use commit, but combine it with the one above
  #  r, roll = like fold, but discard this commit's description
  #  d, drop = remove commit from history
- #  m, mess = edit message without changing commit content
+ #  m, mess = edit commit message without changing commit content
  #
 
 In this file, lines beginning with ``#`` are ignored. You must specify a rule
@@ -60,7 +60,7 @@ would reorganize the file to look like this::
  #  f, fold = use commit, but combine it with the one above
  #  r, roll = like fold, but discard this commit's description
  #  d, drop = remove commit from history
- #  m, mess = edit message without changing commit content
+ #  m, mess = edit commit message without changing commit content
  #
 
 At which point you close the editor and ``histedit`` starts working. When you
@@ -144,7 +144,7 @@ repository that Mercurial does not detect to be related to the source
 repo, you can add a ``--force`` option.
 
 Histedit rule lines are truncated to 80 characters by default. You
-can customise this behaviour by setting a different length in your
+can customise this behavior by setting a different length in your
 configuration file::
 
   [histedit]
@@ -198,7 +198,7 @@ editcomment = _("""# Edit history between %s and %s
 #  f, fold = use commit, but combine it with the one above
 #  r, roll = like fold, but discard this commit's description
 #  d, drop = remove commit from history
-#  m, mess = edit message without changing commit content
+#  m, mess = edit commit message without changing commit content
 #
 """)
 
@@ -675,9 +675,9 @@ def histedit(ui, repo, *freeargs, **opts):
     destination repository. If URL of the destination is omitted, the
     'default-push' (or 'default') path will be used.
 
-    For safety, this command is aborted, also if there are ambiguous
-    outgoing revisions which may confuse users: for example, there are
-    multiple branches containing outgoing revisions.
+    For safety, this command is also aborted if there are ambiguous
+    outgoing revisions which may confuse users: for example, if there
+    are multiple branches containing outgoing revisions.
 
     Use "min(outgoing() and ::.)" or similar revset specification
     instead of --outgoing to specify edit target revision exactly in
@@ -778,7 +778,7 @@ def _histedit(ui, repo, state, *freeargs, **opts):
         return
     elif goal == 'abort':
         state.read()
-        mapping, tmpnodes, leafs, _ntm = processreplacement(state)
+        tmpnodes, leafs = newnodestoabort(state)
         ui.debug('restore wc to old parent %s\n' % node.short(state.topmost))
 
         # Recover our old commits if necessary
@@ -791,13 +791,9 @@ def _histedit(ui, repo, state, *freeargs, **opts):
             os.remove(backupfile)
 
         # check whether we should update away
-        parentnodes = [c.node() for c in repo[None].parents()]
-        for n in leafs | set([state.parentctxnode]):
-            if n in parentnodes:
-                hg.clean(repo, state.topmost)
-                break
-        else:
-            pass
+        if repo.unfiltered().revs('parents() and (%n  or %ln::)',
+                                  state.parentctxnode, leafs | tmpnodes):
+            hg.clean(repo, state.topmost)
         cleanupnode(ui, repo, 'created', tmpnodes)
         cleanupnode(ui, repo, 'temp', leafs)
         state.clear()
@@ -1009,6 +1005,25 @@ def verifyrules(rules, repo, ctxs):
                 hint=_('do you want to use the drop action?'))
     return parsed
 
+def newnodestoabort(state):
+    """process the list of replacements to return
+
+    1) the list of final node
+    2) the list of temporary node
+
+    This meant to be used on abort as less data are required in this case.
+    """
+    replacements = state.replacements
+    allsuccs = set()
+    replaced = set()
+    for rep in replacements:
+        allsuccs.update(rep[1])
+        replaced.add(rep[0])
+    newnodes = allsuccs - replaced
+    tmpnodes = allsuccs & replaced
+    return newnodes, tmpnodes
+
+
 def processreplacement(state):
     """process the list of replacements to return
 
@@ -1019,15 +1034,15 @@ def processreplacement(state):
     allsuccs = set()
     replaced = set()
     fullmapping = {}
-    # initialise basic set
-    # fullmapping record all operation recorded in replacement
+    # initialize basic set
+    # fullmapping records all operations recorded in replacement
     for rep in replacements:
         allsuccs.update(rep[1])
         replaced.add(rep[0])
         fullmapping.setdefault(rep[0], set()).update(rep[1])
     new = allsuccs - replaced
     tmpnodes = allsuccs & replaced
-    # Reduce content fullmapping  into direct relation between original nodes
+    # Reduce content fullmapping into direct relation between original nodes
     # and final node created during history edition
     # Dropped changeset are replaced by an empty list
     toproceed = set(fullmapping)
@@ -1113,6 +1128,10 @@ def cleanupnode(ui, repo, name, nodes):
     lock = None
     try:
         lock = repo.lock()
+        # do not let filtering get in the way of the cleanse
+        # we should probably get ride of obsolescence marker created during the
+        # histedit, but we currently do not have such information.
+        repo = repo.unfiltered()
         # Find all node that need to be stripped
         # (we hg %lr instead of %ln to silently ignore unknown item
         nm = repo.changelog.nodemap

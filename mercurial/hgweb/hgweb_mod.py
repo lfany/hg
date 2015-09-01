@@ -61,7 +61,79 @@ def makebreadcrumb(url, prefix=''):
     return reversed(breadcrumb)
 
 
+class requestcontext(object):
+    """Holds state/context for an individual request.
+
+    Servers can be multi-threaded. Holding state on the WSGI application
+    is prone to race conditions. Instances of this class exist to hold
+    mutable and race-free state for requests.
+    """
+    def __init__(self, app):
+        object.__setattr__(self, 'app', app)
+        object.__setattr__(self, 'repo', app.repo)
+
+        object.__setattr__(self, 'archives', ('zip', 'gz', 'bz2'))
+
+        object.__setattr__(self, 'maxchanges',
+                           self.configint('web', 'maxchanges', 10))
+        object.__setattr__(self, 'stripecount',
+                           self.configint('web', 'stripes', 1))
+        object.__setattr__(self, 'maxshortchanges',
+                           self.configint('web', 'maxshortchanges', 60))
+        object.__setattr__(self, 'maxfiles',
+                           self.configint('web', 'maxfiles', 10))
+        object.__setattr__(self, 'allowpull',
+                           self.configbool('web', 'allowpull', True))
+
+    # Proxy unknown reads and writes to the application instance
+    # until everything is moved to us.
+    def __getattr__(self, name):
+        return getattr(self.app, name)
+
+    def __setattr__(self, name, value):
+        return setattr(self.app, name, value)
+
+    # Servers are often run by a user different from the repo owner.
+    # Trust the settings from the .hg/hgrc files by default.
+    def config(self, section, name, default=None, untrusted=True):
+        return self.repo.ui.config(section, name, default,
+                                   untrusted=untrusted)
+
+    def configbool(self, section, name, default=False, untrusted=True):
+        return self.repo.ui.configbool(section, name, default,
+                                       untrusted=untrusted)
+
+    def configint(self, section, name, default=None, untrusted=True):
+        return self.repo.ui.configint(section, name, default,
+                                      untrusted=untrusted)
+
+    def configlist(self, section, name, default=None, untrusted=True):
+        return self.repo.ui.configlist(section, name, default,
+                                       untrusted=untrusted)
+
+    archivespecs = {
+        'bz2': ('application/x-bzip2', 'tbz2', '.tar.bz2', None),
+        'gz': ('application/x-gzip', 'tgz', '.tar.gz', None),
+        'zip': ('application/zip', 'zip', '.zip', None),
+    }
+
+    def archivelist(self, nodeid):
+        allowed = self.configlist('web', 'allow_archive')
+        for typ, spec in self.archivespecs.iteritems():
+            if typ in allowed or self.configbool('web', 'allow%s' % typ):
+                yield {'type': typ, 'extension': spec[2], 'node': nodeid}
+
 class hgweb(object):
+    """HTTP server for individual repositories.
+
+    Instances of this class serve HTTP responses for a particular
+    repository.
+
+    Instances are typically used as WSGI applications.
+
+    Some servers are multi-threaded. On these servers, there may
+    be multiple active threads inside __call__.
+    """
     def __init__(self, repo, name=None, baseui=None):
         if isinstance(repo, str):
             if baseui:
@@ -87,8 +159,6 @@ class hgweb(object):
         self.repostate = ((-1, -1), (-1, -1))
         self.mtime = -1
         self.reponame = name
-        self.archives = 'zip', 'gz', 'bz2'
-        self.stripecount = 1
         # we use untrusted=False to prevent a repo owner from using
         # web.templates in .hg/hgrc to get access to any file readable
         # by the user running the CGI script
@@ -103,10 +173,6 @@ class hgweb(object):
 
     def configbool(self, section, name, default=False, untrusted=True):
         return self.repo.ui.configbool(section, name, default,
-                                       untrusted=untrusted)
-
-    def configlist(self, section, name, default=None, untrusted=True):
-        return self.repo.ui.configlist(section, name, default,
                                        untrusted=untrusted)
 
     def _getview(self, repo):
@@ -129,7 +195,7 @@ class hgweb(object):
         else:
             return repo.filtered('served')
 
-    def refresh(self, request=None):
+    def refresh(self, request):
         repostate = []
         # file of interrests mtime and size
         for meth, fname in foi:
@@ -142,22 +208,21 @@ class hgweb(object):
         if repostate != self.repostate:
             r = hg.repository(self.repo.baseui, self.repo.url())
             self.repo = self._getview(r)
-            self.maxchanges = int(self.config("web", "maxchanges", 10))
-            self.stripecount = int(self.config("web", "stripes", 1))
-            self.maxshortchanges = int(self.config("web", "maxshortchanges",
-                                                   60))
-            self.maxfiles = int(self.config("web", "maxfiles", 10))
-            self.allowpull = self.configbool("web", "allowpull", True)
             encoding.encoding = self.config("web", "encoding",
                                             encoding.encoding)
             # update these last to avoid threads seeing empty settings
             self.repostate = repostate
             # mtime is needed for ETag
             self.mtime = st.st_mtime
-        if request:
-            self.repo.ui.environ = request.env
+
+        self.repo.ui.environ = request.env
 
     def run(self):
+        """Start a server from CGI environment.
+
+        Modern servers should be using WSGI and should avoid this
+        method, if possible.
+        """
         if not os.environ.get('GATEWAY_INTERFACE', '').startswith("CGI/1."):
             raise RuntimeError("This function is only intended to be "
                                "called while running as a CGI script.")
@@ -165,12 +230,21 @@ class hgweb(object):
         wsgicgi.launch(self)
 
     def __call__(self, env, respond):
+        """Run the WSGI application.
+
+        This may be called by multiple threads.
+        """
         req = wsgirequest(env, respond)
         return self.run_wsgi(req)
 
     def run_wsgi(self, req):
+        """Internal method to run the WSGI application.
 
+        This is typically only called by Mercurial. External consumers
+        should be using instances of this class as the WSGI application.
+        """
         self.refresh(req)
+        rctx = requestcontext(self)
 
         # work with CGI variables to create coherent structure
         # use SCRIPT_NAME, PATH_INFO and QUERY_STRING as well as our REPO_NAME
@@ -201,7 +275,7 @@ class hgweb(object):
                 if query:
                     raise ErrorResponse(HTTP_NOT_FOUND)
                 if cmd in perms:
-                    self.check_perm(req, perms[cmd])
+                    self.check_perm(rctx, req, perms[cmd])
                 return protocol.call(self.repo, req, cmd)
             except ErrorResponse as inst:
                 # A client that sends unbundle without 100-continue will
@@ -247,7 +321,7 @@ class hgweb(object):
 
             if cmd == 'archive':
                 fn = req.form['node'][0]
-                for type_, spec in self.archive_specs.iteritems():
+                for type_, spec in rctx.archivespecs.iteritems():
                     ext = spec[2]
                     if fn.endswith(ext):
                         req.form['node'] = [fn[:-len(ext)]]
@@ -262,7 +336,7 @@ class hgweb(object):
 
             # check read permissions non-static content
             if cmd != 'static':
-                self.check_perm(req, None)
+                self.check_perm(rctx, req, None)
 
             if cmd == '':
                 req.form['cmd'] = [tmpl.cache['default']]
@@ -275,9 +349,9 @@ class hgweb(object):
                 raise ErrorResponse(HTTP_BAD_REQUEST, msg)
             elif cmd == 'file' and 'raw' in req.form.get('style', []):
                 self.ctype = ctype
-                content = webcommands.rawfile(self, req, tmpl)
+                content = webcommands.rawfile(rctx, req, tmpl)
             else:
-                content = getattr(webcommands, cmd)(self, req, tmpl)
+                content = getattr(webcommands, cmd)(rctx, req, tmpl)
                 req.respond(HTTP_OK, ctype)
 
             return content
@@ -408,18 +482,6 @@ class hgweb(object):
                                             })
         return tmpl
 
-    def archivelist(self, nodeid):
-        allowed = self.configlist("web", "allow_archive")
-        for i, spec in self.archive_specs.iteritems():
-            if i in allowed or self.configbool("web", "allow" + i):
-                yield {"type" : i, "extension" : spec[2], "node" : nodeid}
-
-    archive_specs = {
-        'bz2': ('application/x-bzip2', 'tbz2', '.tar.bz2', None),
-        'gz': ('application/x-gzip', 'tgz', '.tar.gz', None),
-        'zip': ('application/zip', 'zip', '.zip', None),
-        }
-
-    def check_perm(self, req, op):
+    def check_perm(self, rctx, req, op):
         for permhook in permhooks:
-            permhook(self, req, op)
+            permhook(rctx, req, op)

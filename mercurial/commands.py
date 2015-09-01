@@ -13,7 +13,7 @@ import sys, socket
 import hg, scmutil, util, revlog, copies, error, bookmarks
 import patch, help, encoding, templatekw, discovery
 import archival, changegroup, cmdutil, hbisect
-import sshserver, hgweb, commandserver
+import sshserver, hgweb
 import extensions
 from hgweb import server as hgweb_server
 import merge as mergemod
@@ -2700,9 +2700,12 @@ def debugpvec(ui, repo, a, b=None):
               pa.distance(pb), rel))
 
 @command('debugrebuilddirstate|debugrebuildstate',
-    [('r', 'rev', '', _('revision to rebuild to'), _('REV'))],
+    [('r', 'rev', '', _('revision to rebuild to'), _('REV')),
+     ('', 'minimal', None, _('only rebuild files that are inconsistent with '
+                             'the working copy parent')),
+    ],
     _('[-r REV]'))
-def debugrebuilddirstate(ui, repo, rev):
+def debugrebuilddirstate(ui, repo, rev, **opts):
     """rebuild the dirstate as it would look like for the given revision
 
     If no revision is specified the first current parent will be used.
@@ -2711,13 +2714,33 @@ def debugrebuilddirstate(ui, repo, rev):
     The actual working directory content or existing dirstate
     information such as adds or removes is not considered.
 
+    ``minimal`` will only rebuild the dirstate status for files that claim to be
+    tracked but are not in the parent manifest, or that exist in the parent
+    manifest but are not in the dirstate. It will not change adds, removes, or
+    modified files that are in the working copy parent.
+
     One use of this command is to make the next :hg:`status` invocation
     check the actual file content.
     """
     ctx = scmutil.revsingle(repo, rev)
     wlock = repo.wlock()
     try:
-        repo.dirstate.rebuild(ctx.node(), ctx.manifest())
+        dirstate = repo.dirstate
+
+        # See command doc for what minimal does.
+        if opts.get('minimal'):
+            dirstatefiles = set(dirstate)
+            ctxfiles = set(ctx.manifest().keys())
+            for file in (dirstatefiles | ctxfiles):
+                indirstate = file in dirstatefiles
+                inctx = file in ctxfiles
+
+                if indirstate and not inctx and dirstate[file] != 'a':
+                    dirstate.drop(file)
+                elif inctx and not indirstate:
+                    dirstate.normallookup(file)
+        else:
+            dirstate.rebuild(ctx.node(), ctx.manifest())
     finally:
         wlock.release()
 
@@ -2933,7 +2956,7 @@ def debugrevspec(ui, repo, expr, **opts):
     expansion.
     """
     if ui.verbose:
-        tree = revset.parse(expr)
+        tree = revset.parse(expr, lookup=repo.__contains__)
         ui.note(revset.prettyformat(tree), "\n")
         newtree = revset.findaliases(ui, tree)
         if newtree != tree:
@@ -2945,7 +2968,7 @@ def debugrevspec(ui, repo, expr, **opts):
         if opts["optimize"]:
             weight, optimizedtree = revset.optimize(newtree, True)
             ui.note("* optimized:\n", revset.prettyformat(optimizedtree), "\n")
-    func = revset.match(ui, expr)
+    func = revset.match(ui, expr, repo)
     revs = func(repo)
     if ui.verbose:
         ui.note("* set:\n", revset.prettyformatset(revs), "\n")
@@ -5251,18 +5274,14 @@ def push(ui, repo, dest=None, **opts):
                 # this lets simultaneous -r, -b options continue working
                 opts.setdefault('rev', []).append("null")
 
-    dest = ui.expandpath(dest or 'default-push', dest or 'default')
-    dest, branches = hg.parseurl(dest, opts.get('branch'))
+    path = ui.paths.getpath(dest, default='default')
+    if not path:
+        raise util.Abort(_('default repository not configured!'),
+                         hint=_('see the "path" section in "hg help config"'))
+    dest, branches = path.pushloc, (path.branch, opts.get('branch') or [])
     ui.status(_('pushing to %s\n') % util.hidepassword(dest))
     revs, checkout = hg.addbranchrevs(repo, repo, branches, opts.get('rev'))
-    try:
-        other = hg.peer(repo, opts, dest)
-    except error.RepoError:
-        if dest == "default-push":
-            raise util.Abort(_("default repository not configured!"),
-                    hint=_('see the "path" section in "hg help config"'))
-        else:
-            raise
+    other = hg.peer(repo, opts, dest)
 
     if revs:
         revs = [repo.lookup(r) for r in scmutil.revrange(repo, revs)]
@@ -5713,6 +5732,7 @@ def serve(ui, repo, **opts):
         s.serve_forever()
 
     if opts["cmdserver"]:
+        import commandserver
         service = commandserver.createservice(ui, repo, opts)
         return cmdutil.service(opts, initfn=service.init, runfn=service.run)
 
@@ -6248,7 +6268,7 @@ def tag(ui, repo, name1, *names, **opts):
                         raise util.Abort(_("tag '%s' is not a global tag") % n)
                     else:
                         raise util.Abort(_("tag '%s' is not a local tag") % n)
-            rev_ = nullid
+            rev_ = 'null'
             if not message:
                 # we don't translate commit messages
                 message = 'Removed tag %s' % ', '.join(names)

@@ -2495,10 +2495,14 @@ Behind the scenes, this will throw AttributeError
   abort: template filter 'escape' is not compatible with keyword 'date'
   [255]
 
+  $ hg log -l 3 --template 'line: {extras|localdate}\n'
+  hg: parse error: localdate expects a date information
+  [255]
+
 Behind the scenes, this will throw ValueError
 
   $ hg tip --template '{author|email|date}\n'
-  abort: template filter 'datefilter' is not compatible with keyword 'author'
+  hg: parse error: date expects a date information
   [255]
 
 Error in nested template:
@@ -3105,6 +3109,25 @@ Test get function:
   hg: parse error: get() expects a dict as first argument
   [255]
 
+Test localdate(date, tz) function:
+
+  $ TZ=JST-09 hg log -r0 -T '{date|localdate|isodate}\n'
+  1970-01-01 09:00 +0900
+  $ TZ=JST-09 hg log -r0 -T '{localdate(date, "UTC")|isodate}\n'
+  1970-01-01 00:00 +0000
+  $ TZ=JST-09 hg log -r0 -T '{localdate(date, "+0200")|isodate}\n'
+  1970-01-01 02:00 +0200
+  $ TZ=JST-09 hg log -r0 -T '{localdate(date, "0")|isodate}\n'
+  1970-01-01 00:00 +0000
+  $ TZ=JST-09 hg log -r0 -T '{localdate(date, 0)|isodate}\n'
+  1970-01-01 00:00 +0000
+  $ hg log -r0 -T '{localdate(date, "invalid")|isodate}\n'
+  hg: parse error: localdate expects a timezone
+  [255]
+  $ hg log -r0 -T '{localdate(date, date)|isodate}\n'
+  hg: parse error: localdate expects a timezone
+  [255]
+
 Test shortest(node) function:
 
   $ echo b > b
@@ -3117,6 +3140,8 @@ Test shortest(node) function:
   e777603221
   bcc7ff960b
   f7769ec2ab
+  $ hg log --template '{node|shortest}\n' -l1
+  e777
 
 Test pad function
 

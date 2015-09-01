@@ -912,6 +912,16 @@ Test a help topic
       working directory is checked out, it is equivalent to null. If an
       uncommitted merge is in progress, "." is the revision of the first parent.
 
+Test repeated config section name
+
+  $ hg help config.host
+      "http_proxy.host"
+          Host name and (optional) port of the proxy server, for example
+          "myproxy:8000".
+  
+      "smtp.host"
+          Host name of mail server, e.g. "mail.example.com".
+  
 Test templating help
 
   $ hg help templating | egrep '(desc|diffstat|firstline|nonempty)  '
@@ -1201,6 +1211,11 @@ Test dynamic list of merge tools only shows up once
   
       ":tagmerge"
         Uses the internal tag merge algorithm (experimental).
+  
+      ":union"
+        Uses the internal non-interactive simple merge algorithm for merging
+        files. It will use both left and right sides for conflict regions. No
+        markers are inserted.
   
       Internal tools are always available and do not require a GUI but will by
       default not handle symlinks or binary files.

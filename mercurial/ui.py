@@ -5,11 +5,28 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
+from __future__ import absolute_import
+
+import errno
+import getpass
 import inspect
-from i18n import _
-import errno, getpass, os, socket, sys, tempfile, traceback
-import config, scmutil, util, error, formatter, progress
-from node import hex
+import os
+import socket
+import sys
+import tempfile
+import traceback
+
+from .i18n import _
+from .node import hex
+
+from . import (
+    config,
+    error,
+    formatter,
+    progress,
+    scmutil,
+    util,
+)
 
 samplehgrcs = {
     'user':
@@ -533,12 +550,9 @@ class ui(object):
 
     def expandpath(self, loc, default=None):
         """Return repository location relative to cwd or from [paths]"""
-        if util.hasscheme(loc) or os.path.isdir(os.path.join(loc, '.hg')):
-            return loc
-
         p = self.paths.getpath(loc, default=default)
         if p:
-            return p.loc
+            return p.rawloc
         return loc
 
     @util.propertycache
@@ -982,10 +996,23 @@ class paths(dict):
             # No location is the same as not existing.
             if not loc:
                 continue
+
+            # TODO ignore default-push once all consumers stop referencing it
+            # since it is handled specifically below.
+
             self[name] = path(name, rawloc=loc)
 
+        # Handle default-push, which is a one-off that defines the push URL for
+        # the "default" path.
+        defaultpush = ui.config('paths', 'default-push')
+        if defaultpush and 'default' in self:
+            self['default']._pushloc = defaultpush
+
     def getpath(self, name, default=None):
-        """Return a ``path`` for the specified name, falling back to a default.
+        """Return a ``path`` from a string, falling back to a default.
+
+        ``name`` can be a named path or locations. Locations are filesystem
+        paths or URIs.
 
         Returns the first of ``name`` or ``default`` that is present, or None
         if neither is present.
@@ -993,6 +1020,12 @@ class paths(dict):
         try:
             return self[name]
         except KeyError:
+            # Try to resolve as a local path or URI.
+            try:
+                return path(None, rawloc=name)
+            except ValueError:
+                pass
+
             if default is not None:
                 try:
                     return self[default]
@@ -1004,15 +1037,51 @@ class paths(dict):
 class path(object):
     """Represents an individual path and its configuration."""
 
-    def __init__(self, name, rawloc=None):
+    def __init__(self, name, rawloc=None, pushloc=None):
         """Construct a path from its config options.
 
         ``name`` is the symbolic name of the path.
         ``rawloc`` is the raw location, as defined in the config.
+        ``pushloc`` is the raw locations pushes should be made to.
+
+        If ``name`` is not defined, we require that the location be a) a local
+        filesystem path with a .hg directory or b) a URL. If not,
+        ``ValueError`` is raised.
         """
+        if not rawloc:
+            raise ValueError('rawloc must be defined')
+
+        # Locations may define branches via syntax <base>#<branch>.
+        u = util.url(rawloc)
+        branch = None
+        if u.fragment:
+            branch = u.fragment
+            u.fragment = None
+
+        self.url = u
+        self.branch = branch
+
         self.name = name
-        # We'll do more intelligent things with rawloc in the future.
-        self.loc = rawloc
+        self.rawloc = rawloc
+        self.loc = str(u)
+        self._pushloc = pushloc
+
+        # When given a raw location but not a symbolic name, validate the
+        # location is valid.
+        if not name and not u.scheme and not self._isvalidlocalpath(self.loc):
+            raise ValueError('location is not a URL or path to a local '
+                             'repo: %s' % rawloc)
+
+    def _isvalidlocalpath(self, path):
+        """Returns True if the given path is a potentially valid repository.
+        This is its own function so that extensions can change the definition of
+        'valid' in this case (like when pulling from a git repo into a hg
+        one)."""
+        return os.path.isdir(os.path.join(path, '.hg'))
+
+    @property
+    def pushloc(self):
+        return self._pushloc or self.loc
 
 # we instantiate one globally shared progress bar to avoid
 # competing progress bars when multiple UI objects get created

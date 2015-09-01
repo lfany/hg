@@ -5,12 +5,23 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
-from i18n import _
-import os, re
-import util, config, templatefilters, templatekw, parser, error
-import revset as revsetmod
+from __future__ import absolute_import
+
+import os
+import re
 import types
-import minirst
+
+from .i18n import _
+from . import (
+    config,
+    error,
+    minirst,
+    parser,
+    revset as revsetmod,
+    templatefilters,
+    templatekw,
+    util,
+)
 
 # template parsing
 
@@ -194,12 +205,6 @@ def getlist(x):
         return getlist(x[1]) + [x[2]]
     return [x]
 
-def getfilter(exp, context):
-    f = getsymbol(exp)
-    if f not in context._filters:
-        raise error.ParseError(_("unknown function '%s'") % f)
-    return context._filters[f]
-
 def gettemplate(exp, context):
     if exp[0] == 'template':
         return [compileexp(e, context, methods) for e in exp[1]]
@@ -209,6 +214,15 @@ def gettemplate(exp, context):
         # by web templates, e.g. 'changelogtag' is redefined in map file.
         return context._load(exp[1])
     raise error.ParseError(_("expected template specifier"))
+
+def evalfuncarg(context, mapping, arg):
+    func, data = arg
+    # func() may return string, generator of strings or arbitrary object such
+    # as date tuple, but filter does not want generator.
+    thing = func(context, mapping, data)
+    if isinstance(thing, types.GeneratorType):
+        thing = stringify(thing)
+    return thing
 
 def runinteger(context, mapping, data):
     return int(data)
@@ -242,24 +256,26 @@ def runtemplate(context, mapping, template):
         yield func(context, mapping, data)
 
 def buildfilter(exp, context):
-    func, data = compileexp(exp[1], context, methods)
-    filt = getfilter(exp[2], context)
-    return (runfilter, (func, data, filt))
+    arg = compileexp(exp[1], context, methods)
+    n = getsymbol(exp[2])
+    if n in context._filters:
+        filt = context._filters[n]
+        return (runfilter, (arg, filt))
+    if n in funcs:
+        f = funcs[n]
+        return (f, [arg])
+    raise error.ParseError(_("unknown function '%s'") % n)
 
 def runfilter(context, mapping, data):
-    func, data, filt = data
-    # func() may return string, generator of strings or arbitrary object such
-    # as date tuple, but filter does not want generator.
-    thing = func(context, mapping, data)
-    if isinstance(thing, types.GeneratorType):
-        thing = stringify(thing)
+    arg, filt = data
+    thing = evalfuncarg(context, mapping, arg)
     try:
         return filt(thing)
     except (ValueError, AttributeError, TypeError):
-        if isinstance(data, tuple):
-            dt = data[1]
+        if isinstance(arg[1], tuple):
+            dt = arg[1][1]
         else:
-            dt = data
+            dt = arg[1]
         raise util.Abort(_("template filter '%s' is not compatible with "
                            "keyword '%s'") % (filt.func_name, dt))
 
@@ -297,12 +313,13 @@ def buildfunc(exp, context):
         if len(args) != 1:
             raise error.ParseError(_("filter %s expects one argument") % n)
         f = context._filters[n]
-        return (runfilter, (args[0][0], args[0][1], f))
+        return (runfilter, (args[0], f))
     raise error.ParseError(_("unknown function '%s'") % n)
 
 def date(context, mapping, args):
     """:date(date[, fmt]): Format a date. See :hg:`help dates` for formatting
-    strings."""
+    strings. The default is a Unix date format, including the timezone:
+    "Mon Sep 04 15:13:13 2006 0700"."""
     if not (1 <= len(args) <= 2):
         # i18n: "date" is a keyword
         raise error.ParseError(_("date expects one or two arguments"))
@@ -499,6 +516,34 @@ def label(context, mapping, args):
     # ignore args[0] (the label string) since this is supposed to be a a no-op
     yield args[1][0](context, mapping, args[1][1])
 
+def localdate(context, mapping, args):
+    """:localdate(date[, tz]): Converts a date to the specified timezone.
+    The default is local date."""
+    if not (1 <= len(args) <= 2):
+        # i18n: "localdate" is a keyword
+        raise error.ParseError(_("localdate expects one or two arguments"))
+
+    date = evalfuncarg(context, mapping, args[0])
+    try:
+        date = util.parsedate(date)
+    except AttributeError:  # not str nor date tuple
+        # i18n: "localdate" is a keyword
+        raise error.ParseError(_("localdate expects a date information"))
+    if len(args) >= 2:
+        tzoffset = None
+        tz = evalfuncarg(context, mapping, args[1])
+        if isinstance(tz, str):
+            tzoffset = util.parsetimezone(tz)
+        if tzoffset is None:
+            try:
+                tzoffset = int(tz)
+            except (TypeError, ValueError):
+                # i18n: "localdate" is a keyword
+                raise error.ParseError(_("localdate expects a timezone"))
+    else:
+        tzoffset = util.makedate()[1]
+    return (date[0], tzoffset)
+
 def revset(context, mapping, args):
     """:revset(query[, formatargs...]): Execute a revision set query. See
     :hg:`help revset`."""
@@ -593,7 +638,8 @@ def shortest(context, mapping, args):
                 return shortest
 
 def strip(context, mapping, args):
-    """:strip(text[, chars]): Strip characters from a string."""
+    """:strip(text[, chars]): Strip characters from a string. By default,
+    strips all leading and trailing whitespace."""
     if not (1 <= len(args) <= 2):
         # i18n: "strip" is a keyword
         raise error.ParseError(_("strip expects one or two arguments"))
@@ -682,6 +728,7 @@ funcs = {
     "indent": indent,
     "join": join,
     "label": label,
+    "localdate": localdate,
     "pad": pad,
     "revset": revset,
     "rstdoc": rstdoc,

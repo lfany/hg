@@ -6,7 +6,7 @@
 # GNU General Public License version 2 or any later version.
 
 from i18n import _
-from mercurial.node import nullrev, wdirrev
+from mercurial.node import wdirrev
 import util, error, osutil, revset, similar, encoding, phases
 import pathutil
 import match as matchmod
@@ -690,6 +690,11 @@ def revsingle(repo, revspec, default='.'):
         raise util.Abort(_('empty revision set'))
     return repo[l.last()]
 
+def _pairspec(revspec):
+    tree = revset.parse(revspec)
+    tree = revset.optimize(tree, True)[1]  # fix up "x^:y" -> "(x^):y"
+    return tree and tree[0] in ('range', 'rangepre', 'rangepost', 'rangeall')
+
 def revpair(repo, revs):
     if not revs:
         return repo.dirstate.p1(), None
@@ -711,67 +716,21 @@ def revpair(repo, revs):
     if first is None:
         raise util.Abort(_('empty revision range'))
 
-    if first == second and len(revs) == 1 and _revrangesep not in revs[0]:
+    # if top-level is range expression, the result must always be a pair
+    if first == second and len(revs) == 1 and not _pairspec(revs[0]):
         return repo.lookup(first), None
 
     return repo.lookup(first), repo.lookup(second)
 
-_revrangesep = ':'
-
 def revrange(repo, revs):
     """Yield revision as strings from a list of revision specifications."""
-
-    def revfix(repo, val, defval):
-        if not val and val != 0 and defval is not None:
-            return defval
-        return repo[val].rev()
-
-    subsets = []
-
-    revsetaliases = [alias for (alias, _) in
-                     repo.ui.configitems("revsetalias")]
-
+    allspecs = []
     for spec in revs:
-        # attempt to parse old-style ranges first to deal with
-        # things like old-tag which contain query metacharacters
-        try:
-            # ... except for revset aliases without arguments. These
-            # should be parsed as soon as possible, because they might
-            # clash with a hash prefix.
-            if spec in revsetaliases:
-                raise error.RepoLookupError
-
-            if isinstance(spec, int):
-                subsets.append(revset.baseset([spec]))
-                continue
-
-            if _revrangesep in spec:
-                start, end = spec.split(_revrangesep, 1)
-                if start in revsetaliases or end in revsetaliases:
-                    raise error.RepoLookupError
-
-                start = revfix(repo, start, 0)
-                end = revfix(repo, end, len(repo) - 1)
-                if end == nullrev and start < 0:
-                    start = nullrev
-                if start < end:
-                    l = revset.spanset(repo, start, end + 1)
-                else:
-                    l = revset.spanset(repo, start, end - 1)
-                subsets.append(l)
-                continue
-            elif spec and spec in repo: # single unquoted rev
-                rev = revfix(repo, spec, None)
-                subsets.append(revset.baseset([rev]))
-                continue
-        except error.RepoLookupError:
-            pass
-
-        # fall through to new-style queries if old-style fails
-        m = revset.match(repo.ui, spec, repo)
-        subsets.append(m(repo))
-
-    return revset._combinesets(subsets)
+        if isinstance(spec, int):
+            spec = revset.formatspec('rev(%d)', spec)
+        allspecs.append(spec)
+    m = revset.matchany(repo.ui, allspecs, repo)
+    return m(repo)
 
 def expandpats(pats):
     '''Expand bare globs when running on windows.
@@ -1103,7 +1062,7 @@ class filecache(object):
     Mercurial either atomic renames or appends for files under .hg,
     so to ensure the cache is reliable we need the filesystem to be able
     to tell us if a file has been replaced. If it can't, we fallback to
-    recreating the object on every call (essentially the same behaviour as
+    recreating the object on every call (essentially the same behavior as
     propertycache).
 
     '''

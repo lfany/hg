@@ -5,9 +5,18 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
-import util, error
-import errno, os, socket, time
+from __future__ import absolute_import
+
+import errno
+import os
+import socket
+import time
 import warnings
+
+from . import (
+    error,
+    util,
+)
 
 class lock(object):
     '''An advisory lock held by one process to control access to a set
@@ -56,7 +65,7 @@ class lock(object):
         timeout = self.timeout
         while True:
             try:
-                self.trylock()
+                self._trylock()
                 return self.timeout - timeout
             except error.LockHeld as inst:
                 if timeout != 0:
@@ -67,14 +76,16 @@ class lock(object):
                 raise error.LockHeld(errno.ETIMEDOUT, inst.filename, self.desc,
                                      inst.locker)
 
-    def trylock(self):
+    def _trylock(self):
         if self.held:
             self.held += 1
             return
         if lock._host is None:
             lock._host = socket.gethostname()
         lockname = '%s:%s' % (lock._host, self.pid)
-        while not self.held:
+        retry = 5
+        while not self.held and retry:
+            retry -= 1
             try:
                 self.vfs.makelock(lockname, self.f)
                 self.held = 1

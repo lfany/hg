@@ -414,6 +414,25 @@ def jsonescape(s):
 
     return ''.join(_jsonmap[c] for c in toutf8b(s))
 
+_utf8len = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 3, 4]
+
+def getutf8char(s, pos):
+    '''get the next full utf-8 character in the given string, starting at pos
+
+    Raises a UnicodeError if the given location does not start a valid
+    utf-8 character.
+    '''
+
+    # find how many bytes to attempt decoding from first nibble
+    l = _utf8len[ord(s[pos]) >> 4]
+    if not l: # ascii
+        return s[pos]
+
+    c = s[pos:pos + l]
+    # validate with attempted decode
+    c.decode("utf-8")
+    return c
+
 def toutf8b(s):
     '''convert a local, possibly-binary string into UTF-8b
 
@@ -444,24 +463,32 @@ def toutf8b(s):
     internal surrogate encoding as a UTF-8 string.)
     '''
 
-    if isinstance(s, localstr):
-        return s._utf8
+    if "\xed" not in s:
+        if isinstance(s, localstr):
+            return s._utf8
+        try:
+            s.decode('utf-8')
+            return s
+        except UnicodeDecodeError:
+            pass
 
-    try:
-        s.decode('utf-8')
-        return s
-    except UnicodeDecodeError:
-        # surrogate-encode any characters that don't round-trip
-        s2 = s.decode('utf-8', 'ignore').encode('utf-8')
-        r = ""
-        pos = 0
-        for c in s:
-            if s2[pos:pos + 1] == c:
-                r += c
+    r = ""
+    pos = 0
+    l = len(s)
+    while pos < l:
+        try:
+            c = getutf8char(s, pos)
+            if "\xed\xb0\x80" <= c <= "\xed\xb3\xbf":
+                # have to re-escape existing U+DCxx characters
+                c = unichr(0xdc00 + ord(s[pos])).encode('utf-8')
                 pos += 1
             else:
-                r += unichr(0xdc00 + ord(c)).encode('utf-8')
-        return r
+                pos += len(c)
+        except UnicodeDecodeError:
+            c = unichr(0xdc00 + ord(s[pos])).encode('utf-8')
+            pos += 1
+        r += c
+    return r
 
 def fromutf8b(s):
     '''Given a UTF-8b string, return a local, possibly-binary string.
@@ -470,11 +497,17 @@ def fromutf8b(s):
     is a round-trip process for strings like filenames, but metadata
     that's was passed through tolocal will remain in UTF-8.
 
+    >>> roundtrip = lambda x: fromutf8b(toutf8b(x)) == x
     >>> m = "\\xc3\\xa9\\x99abcd"
-    >>> n = toutf8b(m)
-    >>> n
+    >>> toutf8b(m)
     '\\xc3\\xa9\\xed\\xb2\\x99abcd'
-    >>> fromutf8b(n) == m
+    >>> roundtrip(m)
+    True
+    >>> roundtrip("\\xc2\\xc2\\x80")
+    True
+    >>> roundtrip("\\xef\\xbf\\xbd")
+    True
+    >>> roundtrip("\\xef\\xef\\xbf\\xbd")
     True
     '''
 
@@ -485,7 +518,7 @@ def fromutf8b(s):
     u = s.decode("utf-8")
     r = ""
     for c in u:
-        if ord(c) & 0xff00 == 0xdc00:
+        if ord(c) & 0xffff00 == 0xdc00:
             r += chr(ord(c) & 0xff)
         else:
             r += c.encode("utf-8")

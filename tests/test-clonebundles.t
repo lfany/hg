@@ -1,5 +1,9 @@
 Set up a server
 
+  $ cat >> $HGRCPATH << EOF
+  > [format]
+  > usegeneraldelta=yes
+  > EOF
   $ hg init server
   $ cd server
   $ cat >> .hg/hgrc << EOF
@@ -80,7 +84,7 @@ Manifest file with invalid URL aborts
   $ echo 'http://does.not.exist/bundle.hg' > server/.hg/clonebundles.manifest
   $ hg clone http://localhost:$HGPORT 404-url
   applying clone bundle from http://does.not.exist/bundle.hg
-  error fetching bundle: * not known (glob)
+  error fetching bundle: (.* not known|getaddrinfo failed) (re)
   abort: error applying bundle
   (if this error persists, consider contacting the server operator or disable clone bundles via "--config experimental.clonebundles=false")
   [255]
@@ -90,7 +94,7 @@ Server is not running aborts
   $ echo "http://localhost:$HGPORT1/bundle.hg" > server/.hg/clonebundles.manifest
   $ hg clone http://localhost:$HGPORT server-not-runner
   applying clone bundle from http://localhost:$HGPORT1/bundle.hg
-  error fetching bundle: Connection refused
+  error fetching bundle: * refused* (glob)
   abort: error applying bundle
   (if this error persists, consider contacting the server operator or disable clone bundles via "--config experimental.clonebundles=false")
   [255]
@@ -308,7 +312,7 @@ Stream clone bundles are supported
 
   $ hg -R server debugcreatestreamclonebundle packed.hg
   writing 613 bytes for 4 files
-  bundle requirements: revlogv1
+  bundle requirements: generaldelta, revlogv1
 
 No bundle spec should work
 

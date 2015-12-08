@@ -19,7 +19,6 @@ import error, osutil, encoding, parsers
 import errno, shutil, sys, tempfile, traceback
 import re as remod
 import os, time, datetime, calendar, textwrap, signal, collections
-import stat
 import imp, socket, urllib
 import gc
 import bz2
@@ -88,42 +87,15 @@ username = platform.username
 
 _notset = object()
 
+# disable Python's problematic floating point timestamps (issue4836)
+# (Python hypocritically says you shouldn't change this behavior in
+# libraries, and sure enough Mercurial is not a library.)
+os.stat_float_times(False)
+
 def safehasattr(thing, attr):
     return getattr(thing, attr, _notset) is not _notset
 
-def sha1(s=''):
-    '''
-    Low-overhead wrapper around Python's SHA support
-
-    >>> f = _fastsha1
-    >>> a = sha1()
-    >>> a = f()
-    >>> a.hexdigest()
-    'da39a3ee5e6b4b0d3255bfef95601890afd80709'
-    '''
-
-    return _fastsha1(s)
-
-def _fastsha1(s=''):
-    # This function will import sha1 from hashlib or sha (whichever is
-    # available) and overwrite itself with it on the first call.
-    # Subsequent calls will go directly to the imported function.
-    if sys.version_info >= (2, 5):
-        from hashlib import sha1 as _sha1
-    else:
-        from sha import sha as _sha1
-    global _fastsha1, sha1
-    _fastsha1 = sha1 = _sha1
-    return _sha1(s)
-
-def md5(s=''):
-    try:
-        from hashlib import md5 as _md5
-    except ImportError:
-        from md5 import md5 as _md5
-    global md5
-    md5 = _md5
-    return _md5(s)
+from hashlib import md5, sha1
 
 DIGESTS = {
     'md5': md5,
@@ -363,6 +335,59 @@ def version():
         return __version__.version
     except ImportError:
         return 'unknown'
+
+def versiontuple(v=None, n=4):
+    """Parses a Mercurial version string into an N-tuple.
+
+    The version string to be parsed is specified with the ``v`` argument.
+    If it isn't defined, the current Mercurial version string will be parsed.
+
+    ``n`` can be 2, 3, or 4. Here is how some version strings map to
+    returned values:
+
+    >>> v = '3.6.1+190-df9b73d2d444'
+    >>> versiontuple(v, 2)
+    (3, 6)
+    >>> versiontuple(v, 3)
+    (3, 6, 1)
+    >>> versiontuple(v, 4)
+    (3, 6, 1, '190-df9b73d2d444')
+
+    >>> versiontuple('3.6.1+190-df9b73d2d444+20151118')
+    (3, 6, 1, '190-df9b73d2d444+20151118')
+
+    >>> v = '3.6'
+    >>> versiontuple(v, 2)
+    (3, 6)
+    >>> versiontuple(v, 3)
+    (3, 6, None)
+    >>> versiontuple(v, 4)
+    (3, 6, None, None)
+    """
+    if not v:
+        v = version()
+    parts = v.split('+', 1)
+    if len(parts) == 1:
+        vparts, extra = parts[0], None
+    else:
+        vparts, extra = parts
+
+    vints = []
+    for i in vparts.split('.'):
+        try:
+            vints.append(int(i))
+        except ValueError:
+            break
+    # (3, 6) -> (3, 6, None)
+    while len(vints) < 3:
+        vints.append(None)
+
+    if n == 2:
+        return (vints[0], vints[1])
+    if n == 3:
+        return (vints[0], vints[1], vints[2])
+    if n == 4:
+        return (vints[0], vints[1], vints[2], extra)
 
 # used by parsedate
 defaultdateformats = (
@@ -953,20 +978,6 @@ def fstat(fp):
     except AttributeError:
         return os.stat(fp.name)
 
-def statmtimesec(st):
-    """Get mtime as integer of seconds
-
-    'int(st.st_mtime)' cannot be used because st.st_mtime is computed as
-    'sec + 1e-9 * nsec' and double-precision floating-point type is too narrow
-    to represent nanoseconds. If 'nsec' is close to 1 sec, 'int(st.st_mtime)'
-    can be 'sec + 1'. (issue4836)
-    """
-    try:
-        return st[stat.ST_MTIME]
-    except (TypeError, IndexError):
-        # osutil.stat doesn't allow index access and its st_mtime is int
-        return st.st_mtime
-
 # File system features
 
 def checkcase(path):
@@ -1409,9 +1420,10 @@ def datestr(date=None, format='%a %b %d %H:%M:%S %Y %1%2'):
     if "%1" in format or "%2" in format or "%z" in format:
         sign = (tz > 0) and "-" or "+"
         minutes = abs(tz) // 60
+        q, r = divmod(minutes, 60)
         format = format.replace("%z", "%1%2")
-        format = format.replace("%1", "%c%02d" % (sign, minutes // 60))
-        format = format.replace("%2", "%02d" % (minutes % 60))
+        format = format.replace("%1", "%c%02d" % (sign, q))
+        format = format.replace("%2", "%02d" % r)
     try:
         t = time.gmtime(float(t) - tz)
     except ValueError:

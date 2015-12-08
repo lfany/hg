@@ -35,12 +35,12 @@
    preserving a for resolve of c
   removing a
    b: remote moved from a -> m (premerge)
-  picked tool ':merge' for b (binary False symlink False)
+  picked tool ':merge' for b (binary False symlink False changedelete False)
   merging a and b to b
   my b@add3f11052fa+ other b@17c05bb7fcb6 ancestor a@b8bf91eeebbc
    premerge successful
    c: remote moved from a -> m (premerge)
-  picked tool ':merge' for c (binary False symlink False)
+  picked tool ':merge' for c (binary False symlink False changedelete False)
   merging a and c to c
   my c@add3f11052fa+ other c@17c05bb7fcb6 ancestor a@b8bf91eeebbc
    premerge successful
@@ -83,7 +83,7 @@ Test disabling copy tracing
   $ hg rebase --keep -d 1 -b 2 --config extensions.rebase= --config experimental.disablecopytrace=True
   rebasing 2:add3f11052fa "other" (tip)
   remote changed a which local deleted
-  use (c)hanged version or leave (d)eleted? c
+  use (c)hanged version, leave (d)eleted, or leave (u)nresolved? c
 
   $ cat b
   1

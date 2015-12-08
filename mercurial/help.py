@@ -27,11 +27,12 @@ def listexts(header, exts, indent=1, showdeprecated=False):
     '''return a text listing of the given extensions'''
     rst = []
     if exts:
-        rst.append('\n%s\n\n' % header)
         for name, desc in sorted(exts.iteritems()):
             if not showdeprecated and any(w in desc for w in _exclkeywords):
                 continue
             rst.append('%s:%s: %s\n' % (' ' * indent, name, desc))
+    if rst:
+        rst.insert(0, '\n%s\n\n' % header)
     return rst
 
 def extshelp(ui):
@@ -115,20 +116,20 @@ def topicmatch(ui, kw):
             doclines = docs.splitlines()
             if doclines:
                 summary = doclines[0]
-            cmdname = cmd.split('|')[0].lstrip('^')
+            cmdname = cmd.partition('|')[0].lstrip('^')
             results['commands'].append((cmdname, summary))
     for name, docs in itertools.chain(
         extensions.enabled(False).iteritems(),
         extensions.disabled().iteritems()):
         # extensions.load ignores the UI argument
         mod = extensions.load(None, name, '')
-        name = name.split('.')[-1]
+        name = name.rpartition('.')[-1]
         if lowercontains(name) or lowercontains(docs):
             # extension docs are already translated
             results['extensions'].append((name, docs.splitlines()[0]))
         for cmd, entry in getattr(mod, 'cmdtable', {}).iteritems():
             if kw in cmd or (len(entry) > 2 and lowercontains(entry[2])):
-                cmdname = cmd.split('|')[0].lstrip('^')
+                cmdname = cmd.partition('|')[0].lstrip('^')
                 if entry[0].__doc__:
                     cmddoc = gettext(entry[0].__doc__).splitlines()[0]
                 else:
@@ -330,7 +331,7 @@ def help_(ui, name, unknowncmd=False, full=True, **opts):
         h = {}
         cmds = {}
         for c, e in commands.table.iteritems():
-            f = c.split("|", 1)[0]
+            f = c.partition("|")[0]
             if select and not select(f):
                 continue
             if (not select and name != 'shortlist' and
@@ -445,7 +446,7 @@ def help_(ui, name, unknowncmd=False, full=True, **opts):
             head, tail = doc, ""
         else:
             head, tail = doc.split('\n', 1)
-        rst = [_('%s extension - %s\n\n') % (name.split('.')[-1], head)]
+        rst = [_('%s extension - %s\n\n') % (name.rpartition('.')[-1], head)]
         if tail:
             rst.extend(tail.splitlines(True))
             rst.append('\n')
@@ -460,7 +461,7 @@ def help_(ui, name, unknowncmd=False, full=True, **opts):
                 ct = mod.cmdtable
             except AttributeError:
                 ct = {}
-            modcmds = set([c.split('|', 1)[0] for c in ct])
+            modcmds = set([c.partition('|')[0] for c in ct])
             rst.extend(helplist(modcmds.__contains__))
         else:
             rst.append(_('(use "hg help extensions" for information on enabling'
@@ -473,7 +474,8 @@ def help_(ui, name, unknowncmd=False, full=True, **opts):
         doc = gettext(mod.__doc__).splitlines()[0]
 
         rst = listexts(_("'%s' is provided by the following "
-                              "extension:") % cmd, {ext: doc}, indent=4)
+                              "extension:") % cmd, {ext: doc}, indent=4,
+                       showdeprecated=True)
         rst.append('\n')
         rst.append(_('(use "hg help extensions" for information on enabling '
                    'extensions)\n'))

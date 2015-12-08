@@ -22,6 +22,25 @@ from . import (
     util,
 )
 
+def _getbkfile(repo):
+    """Hook so that extensions that mess with the store can hook bm storage.
+
+    For core, this just handles wether we should see pending
+    bookmarks or the committed ones. Other extensions (like share)
+    may need to tweak this behavior further.
+    """
+    bkfile = None
+    if 'HG_PENDING' in os.environ:
+        try:
+            bkfile = repo.vfs('bookmarks.pending')
+        except IOError as inst:
+            if inst.errno != errno.ENOENT:
+                raise
+    if bkfile is None:
+        bkfile = repo.vfs('bookmarks')
+    return bkfile
+
+
 class bmstore(dict):
     """Storage for bookmarks.
 
@@ -41,7 +60,7 @@ class bmstore(dict):
         dict.__init__(self)
         self._repo = repo
         try:
-            bkfile = self.getbkfile(repo)
+            bkfile = _getbkfile(repo)
             for line in bkfile:
                 line = line.strip()
                 if not line:
@@ -59,18 +78,15 @@ class bmstore(dict):
         except IOError as inst:
             if inst.errno != errno.ENOENT:
                 raise
+        self._clean = True
 
-    def getbkfile(self, repo):
-        bkfile = None
-        if 'HG_PENDING' in os.environ:
-            try:
-                bkfile = repo.vfs('bookmarks.pending')
-            except IOError as inst:
-                if inst.errno != errno.ENOENT:
-                    raise
-        if bkfile is None:
-            bkfile = repo.vfs('bookmarks')
-        return bkfile
+    def __setitem__(self, *args, **kwargs):
+        self._clean = False
+        return dict.__setitem__(self, *args, **kwargs)
+
+    def __delitem__(self, key):
+        self._clean = False
+        return dict.__delitem__(self, key)
 
     def recordchange(self, tr):
         """record that bookmarks have been changed in a transaction
@@ -89,6 +105,10 @@ class bmstore(dict):
         We also store a backup of the previous state in undo.bookmarks that
         can be copied back on rollback.
         '''
+        msg = 'bm.write() is deprecated, use bm.recordchange(transaction)'
+        self._repo.ui.deprecwarn(msg, '3.7')
+        if self._clean:
+            return
         repo = self._repo
         if (repo.ui.configbool('devel', 'all-warnings')
                 or repo.ui.configbool('devel', 'check-locks')):
@@ -114,9 +134,14 @@ class bmstore(dict):
         wlock = repo.wlock()
         try:
 
-            file = repo.vfs('bookmarks', 'w', atomictemp=True)
-            self._write(file)
-            file.close()
+            file_ = repo.vfs('bookmarks', 'w', atomictemp=True)
+            try:
+                self._write(file_)
+            except: # re-raises
+                file_.discard()
+                raise
+            finally:
+                file_.close()
 
         finally:
             wlock.release()
@@ -124,6 +149,7 @@ class bmstore(dict):
     def _write(self, fp):
         for name, node in self.iteritems():
             fp.write("%s %s\n" % (hex(node), encoding.fromlocal(name)))
+        self._clean = True
 
 def readactive(repo):
     """
@@ -249,7 +275,14 @@ def update(repo, parents, node):
         update = True
 
     if update:
-        marks.write()
+        lock = tr = None
+        try:
+            lock = repo.lock()
+            tr = repo.transaction('bookmark')
+            marks.recordchange(tr)
+            tr.close()
+        finally:
+            lockmod.release(tr, lock)
     return update
 
 def listbookmarks(repo):

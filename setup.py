@@ -79,11 +79,16 @@ from distutils.dist import Distribution
 from distutils.command.build import build
 from distutils.command.build_ext import build_ext
 from distutils.command.build_py import build_py
+from distutils.command.build_scripts import build_scripts
 from distutils.command.install_lib import install_lib
 from distutils.command.install_scripts import install_scripts
 from distutils.spawn import spawn, find_executable
 from distutils import file_util
-from distutils.errors import CCompilerError, DistutilsExecError
+from distutils.errors import (
+    CCompilerError,
+    DistutilsError,
+    DistutilsExecError,
+)
 from distutils.sysconfig import get_python_inc, get_config_var
 from distutils.version import StrictVersion
 
@@ -102,6 +107,7 @@ elif sys.version_info[0] >= 3:
 
 scripts = ['hg']
 if os.name == 'nt':
+    # We remove hg.bat if we are able to build hg.exe.
     scripts.append('contrib/win32/hg.bat')
 
 # simplified version of distutils.ccompiler.CCompiler.has_function
@@ -177,11 +183,9 @@ def runhg(cmd, env):
 
 version = ''
 
-# Execute hg out of this directory with a custom environment which
-# includes the pure Python modules in mercurial/pure. We also take
-# care to not use any hgrc files and do no localization.
-pypath = ['mercurial', os.path.join('mercurial', 'pure')]
-env = {'PYTHONPATH': os.pathsep.join(pypath),
+# Execute hg out of this directory with a custom environment which takes care
+# to not use any hgrc files and do no localization.
+env = {'HGMODULEPOLICY': 'py',
        'HGRCPATH': '',
        'LANGUAGE': 'C'}
 if 'LD_LIBRARY_PATH' in os.environ:
@@ -306,6 +310,31 @@ class hgbuildext(build_ext):
             log.warn("Failed to build optional extension '%s' (skipping)",
                      ext.name)
 
+class hgbuildscripts(build_scripts):
+    def run(self):
+        if os.name != 'nt':
+            return build_scripts.run(self)
+
+        exebuilt = False
+        try:
+            self.run_command('build_hgexe')
+            exebuilt = True
+        except (DistutilsError, CCompilerError):
+            log.warn('failed to build optional hg.exe')
+
+        if exebuilt:
+            # Copying hg.exe to the scripts build directory ensures it is
+            # installed by the install_scripts command.
+            hgexecommand = self.get_finalized_command('build_hgexe')
+            dest = os.path.join(self.build_dir, 'hg.exe')
+            self.mkpath(self.build_dir)
+            self.copy_file(hgexecommand.hgexepath, dest)
+
+            # Remove hg.bat because it is redundant with hg.exe.
+            self.scripts.remove('contrib/win32/hg.bat')
+
+        return build_scripts.run(self)
+
 class hgbuildpy(build_py):
     if convert2to3:
         fixer_names = sorted(set(getfixers("lib2to3.fixes") +
@@ -315,11 +344,6 @@ class hgbuildpy(build_py):
         build_py.finalize_options(self)
 
         if self.distribution.pure:
-            if self.py_modules is None:
-                self.py_modules = []
-            for ext in self.distribution.ext_modules:
-                if ext.name.startswith("mercurial."):
-                    self.py_modules.append("mercurial.pure.%s" % ext.name[10:])
             self.distribution.ext_modules = []
         else:
             h = os.path.join(get_python_inc(), 'Python.h')
@@ -327,14 +351,21 @@ class hgbuildpy(build_py):
                 raise SystemExit('Python headers are required to build '
                                  'Mercurial but weren\'t found in %s' % h)
 
-    def find_modules(self):
-        modules = build_py.find_modules(self)
-        for module in modules:
-            if module[0] == "mercurial.pure":
-                if module[1] != "__init__":
-                    yield ("mercurial", module[1], module[2])
+    def copy_file(self, *args, **kwargs):
+        dst, copied = build_py.copy_file(self, *args, **kwargs)
+
+        if copied and dst.endswith('__init__.py'):
+            if self.distribution.pure:
+                modulepolicy = 'py'
             else:
-                yield module
+                modulepolicy = 'c'
+            content = open(dst, 'rb').read()
+            content = content.replace(b'@MODULELOADPOLICY@',
+                                      modulepolicy.encode(libdir_escape))
+            with open(dst, 'wb') as fh:
+                fh.write(content)
+
+        return dst, copied
 
 class buildhgextindex(Command):
     description = 'generate prebuilt index of hgext (for frozen package)'
@@ -388,6 +419,11 @@ class buildhgexe(build_ext):
         self.compiler.link_executable(objects, target,
                                       libraries=[],
                                       output_dir=self.build_temp)
+
+    @property
+    def hgexepath(self):
+        dir = os.path.dirname(self.get_ext_fullpath('dummy'))
+        return os.path.join(self.build_temp, dir, 'hg.exe')
 
 class hginstalllib(install_lib):
     '''
@@ -443,6 +479,25 @@ class hginstallscripts(install_scripts):
     def run(self):
         install_scripts.run(self)
 
+        # It only makes sense to replace @LIBDIR@ with the install path if
+        # the install path is known. For wheels, the logic below calculates
+        # the libdir to be "../..". This is because the internal layout of a
+        # wheel archive looks like:
+        #
+        #   mercurial-3.6.1.data/scripts/hg
+        #   mercurial/__init__.py
+        #
+        # When installing wheels, the subdirectories of the "<pkg>.data"
+        # directory are translated to system local paths and files therein
+        # are copied in place. The mercurial/* files are installed into the
+        # site-packages directory. However, the site-packages directory
+        # isn't known until wheel install time. This means we have no clue
+        # at wheel generation time what the installed site-packages directory
+        # will be. And, wheels don't appear to provide the ability to register
+        # custom code to run during wheel installation. This all means that
+        # we can't reliably set the libdir in wheels: the default behavior
+        # of looking in sys.path must do.
+
         if (os.path.splitdrive(self.install_dir)[0] !=
             os.path.splitdrive(self.install_lib)[0]):
             # can't make relative paths from one drive to another, so use an
@@ -464,6 +519,14 @@ class hginstallscripts(install_scripts):
             if b('\0') in data:
                 continue
 
+            # During local installs, the shebang will be rewritten to the final
+            # install path. During wheel packaging, the shebang has a special
+            # value.
+            if data.startswith(b'#!python'):
+                log.info('not rewriting @LIBDIR@ in %s because install path '
+                         'not known' % outfile)
+                continue
+
             data = data.replace(b('@LIBDIR@'), libdir.encode(libdir_escape))
             fp = open(outfile, 'wb')
             fp.write(data)
@@ -473,6 +536,7 @@ cmdclass = {'build': hgbuild,
             'build_mo': hgbuildmo,
             'build_ext': hgbuildext,
             'build_py': hgbuildpy,
+            'build_scripts': hgbuildscripts,
             'build_hgextindex': buildhgextindex,
             'install_lib': hginstalllib,
             'install_scripts': hginstallscripts,
@@ -480,10 +544,9 @@ cmdclass = {'build': hgbuild,
             }
 
 packages = ['mercurial', 'mercurial.hgweb', 'mercurial.httpclient',
+            'mercurial.pure',
             'hgext', 'hgext.convert', 'hgext.highlight', 'hgext.zeroconf',
             'hgext.largefiles']
-
-pymodules = []
 
 common_depends = ['mercurial/util.h']
 
@@ -636,7 +699,6 @@ setup(name='mercurial',
       ],
       scripts=scripts,
       packages=packages,
-      py_modules=pymodules,
       ext_modules=extmodules,
       data_files=datafiles,
       package_data=packagedata,

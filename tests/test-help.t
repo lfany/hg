@@ -372,17 +372,30 @@ Verbose help for add
   
       If no names are given, add all files to the repository.
   
-      An example showing how new (unknown) files are added automatically by "hg
-      add":
+      Examples:
   
-        $ ls
-        foo.c
-        $ hg status
-        ? foo.c
-        $ hg add
-        adding foo.c
-        $ hg status
-        A foo.c
+        - New (unknown) files are added automatically by "hg add":
+  
+            $ ls
+            foo.c
+            $ hg status
+            ? foo.c
+            $ hg add
+            adding foo.c
+            $ hg status
+            A foo.c
+  
+        - Specific files to be added can be specified:
+  
+            $ ls
+            bar.c  foo.c
+            $ hg status
+            ? bar.c
+            ? foo.c
+            $ hg add bar.c
+            $ hg status
+            A bar.c
+            ? foo.c
   
       Returns 0 if all files are successfully added.
   
@@ -799,6 +812,8 @@ Test list of internal help commands
                  description
    debugdata     dump the contents of a data file revision
    debugdate     parse and display a date
+   debugdeltachain
+                 dump information about delta chains in a revlog
    debugdirstate
                  show the contents of the current dirstate
    debugdiscovery
@@ -1028,12 +1043,12 @@ Test help hooks
 
 Test -e / -c / -k combinations
 
-  $ hg help -c progress
-  abort: no such help topic: progress
-  (try "hg help --keyword progress")
+  $ hg help -c schemes
+  abort: no such help topic: schemes
+  (try "hg help --keyword schemes")
   [255]
-  $ hg help -e progress |head -1
-  progress extension - show progress bars for some actions (DEPRECATED)
+  $ hg help -e schemes |head -1
+  schemes extension - extend schemes with shortcuts to repository swarms
   $ hg help -c -k dates |egrep '^(Topics|Extensions|Commands):'
   Commands:
   $ hg help -e -k a |egrep '^(Topics|Extensions|Commands):'
@@ -1192,28 +1207,43 @@ Test section lookup
       "paths"
       -------
   
-      Assigns symbolic names to repositories. The left side is the symbolic
-      name, and the right gives the directory or URL that is the location of the
-      repository. Default paths can be declared by setting the following
-      entries.
+      Assigns symbolic names and behavior to repositories.
   
-      "default"
-          Directory or URL to use when pulling if no source is specified.
-          (default: repository from which the current repository was cloned)
-  
-      "default-push"
-          Optional. Directory or URL to use when pushing if no destination is
-          specified.
-  
-      Custom paths can be defined by assigning the path to a name that later can
-      be used from the command line. Example:
+      Options are symbolic names defining the URL or directory that is the
+      location of the repository. Example:
   
         [paths]
-        my_path = http://example.com/path
+        my_server = https://example.com/my_repo
+        local_path = /home/me/repo
   
-      To push to the path defined in "my_path" run the command:
+      These symbolic names can be used from the command line. To pull from
+      "my_server": "hg pull my_server". To push to "local_path": "hg push
+      local_path".
   
-        hg push my_path
+      Options containing colons (":") denote sub-options that can influence
+      behavior for that specific path. Example:
+  
+        [paths]
+        my_server = https://example.com/my_path
+        my_server:pushurl = ssh://example.com/my_path
+  
+      The following sub-options can be defined:
+  
+      "pushurl"
+         The URL to use for push operations. If not defined, the location
+         defined by the path's main entry is used.
+  
+      The following special named paths exist:
+  
+      "default"
+         The URL or directory to use when no source or remote is specified.
+  
+         "hg clone" will automatically define this path to the location the
+         repository was cloned from.
+  
+      "default-push"
+         (deprecated) The URL or directory for the default "hg push" location.
+         "default:pushurl" should be used instead.
   
   $ hg help glossary.mcguffin
   abort: help section not found
@@ -1995,9 +2025,10 @@ Dish up an empty repo; serve it cold.
   If no names are given, add all files to the repository.
   </p>
   <p>
-  An example showing how new (unknown) files are added
-  automatically by &quot;hg add&quot;:
+  Examples:
   </p>
+  <ul>
+   <li> New (unknown) files are added   automatically by &quot;hg add&quot;:
   <pre>
   \$ ls (re)
   foo.c
@@ -2008,6 +2039,19 @@ Dish up an empty repo; serve it cold.
   \$ hg status (re)
   A foo.c
   </pre>
+   <li> Specific files to be added can be specified:
+  <pre>
+  \$ ls (re)
+  bar.c  foo.c
+  \$ hg status (re)
+  ? bar.c
+  ? foo.c
+  \$ hg add bar.c (re)
+  \$ hg status (re)
+  A bar.c
+  ? foo.c
+  </pre>
+  </ul>
   <p>
   Returns 0 if all files are successfully added.
   </p>

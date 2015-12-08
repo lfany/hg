@@ -5,18 +5,43 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
-import os, mimetypes, re, cgi, copy
-import webutil
-from mercurial import error, encoding, archival, templater, templatefilters
-from mercurial.node import short, hex
-from mercurial import util
-from common import paritygen, staticfile, get_contact, ErrorResponse
-from common import HTTP_OK, HTTP_FORBIDDEN, HTTP_NOT_FOUND
-from mercurial import graphmod, patch
-from mercurial import scmutil
-from mercurial.i18n import _
-from mercurial.error import ParseError, RepoLookupError, Abort
-from mercurial import revset
+from __future__ import absolute_import
+
+import cgi
+import copy
+import mimetypes
+import os
+import re
+
+from ..i18n import _
+from ..node import hex, short
+
+from .common import (
+    ErrorResponse,
+    HTTP_FORBIDDEN,
+    HTTP_NOT_FOUND,
+    HTTP_OK,
+    get_contact,
+    paritygen,
+    staticfile,
+)
+
+from .. import (
+    archival,
+    encoding,
+    error,
+    graphmod,
+    patch,
+    revset,
+    scmutil,
+    templatefilters,
+    templater,
+    util,
+)
+
+from . import (
+    webutil,
+)
 
 __all__ = []
 commands = {}
@@ -225,7 +250,7 @@ def _search(web, req, tmpl):
         revdef = 'reverse(%s)' % query
         try:
             tree = revset.parse(revdef)
-        except ParseError:
+        except error.ParseError:
             # can't parse to a revset tree
             return MODE_KEYWORD, query
 
@@ -249,7 +274,8 @@ def _search(web, req, tmpl):
             # RepoLookupError: no such revision, e.g. in 'revision:'
             # Abort: bookmark/tag not exists
             # LookupError: ambiguous identifier, e.g. in '(bc)' on a large repo
-        except (ParseError, RepoLookupError, Abort, LookupError):
+        except (error.ParseError, error.RepoLookupError, error.Abort,
+                LookupError):
             return MODE_KEYWORD, query
 
     def changelist(**map):
@@ -264,8 +290,8 @@ def _search(web, req, tmpl):
             yield tmpl('searchentry',
                        parity=parity.next(),
                        author=ctx.user(),
-                       parent=webutil.parents(ctx),
-                       child=webutil.children(ctx),
+                       parent=lambda **x: webutil.parents(ctx),
+                       child=lambda **x: webutil.children(ctx),
                        changelogtag=showtags,
                        desc=ctx.description(),
                        extra=ctx.extra(),
@@ -766,7 +792,7 @@ def filediff(web, req, tmpl):
         style = req.form['style'][0]
 
     diffs = webutil.diffs(web.repo, tmpl, ctx, None, [path], parity, style)
-    if fctx:
+    if fctx is not None:
         rename = webutil.renamelink(fctx)
         ctx = fctx
     else:
@@ -812,7 +838,6 @@ def comparison(web, req, tmpl):
     if 'file' not in req.form:
         raise ErrorResponse(HTTP_NOT_FOUND, 'file not given')
     path = webutil.cleanpath(web.repo, req.form['file'][0])
-    rename = path in ctx and webutil.renamelink(ctx[path]) or []
 
     parsecontext = lambda v: v == 'full' and -1 or int(v)
     if 'context' in req.form:
@@ -828,6 +853,7 @@ def comparison(web, req, tmpl):
             return [_('(binary file %s, hash: %s)') % (mt, hex(f.filenode()))]
         return f.data().splitlines()
 
+    fctx = None
     parent = ctx.p1()
     leftrev = parent.rev()
     leftnode = parent.node()
@@ -843,10 +869,16 @@ def comparison(web, req, tmpl):
             leftlines = filelines(pfctx)
     else:
         rightlines = ()
-        fctx = ctx.parents()[0][path]
-        leftlines = filelines(fctx)
+        pfctx = ctx.parents()[0][path]
+        leftlines = filelines(pfctx)
 
     comparison = webutil.compare(tmpl, context, leftlines, rightlines)
+    if fctx is not None:
+        rename = webutil.renamelink(fctx)
+        ctx = fctx
+    else:
+        rename = []
+        ctx = ctx
     return tmpl('filecomparison',
                 file=path,
                 node=hex(ctx.node()),
@@ -858,8 +890,8 @@ def comparison(web, req, tmpl):
                 author=ctx.user(),
                 rename=rename,
                 branch=webutil.nodebranchnodefault(ctx),
-                parent=webutil.parents(fctx),
-                child=webutil.children(fctx),
+                parent=webutil.parents(ctx),
+                child=webutil.children(ctx),
                 tags=webutil.nodetagsdict(web.repo, ctx.node()),
                 bookmarks=webutil.nodebookmarksdict(web.repo, ctx.node()),
                 leftrev=leftrev,
@@ -1000,8 +1032,8 @@ def filelog(web, req, tmpl):
                       "author": iterfctx.user(),
                       "date": iterfctx.date(),
                       "rename": webutil.renamelink(iterfctx),
-                      "parent": webutil.parents(iterfctx),
-                      "child": webutil.children(iterfctx),
+                      "parent": lambda **x: webutil.parents(iterfctx),
+                      "child": lambda **x: webutil.children(iterfctx),
                       "desc": iterfctx.description(),
                       "extra": iterfctx.extra(),
                       "tags": webutil.nodetagsdict(repo, iterfctx.node()),
@@ -1019,7 +1051,11 @@ def filelog(web, req, tmpl):
     revnav = webutil.filerevnav(web.repo, fctx.path())
     nav = revnav.gen(end - 1, revcount, count)
     return tmpl("filelog", file=f, node=fctx.hex(), nav=nav,
+                rev=fctx.rev(),
                 symrev=webutil.symrevorshortnode(req, fctx),
+                branch=webutil.nodebranchnodefault(fctx),
+                tags=webutil.nodetagsdict(web.repo, fctx.node()),
+                bookmarks=webutil.nodebookmarksdict(web.repo, fctx.node()),
                 entries=entries,
                 latestentry=latestentry,
                 revcount=revcount, morevars=morevars, lessvars=lessvars)
@@ -1248,7 +1284,7 @@ def graph(web, req, tmpl):
 def _getdoc(e):
     doc = e[0].__doc__
     if doc:
-        doc = _(doc).split('\n')[0]
+        doc = _(doc).partition('\n')[0]
     else:
         doc = _('(no help text available)')
     return doc
@@ -1268,8 +1304,7 @@ def help(web, req, tmpl):
     The ``help`` template will be rendered when requesting help for a topic.
     ``helptopics`` will be rendered for the index of help topics.
     """
-    from mercurial import commands # avoid cycle
-    from mercurial import help as helpmod # avoid cycle
+    from .. import commands, help as helpmod  # avoid cycle
 
     topicname = req.form.get('node', [None])[0]
     if not topicname:
@@ -1278,7 +1313,7 @@ def help(web, req, tmpl):
                 yield {'topic': entries[0], 'summary': summary}
 
         early, other = [], []
-        primary = lambda s: s.split('|')[0]
+        primary = lambda s: s.partition('|')[0]
         for c, e in commands.table.iteritems():
             doc = _getdoc(e)
             if 'DEPRECATED' in doc or c.startswith('debug'):

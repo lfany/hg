@@ -2,7 +2,7 @@
 '''helper extension to measure performance'''
 
 from mercurial import cmdutil, scmutil, util, commands, obsolete
-from mercurial import repoview, branchmap, merge, copies
+from mercurial import repoview, branchmap, merge, copies, error
 import time, os, sys
 import functools
 
@@ -91,7 +91,7 @@ def perfstatus(ui, repo, **opts):
     #m = match.always(repo.root, repo.getcwd())
     #timer(lambda: sum(map(len, repo.dirstate.status(m, [], False, False,
     #                                                False))))
-    timer, fm = gettimer(ui, **opts)
+    timer, fm = gettimer(ui, opts)
     timer(lambda: sum(map(len, repo.status(unknown=opts['unknown']))))
     fm.end()
 
@@ -193,7 +193,7 @@ def perfdirstatedirs(ui, repo, **opts):
     fm.end()
 
 @command('perfdirstatefoldmap', formatteropts)
-def perffilefoldmap(ui, repo, **opts):
+def perfdirstatefoldmap(ui, repo, **opts):
     timer, fm = gettimer(ui, opts)
     dirstate = repo.dirstate
     'a' in dirstate
@@ -239,8 +239,8 @@ def perfmergecalculate(ui, repo, rev, **opts):
     def d():
         # acceptremote is True because we don't want prompts in the middle of
         # our benchmark
-        merge.calculateupdates(repo, wctx, rctx, ancestor, False, False, False,
-                               acceptremote=True)
+        merge.calculateupdates(repo, wctx, rctx, [ancestor], False, False,
+                               False, acceptremote=True, followcopies=True)
     timer(d)
     fm.end()
 
@@ -300,6 +300,9 @@ def perfstartup(ui, repo, **opts):
 @command('perfparents', formatteropts)
 def perfparents(ui, repo, **opts):
     timer, fm = gettimer(ui, opts)
+    if len(repo.changelog) < 1000:
+        raise error.Abort("repo needs 1000 commits for this test")
+    repo = repo.unfiltered()
     nl = [repo.changelog.node(i) for i in xrange(1000)]
     def d():
         for n in nl:
@@ -308,7 +311,7 @@ def perfparents(ui, repo, **opts):
     fm.end()
 
 @command('perfctxfiles', formatteropts)
-def perfparents(ui, repo, x, **opts):
+def perfctxfiles(ui, repo, x, **opts):
     x = int(x)
     timer, fm = gettimer(ui, opts)
     def d():
@@ -317,7 +320,7 @@ def perfparents(ui, repo, x, **opts):
     fm.end()
 
 @command('perfrawfiles', formatteropts)
-def perfparents(ui, repo, x, **opts):
+def perfrawfiles(ui, repo, x, **opts):
     x = int(x)
     timer, fm = gettimer(ui, opts)
     cl = repo.changelog
@@ -325,10 +328,6 @@ def perfparents(ui, repo, x, **opts):
         len(cl.read(x)[3])
     timer(d)
     fm.end()
-
-@command('perflookup', formatteropts)
-def perflookup(ui, repo, rev, **opts):
-    timer, fm = gettimer(ui, opts)
 
 @command('perflookup', formatteropts)
 def perflookup(ui, repo, rev, **opts):
@@ -410,10 +409,13 @@ def perffncachewrite(ui, repo, **opts):
     timer, fm = gettimer(ui, opts)
     s = repo.store
     s.fncache._load()
+    lock = repo.lock()
+    tr = repo.transaction('perffncachewrite')
     def d():
         s.fncache._dirty = True
-        s.fncache.write()
+        s.fncache.write(tr)
     timer(d)
+    lock.release()
     fm.end()
 
 @command('perffncacheencode', formatteropts)
@@ -463,9 +465,10 @@ def perfrevlog(ui, repo, file_, **opts):
     fm.end()
 
 @command('perfrevset',
-         [('C', 'clear', False, 'clear volatile cache between each call.')]
+         [('C', 'clear', False, 'clear volatile cache between each call.'),
+          ('', 'contexts', False, 'obtain changectx for each revision')]
          + formatteropts, "REVSET")
-def perfrevset(ui, repo, expr, clear=False, **opts):
+def perfrevset(ui, repo, expr, clear=False, contexts=False, **opts):
     """benchmark the execution time of a revset
 
     Use the --clean option if need to evaluate the impact of build volatile
@@ -475,7 +478,10 @@ def perfrevset(ui, repo, expr, clear=False, **opts):
     def d():
         if clear:
             repo.invalidatevolatilesets()
-        for r in repo.revs(expr): pass
+        if contexts:
+            for ctx in repo.set(expr): pass
+        else:
+            for r in repo.revs(expr): pass
     timer(d)
     fm.end()
 

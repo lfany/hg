@@ -9,6 +9,7 @@ import os, tempfile, binascii
 from mercurial import util, commands, match, cmdutil, error
 from mercurial import node as hgnode
 from mercurial.i18n import _
+from mercurial import lock as lockmod
 
 cmdtable = {}
 command = cmdutil.command(cmdtable)
@@ -168,7 +169,7 @@ def sigs(ui, repo):
             ui.write("%-30s %s\n" % (keystr(ui, k), r))
 
 @command("sigcheck", [], _('hg sigcheck REV'))
-def check(ui, repo, rev):
+def sigcheck(ui, repo, rev):
     """verify all the signatures there may be for a particular revision"""
     mygpg = newgpg(ui)
     rev = repo.lookup(rev)
@@ -222,7 +223,14 @@ def sign(ui, repo, *revs, **opts):
 
     See :hg:`help dates` for a list of formats valid for -d/--date.
     """
+    wlock = None
+    try:
+        wlock = repo.wlock()
+        return _dosign(ui, repo, *revs, **opts)
+    finally:
+        lockmod.release(wlock)
 
+def _dosign(ui, repo, *revs, **opts):
     mygpg = newgpg(ui, **opts)
     sigver = "0"
     sigmessage = ""

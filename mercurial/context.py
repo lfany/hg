@@ -221,9 +221,10 @@ class basectx(object):
         return self._parents[0]
 
     def p2(self):
-        if len(self._parents) == 2:
-            return self._parents[1]
-        return changectx(self._repo, -1)
+        parents = self._parents
+        if len(parents) == 2:
+            return parents[1]
+        return changectx(self._repo, nullrev)
 
     def _fileinfo(self, path):
         if '_manifest' in self.__dict__:
@@ -270,7 +271,7 @@ class basectx(object):
         r = self._repo
         return matchmod.match(r.root, r.getcwd(), pats,
                               include, exclude, default,
-                              auditor=r.auditor, ctx=self,
+                              auditor=r.nofsauditor, ctx=self,
                               listsubrepos=listsubrepos, badfn=badfn)
 
     def diff(self, ctx2=None, match=None, **opts):
@@ -335,17 +336,19 @@ class basectx(object):
 
         if listsubrepos:
             for subpath, sub in scmutil.itersubrepos(ctx1, ctx2):
-                rev2 = ctx2.subrev(subpath)
                 try:
-                    submatch = matchmod.narrowmatcher(subpath, match)
-                    s = sub.status(rev2, match=submatch, ignored=listignored,
-                                   clean=listclean, unknown=listunknown,
-                                   listsubrepos=True)
-                    for rfiles, sfiles in zip(r, s):
-                        rfiles.extend("%s/%s" % (subpath, f) for f in sfiles)
-                except error.LookupError:
-                    self._repo.ui.status(_("skipping missing "
-                                           "subrepository: %s\n") % subpath)
+                    rev2 = ctx2.subrev(subpath)
+                except KeyError:
+                    # A subrepo that existed in node1 was deleted between
+                    # node1 and node2 (inclusive). Thus, ctx2's substate
+                    # won't contain that subpath. The best we can do ignore it.
+                    rev2 = None
+                submatch = matchmod.narrowmatcher(subpath, match)
+                s = sub.status(rev2, match=submatch, ignored=listignored,
+                               clean=listclean, unknown=listunknown,
+                               listsubrepos=True)
+                for rfiles, sfiles in zip(r, s):
+                    rfiles.extend("%s/%s" % (subpath, f) for f in sfiles)
 
         for l in r:
             l.sort()
@@ -511,10 +514,11 @@ class changectx(basectx):
 
     @propertycache
     def _parents(self):
-        p = self._repo.changelog.parentrevs(self._rev)
-        if p[1] == nullrev:
-            p = p[:-1]
-        return [changectx(self._repo, x) for x in p]
+        repo = self._repo
+        p1, p2 = repo.changelog.parentrevs(self._rev)
+        if p2 == nullrev:
+            return [changectx(repo, p1)]
+        return [changectx(repo, p1), changectx(repo, p2)]
 
     def changeset(self):
         return self._changeset
@@ -747,11 +751,22 @@ class basefilectx(object):
     def islink(self):
         return 'l' in self.flags()
 
+    def isabsent(self):
+        """whether this filectx represents a file not in self._changectx
+
+        This is mainly for merge code to detect change/delete conflicts. This is
+        expected to be True for all subclasses of basectx."""
+        return False
+
+    _customcmp = False
     def cmp(self, fctx):
         """compare with other file context
 
         returns True if different than fctx.
         """
+        if fctx._customcmp:
+            return fctx.cmp(self)
+
         if (fctx._filerev is None
             and (self._repo._encodefilterpats
                  # if file data starts with '\1\n', empty metadata block is
@@ -1140,17 +1155,17 @@ class committablectx(basectx):
         # filesystem doesn't support them
 
         copiesget = self._repo.dirstate.copies().get
-
-        if len(self._parents) < 2:
+        parents = self.parents()
+        if len(parents) < 2:
             # when we have one parent, it's easy: copy from parent
-            man = self._parents[0].manifest()
+            man = parents[0].manifest()
             def func(f):
                 f = copiesget(f, f)
                 return man.flags(f)
         else:
             # merges are tricky: we try to reconstruct the unstored
             # result from the merge (issue1802)
-            p1, p2 = self._parents
+            p1, p2 = parents
             pa = p1.ancestor(p2)
             m1, m2, ma = p1.manifest(), p2.manifest(), pa.manifest()
 
@@ -1180,10 +1195,11 @@ class committablectx(basectx):
         an extra 'a'. This is used by manifests merge to see that files
         are different and by update logic to avoid deleting newly added files.
         """
+        parents = self.parents()
 
-        man1 = self._parents[0].manifest()
+        man1 = parents[0].manifest()
         man = man1.copy()
-        if len(self._parents) > 1:
+        if len(parents) > 1:
             man2 = self.p2().manifest()
             def getman(f):
                 if f in man1:
@@ -1694,7 +1710,7 @@ class workingfilectx(committablefilectx):
     def date(self):
         t, tz = self._changectx.date()
         try:
-            return (util.statmtimesec(self._repo.wvfs.lstat(self._path)), tz)
+            return (self._repo.wvfs.lstat(self._path).st_mtime, tz)
         except OSError as err:
             if err.errno != errno.ENOENT:
                 raise

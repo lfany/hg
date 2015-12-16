@@ -5,10 +5,21 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
-from i18n import _
+from __future__ import absolute_import
+
+import SocketServer
+import errno
+import os
 import struct
-import sys, os, errno, traceback, SocketServer
-import dispatch, encoding, util, error
+import sys
+import traceback
+
+from .i18n import _
+from . import (
+    encoding,
+    error,
+    util,
+)
 
 logfile = None
 
@@ -174,6 +185,7 @@ class server(object):
     def runcommand(self):
         """ reads a list of \0 terminated arguments, executes
         and writes the return code to the result channel """
+        from . import dispatch  # avoid cycle
 
         length = struct.unpack('>I', self._read(4))[0]
         if not length:

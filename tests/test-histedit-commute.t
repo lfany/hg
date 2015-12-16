@@ -281,7 +281,7 @@ try with --rev
   > pick de71b079d9ce e
   > pick 38b92f448761 c
   > EOF
-  abort: may not use changesets other than the ones listed
+  abort: may not use "pick" with changesets other than the ones listed
   $ hg log --graph
   @  changeset:   7:803ef1c6fcfd
   |  tag:         tip
@@ -424,7 +424,7 @@ Now, let's try to fold the second commit into the first:
   0 files updated, 0 files merged, 0 files removed, 0 files unresolved
   0 files updated, 0 files merged, 0 files removed, 0 files unresolved
   saved backup bundle to $TESTTMP/issue4251/.hg/strip-backup/*-backup.hg (glob)
-  saved backup bundle to $TESTTMP/issue4251/.hg/strip-backup/b0f4233702ca-d99e7186-backup.hg (glob)
+  saved backup bundle to $TESTTMP/issue4251/.hg/strip-backup/*-backup.hg (glob)
 
   $ hg --config diff.git=yes export 0
   # HG changeset patch

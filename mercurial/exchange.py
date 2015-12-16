@@ -571,13 +571,7 @@ def _pushcheckoutgoing(pushop):
                 elif ctx.troubled():
                     raise error.Abort(mst[ctx.troubles()[0]] % ctx)
 
-        # internal config: bookmarks.pushing
-        newbm = pushop.ui.configlist('bookmarks', 'pushing')
-        discovery.checkheads(unfi, pushop.remote, outgoing,
-                             pushop.remoteheads,
-                             pushop.newbranch,
-                             bool(pushop.incoming),
-                             newbm)
+        discovery.checkheads(pushop)
     return True
 
 # List of names of steps to perform for an outgoing bundle2, order matters.
@@ -1427,6 +1421,11 @@ def getbundle2partsgenerator(stepname, idx=None):
         return func
     return dec
 
+def bundle2requested(bundlecaps):
+    if bundlecaps is not None:
+        return any(cap.startswith('HG2') for cap in bundlecaps)
+    return False
+
 def getbundle(repo, source, heads=None, common=None, bundlecaps=None,
               **kwargs):
     """return a full bundle (with potentially multiple kind of parts)
@@ -1442,10 +1441,8 @@ def getbundle(repo, source, heads=None, common=None, bundlecaps=None,
     The implementation is at a very early stage and will get massive rework
     when the API of bundle is refined.
     """
+    usebundle2 = bundle2requested(bundlecaps)
     # bundle10 case
-    usebundle2 = False
-    if bundlecaps is not None:
-        usebundle2 = any((cap.startswith('HG2') for cap in bundlecaps))
     if not usebundle2:
         if bundlecaps and not kwargs.get('cg', True):
             raise ValueError(_('request for bundle10 must include changegroup'))

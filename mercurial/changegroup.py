@@ -312,6 +312,7 @@ class cg1unpacker(object):
         - number of heads stays the same: 1
         """
         repo = repo.unfiltered()
+        wasempty = (len(repo.changelog) == 0)
         def csmap(x):
             repo.ui.debug("add changeset %s\n" % short(x))
             return len(cl)
@@ -386,7 +387,7 @@ class cg1unpacker(object):
             self.callback = None
             pr = prog(_('files'), efiles)
             newrevs, newfiles = _addchangegroupfiles(
-                repo, self, revmap, trp, pr, needfiles)
+                repo, self, revmap, trp, pr, needfiles, wasempty)
             revisions += newrevs
             files += newfiles
 
@@ -612,7 +613,8 @@ class cg1packer(object):
         clrevorder = {}
         mfs = {} # needed manifests
         fnodes = {} # needed file nodes
-        changedfiles = set()
+        # maps manifest node id -> set(changed files)
+        mfchangedfiles = {}
 
         # Callback for the changelog, used to collect changed files and manifest
         # nodes.
@@ -620,9 +622,12 @@ class cg1packer(object):
         def lookupcl(x):
             c = cl.read(x)
             clrevorder[x] = len(clrevorder)
-            changedfiles.update(c[3])
+            n = c[0]
             # record the first changeset introducing this manifest version
-            mfs.setdefault(c[0], x)
+            mfs.setdefault(n, x)
+            # Record a complete list of potentially-changed files in
+            # this manifest.
+            mfchangedfiles.setdefault(n, set()).update(c[3])
             return x
 
         self._verbosenote(_('uncompressed size of bundle content:\n'))
@@ -651,19 +656,36 @@ class cg1packer(object):
         # Callback for the manifest, used to collect linkrevs for filelog
         # revisions.
         # Returns the linkrev node (collected in lookupcl).
-        def lookupmflinknode(x):
-            clnode = mfs[x]
-            if not fastpathlinkrev:
+        if fastpathlinkrev:
+            lookupmflinknode = mfs.__getitem__
+        else:
+            def lookupmflinknode(x):
+                """Callback for looking up the linknode for manifests.
+
+                Returns the linkrev node for the specified manifest.
+
+                SIDE EFFECT:
+
+                  fclnodes gets populated with the list of relevant
+                  file nodes.
+
+                Note that this means you can't trust fclnodes until
+                after manifests have been sent to the client.
+                """
+                clnode = mfs[x]
                 mdata = ml.readfast(x)
-                for f, n in mdata.iteritems():
-                    if f in changedfiles:
-                        # record the first changeset introducing this filelog
-                        # version
-                        fclnodes = fnodes.setdefault(f, {})
-                        fclnode = fclnodes.setdefault(n, clnode)
-                        if clrevorder[clnode] < clrevorder[fclnode]:
-                            fclnodes[n] = clnode
-            return clnode
+                for f in mfchangedfiles[x]:
+                    try:
+                        n = mdata[f]
+                    except KeyError:
+                        continue
+                    # record the first changeset introducing this filelog
+                    # version
+                    fclnodes = fnodes.setdefault(f, {})
+                    fclnode = fclnodes.setdefault(n, clnode)
+                    if clrevorder[clnode] < clrevorder[fclnode]:
+                        fclnodes[n] = clnode
+                return clnode
 
         mfnodes = self.prune(ml, mfs, commonrevs)
         for x in self._packmanifests(mfnodes, lookupmflinknode):
@@ -672,17 +694,20 @@ class cg1packer(object):
         mfs.clear()
         clrevs = set(cl.rev(x) for x in clnodes)
 
-        def linknodes(filerevlog, fname):
-            if fastpathlinkrev:
+        if not fastpathlinkrev:
+            def linknodes(unused, fname):
+                return fnodes.get(fname, {})
+        else:
+            cln = cl.node
+            def linknodes(filerevlog, fname):
                 llr = filerevlog.linkrev
-                def genfilenodes():
-                    for r in filerevlog:
-                        linkrev = llr(r)
-                        if linkrev in clrevs:
-                            yield filerevlog.node(r), cl.node(linkrev)
-                return dict(genfilenodes())
-            return fnodes.get(fname, {})
+                fln = filerevlog.node
+                revs = ((r, llr(r)) for r in filerevlog)
+                return dict((fln(r), cln(lr)) for r, lr in revs if lr in clrevs)
 
+        changedfiles = set()
+        for x in mfchangedfiles.itervalues():
+            changedfiles.update(x)
         for chunk in self.generatefiles(changedfiles, linknodes, commonrevs,
                                         source):
             yield chunk
@@ -903,7 +928,7 @@ def changegroup(repo, basenodes, source):
     # to avoid a race we use changegroupsubset() (issue1320)
     return changegroupsubset(repo, basenodes, repo.heads(), source)
 
-def _addchangegroupfiles(repo, source, revmap, trp, pr, needfiles):
+def _addchangegroupfiles(repo, source, revmap, trp, pr, needfiles, wasempty):
     revisions = 0
     files = 0
     while True:

@@ -5,10 +5,21 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
-from i18n import _
+from __future__ import absolute_import
+
+import SocketServer
+import errno
+import os
 import struct
-import sys, os, errno, traceback, SocketServer
-import dispatch, encoding, util, error
+import sys
+import traceback
+
+from .i18n import _
+from . import (
+    encoding,
+    error,
+    util,
+)
 
 logfile = None
 
@@ -31,6 +42,10 @@ class channeledoutput(object):
     def __init__(self, out, channel):
         self.out = out
         self.channel = channel
+
+    @property
+    def name(self):
+        return '<%c-channel>' % self.channel
 
     def write(self, data):
         if not data:
@@ -63,6 +78,10 @@ class channeledinput(object):
         self.in_ = in_
         self.out = out
         self.channel = channel
+
+    @property
+    def name(self):
+        return '<%c-channel>' % self.channel
 
     def read(self, size=-1):
         if size < 0:
@@ -174,6 +193,7 @@ class server(object):
     def runcommand(self):
         """ reads a list of \0 terminated arguments, executes
         and writes the return code to the result channel """
+        from . import dispatch  # avoid cycle
 
         length = struct.unpack('>I', self._read(4))[0]
         if not length:

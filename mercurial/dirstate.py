@@ -31,7 +31,7 @@ def _getfsnow(vfs):
     '''Get "now" timestamp on filesystem'''
     tmpfd, tmpname = vfs.mkstemp()
     try:
-        return util.statmtimesec(os.fstat(tmpfd))
+        return os.fstat(tmpfd).st_mtime
     finally:
         os.close(tmpfd)
         vfs.unlink(tmpname)
@@ -471,7 +471,7 @@ class dirstate(object):
     def normal(self, f):
         '''Mark a file normal and clean.'''
         s = os.lstat(self._join(f))
-        mtime = util.statmtimesec(s)
+        mtime = s.st_mtime
         self._addpath(f, 'n', s.st_mode,
                       s.st_size & _rangemask, mtime & _rangemask)
         if f in self._copymap:
@@ -639,30 +639,28 @@ class dirstate(object):
 
     def rebuild(self, parent, allfiles, changedfiles=None):
         if changedfiles is None:
+            # Rebuild entire dirstate
             changedfiles = allfiles
-        oldmap = self._map
-        self.clear()
-        for f in allfiles:
-            if f not in changedfiles:
-                self._map[f] = oldmap[f]
+            lastnormaltime = self._lastnormaltime
+            self.clear()
+            self._lastnormaltime = lastnormaltime
+
+        for f in changedfiles:
+            mode = 0o666
+            if f in allfiles and 'x' in allfiles.flags(f):
+                mode = 0o777
+
+            if f in allfiles:
+                self._map[f] = dirstatetuple('n', mode, -1, 0)
             else:
-                if 'x' in allfiles.flags(f):
-                    self._map[f] = dirstatetuple('n', 0o777, -1, 0)
-                else:
-                    self._map[f] = dirstatetuple('n', 0o666, -1, 0)
+                self._map.pop(f, None)
+
         self._pl = (parent, nullid)
         self._dirty = True
 
     def write(self, tr=False):
         if not self._dirty:
             return
-
-        # enough 'delaywrite' prevents 'pack_dirstate' from dropping
-        # timestamp of each entries in dirstate, because of 'now > mtime'
-        delaywrite = self._ui.configint('debug', 'dirstate.delaywrite', 0)
-        if delaywrite > 0:
-            import time # to avoid useless import
-            time.sleep(delaywrite)
 
         filename = self._filename
         if tr is False: # not explicitly specified
@@ -704,7 +702,24 @@ class dirstate(object):
     def _writedirstate(self, st):
         # use the modification time of the newly created temporary file as the
         # filesystem's notion of 'now'
-        now = util.statmtimesec(util.fstat(st)) & _rangemask
+        now = util.fstat(st).st_mtime & _rangemask
+
+        # enough 'delaywrite' prevents 'pack_dirstate' from dropping
+        # timestamp of each entries in dirstate, because of 'now > mtime'
+        delaywrite = self._ui.configint('debug', 'dirstate.delaywrite', 0)
+        if delaywrite > 0:
+            # do we have any files to delay for?
+            for f, e in self._map.iteritems():
+                if e[0] == 'n' and e[3] == now:
+                    import time # to avoid useless import
+                    # rather than sleep n seconds, sleep until the next
+                    # multiple of n seconds
+                    clock = time.time()
+                    start = int(clock) - (int(clock) % delaywrite)
+                    end = start + delaywrite
+                    time.sleep(end - clock)
+                    break
+
         st.write(parsers.pack_dirstate(self._map, self._copymap, self._pl, now))
         st.close()
         self._lastnormaltime = 0
@@ -1008,14 +1023,8 @@ class dirstate(object):
                 # We may not have walked the full directory tree above,
                 # so stat and check everything we missed.
                 nf = iter(visit).next
-                pos = 0
-                while pos < len(visit):
-                    # visit in mid-sized batches so that we don't
-                    # block signals indefinitely
-                    xr = xrange(pos, min(len(visit), pos + 1000))
-                    for st in util.statfiles([join(visit[n]) for n in xr]):
-                        results[nf()] = st
-                    pos += 1000
+                for st in util.statfiles([join(i) for i in visit]):
+                    results[nf()] = st
         return results
 
     def status(self, match, subrepos, ignored, clean, unknown):
@@ -1084,16 +1093,15 @@ class dirstate(object):
             if not st and state in "nma":
                 dadd(fn)
             elif state == 'n':
-                mtime = util.statmtimesec(st)
                 if (size >= 0 and
                     ((size != st.st_size and size != st.st_size & _rangemask)
                      or ((mode ^ st.st_mode) & 0o100 and checkexec))
                     or size == -2 # other parent
                     or fn in copymap):
                     madd(fn)
-                elif time != mtime and time != mtime & _rangemask:
+                elif time != st.st_mtime and time != st.st_mtime & _rangemask:
                     ladd(fn)
-                elif mtime == lastnormaltime:
+                elif st.st_mtime == lastnormaltime:
                     # fn may have just been marked as normal and it may have
                     # changed in the same second without changing its size.
                     # This can happen if we quickly do multiple commits.

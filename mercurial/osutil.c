@@ -613,9 +613,14 @@ static PyObject *statfiles(PyObject *self, PyObject *args)
 		int ret, kind;
 		char *path;
 
+		/* With a large file count or on a slow filesystem,
+		   don't block signals for long (issue4878). */
+		if ((i % 1000) == 999 && PyErr_CheckSignals() == -1)
+			goto bail;
+
 		pypath = PySequence_GetItem(names, i);
 		if (!pypath)
-			return NULL;
+			goto bail;
 		path = PyString_AsString(pypath);
 		if (path == NULL) {
 			Py_DECREF(pypath);

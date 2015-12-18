@@ -1106,8 +1106,8 @@ the hunk is left unchanged.
                         applied[newhunk.filename()].append(newhunk)
             else:
                 fixoffset += chunk.removed - chunk.added
-    return sum([h for h in applied.itervalues()
-               if h[0].special() or len(h) > 1], [])
+    return (sum([h for h in applied.itervalues()
+               if h[0].special() or len(h) > 1], []), {})
 class hunk(object):
     def __init__(self, desc, num, lr, context):
         self.number = num
@@ -1491,7 +1491,6 @@ def parsepatch(originalchunks):
                 self.toline += len(self.before) + h.added
                 self.before = []
                 self.hunk = []
-                self.proc = ''
             self.context = context
 
         def addhunk(self, hunk):
@@ -2146,7 +2145,7 @@ def difffeatureopts(ui, opts=None, untrusted=False, section='diff', git=False,
                                             'ignoreblanklines')
     if formatchanging:
         buildopts['text'] = opts and opts.get('text')
-        buildopts['nobinary'] = get('nobinary')
+        buildopts['nobinary'] = get('nobinary', forceplain=False)
         buildopts['noprefix'] = get('noprefix', forceplain=False)
 
     return mdiff.diffopts(**buildopts)

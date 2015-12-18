@@ -141,8 +141,6 @@ qnew should fail while we're in the middle of the edit step
   (use 'hg histedit --continue' or 'hg histedit --abort')
   [255]
   $ HGEDITOR='echo foobaz > ' hg histedit --continue 2>&1 | fixbundle
-  0 files updated, 0 files merged, 0 files removed, 0 files unresolved
-  0 files updated, 0 files merged, 0 files removed, 0 files unresolved
 
   $ hg log --graph
   @  changeset:   6:b5f70786f9b0
@@ -262,7 +260,6 @@ check histedit_source
   HG: user: test
   HG: branch 'default'
   HG: added f
-  0 files updated, 0 files merged, 0 files removed, 0 files unresolved
   saved backup bundle to $TESTTMP/r/.hg/strip-backup/b5f70786f9b0-c28d9c86-backup.hg (glob)
 
   $ hg status
@@ -283,7 +280,6 @@ say we'll change the message, but don't.
   > EOF
   $ HGEDITOR="sh ../edit.sh" hg histedit tip 2>&1 | fixbundle
   0 files updated, 0 files merged, 1 files removed, 0 files unresolved
-  0 files updated, 0 files merged, 0 files removed, 0 files unresolved
   $ hg status
   $ hg log --limit 1
   changeset:   6:1fd3b2fe7754
@@ -364,9 +360,9 @@ check saving last-message.txt, at first
   HG: branch 'default'
   HG: added f
   ====
+  note: commit message saved in .hg/last-message.txt
   transaction abort!
   rollback completed
-  note: commit message saved in .hg/last-message.txt
   abort: pretxncommit.unexpectedabort hook exited with status 1
   [255]
   $ cat .hg/last-message.txt
@@ -388,9 +384,9 @@ action)
   HG: user: test
   HG: branch 'default'
   HG: added f
+  note: commit message saved in .hg/last-message.txt
   transaction abort!
   rollback completed
-  note: commit message saved in .hg/last-message.txt
   abort: pretxncommit.unexpectedabort hook exited with status 1
   [255]
 
@@ -406,7 +402,6 @@ then, check "modify the message" itself
   > mess 1fd3b2fe7754 f
   > EOF
   0 files updated, 0 files merged, 1 files removed, 0 files unresolved
-  0 files updated, 0 files merged, 0 files removed, 0 files unresolved
   $ hg status
   $ hg log --limit 1
   changeset:   6:62feedb1200e
@@ -434,7 +429,6 @@ rollback should not work after a histedit
   When you are finished, run hg histedit --continue to resume.
   [1]
   $ HGEDITOR=true hg histedit --continue
-  0 files updated, 0 files merged, 0 files removed, 0 files unresolved
   saved backup bundle to $TESTTMP/r0/.hg/strip-backup/cb9a9f314b8b-cc5ccb0b-backup.hg (glob)
 
   $ hg log -G
@@ -460,8 +454,24 @@ Attempting to fold a change into a public change should not work:
   1 files updated, 0 files merged, 0 files removed, 0 files unresolved
   reverting a
   1 files updated, 0 files merged, 1 files removed, 0 files unresolved
+  warning: histedit rules saved to: .hg/histedit-last-edit.txt
   abort: cannot fold into public change 18aa70c8ad22
   [255]
+  $ cat .hg/histedit-last-edit.txt
+  fold 0012be4a27ea 2 extend a
+  
+  # Edit history between 0012be4a27ea and 0012be4a27ea
+  #
+  # Commits are listed from least to most recent
+  #
+  # Commands:
+  #  p, fold = use commit
+  #  e, edit = use commit, but stop for amending
+  #  f, fold = use commit, but combine it with the one above
+  #  r, roll = like fold, but discard this commit's description
+  #  d, drop = remove commit from history
+  #  m, mess = edit commit message without changing commit content
+  #
 TODO: this abort shouldn't be required, but it is for now to leave the repo in
 a clean state.
   $ hg histedit --abort

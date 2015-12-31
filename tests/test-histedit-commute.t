@@ -71,12 +71,31 @@ show the edit commands offered
   #  d, drop = remove commit from history
   #  m, mess = edit commit message without changing commit content
   #
-  0 files updated, 0 files merged, 0 files removed, 0 files unresolved
 
 edit the history
 (use a hacky editor to check histedit-last-edit.txt backup)
 
   $ EDITED="$TESTTMP/editedhistory"
+  $ cat > $EDITED <<EOF
+  > edit 177f92b77385 c
+  > pick e860deea161a e
+  > pick 652413bf663e f
+  > pick 055a42cdd887 d
+  > EOF
+  $ HGEDITOR="cat \"$EDITED\" > " hg histedit 177f92b77385 2>&1 | fixbundle
+  0 files updated, 0 files merged, 4 files removed, 0 files unresolved
+  Make changes as needed, you may commit or record as needed now.
+  When you are finished, run hg histedit --continue to resume.
+
+rules should end up in .hg/histedit-last-edit.txt:
+  $ cat .hg/histedit-last-edit.txt
+  edit 177f92b77385 c
+  pick e860deea161a e
+  pick 652413bf663e f
+  pick 055a42cdd887 d
+
+  $ hg histedit --abort
+  4 files updated, 0 files merged, 0 files removed, 0 files unresolved
   $ cat > $EDITED <<EOF
   > pick 177f92b77385 c
   > pick e860deea161a e
@@ -85,16 +104,6 @@ edit the history
   > EOF
   $ HGEDITOR="cat \"$EDITED\" > " hg histedit 177f92b77385 2>&1 | fixbundle
   0 files updated, 0 files merged, 3 files removed, 0 files unresolved
-  0 files updated, 0 files merged, 0 files removed, 0 files unresolved
-  0 files updated, 0 files merged, 0 files removed, 0 files unresolved
-  0 files updated, 0 files merged, 0 files removed, 0 files unresolved
-
-rules should end up in .hg/histedit-last-edit.txt:
-  $ cat .hg/histedit-last-edit.txt
-  pick 177f92b77385 c
-  pick e860deea161a e
-  pick 652413bf663e f
-  pick 055a42cdd887 d
 
 log after edit
   $ hg log --graph
@@ -139,9 +148,6 @@ put things back
   > pick 8ade9693061e f
   > EOF
   0 files updated, 0 files merged, 3 files removed, 0 files unresolved
-  0 files updated, 0 files merged, 0 files removed, 0 files unresolved
-  0 files updated, 0 files merged, 0 files removed, 0 files unresolved
-  0 files updated, 0 files merged, 0 files removed, 0 files unresolved
 
   $ hg log --graph
   @  changeset:   5:7eca9b5b1148
@@ -185,10 +191,6 @@ slightly different this time
   > pick 177f92b77385 c
   > EOF
   0 files updated, 0 files merged, 4 files removed, 0 files unresolved
-  0 files updated, 0 files merged, 0 files removed, 0 files unresolved
-  0 files updated, 0 files merged, 0 files removed, 0 files unresolved
-  0 files updated, 0 files merged, 0 files removed, 0 files unresolved
-  0 files updated, 0 files merged, 0 files removed, 0 files unresolved
   $ hg log --graph
   @  changeset:   5:38b92f448761
   |  tag:         tip
@@ -230,8 +232,6 @@ keep prevents stripping dead revs
   > pick de71b079d9ce e
   > EOF
   0 files updated, 0 files merged, 2 files removed, 0 files unresolved
-  0 files updated, 0 files merged, 0 files removed, 0 files unresolved
-  0 files updated, 0 files merged, 0 files removed, 0 files unresolved
   $ hg log --graph
   @  changeset:   7:803ef1c6fcfd
   |  tag:         tip
@@ -281,7 +281,7 @@ try with --rev
   > pick de71b079d9ce e
   > pick 38b92f448761 c
   > EOF
-  abort: may not use changesets other than the ones listed
+  hg: parse error: may not use "pick" with changesets other than the ones listed
   $ hg log --graph
   @  changeset:   7:803ef1c6fcfd
   |  tag:         tip
@@ -349,7 +349,6 @@ Verify that revsetalias entries work with histedit:
   #  d, drop = remove commit from history
   #  m, mess = edit commit message without changing commit content
   #
-  0 files updated, 0 files merged, 0 files removed, 0 files unresolved
 
 should also work if a commit message is missing
   $ BUNDLE="$TESTDIR/missing-comment.hg"
@@ -380,7 +379,6 @@ should also work if a commit message is missing
      summary:     Checked in text file
   
   $ hg histedit 0
-  0 files updated, 0 files merged, 0 files removed, 0 files unresolved
   $ cd ..
 
   $ cd ..
@@ -421,10 +419,8 @@ Now, let's try to fold the second commit into the first:
   removing initial-dir/initial-file (glob)
   0 files updated, 0 files merged, 1 files removed, 0 files unresolved
   1 files updated, 0 files merged, 0 files removed, 0 files unresolved
-  0 files updated, 0 files merged, 0 files removed, 0 files unresolved
-  0 files updated, 0 files merged, 0 files removed, 0 files unresolved
   saved backup bundle to $TESTTMP/issue4251/.hg/strip-backup/*-backup.hg (glob)
-  saved backup bundle to $TESTTMP/issue4251/.hg/strip-backup/b0f4233702ca-d99e7186-backup.hg (glob)
+  saved backup bundle to $TESTTMP/issue4251/.hg/strip-backup/*-backup.hg (glob)
 
   $ hg --config diff.git=yes export 0
   # HG changeset patch

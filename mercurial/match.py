@@ -227,9 +227,15 @@ class match(object):
         has potential matches in it or one of its subdirectories. This is
         based on the match's primary, included, and excluded patterns.
 
+        Returns the string 'all' if the given directory and all subdirectories
+        should be visited. Otherwise returns True or False indicating whether
+        the given directory should be visited.
+
         This function's behavior is undefined if it has returned False for
         one of the dir's parent directories.
         '''
+        if self.prefix() and dir in self._fileroots:
+            return 'all'
         if dir in self._excluderoots:
             return False
         if (self._includeroots and
@@ -654,9 +660,11 @@ def readpatternfile(filepath, warn):
         if "#" in line:
             global _commentre
             if not _commentre:
-                _commentre = re.compile(r'((^|[^\\])(\\\\)*)#.*')
+                _commentre = util.re.compile(r'((?:^|[^\\])(?:\\\\)*)#.*')
             # remove comments prefixed by an even number of escapes
-            line = _commentre.sub(r'\1', line)
+            m = _commentre.search(line)
+            if m:
+                line = line[:m.end(1)]
             # fixup properly escaped comments that survived the above
             line = line.replace("\\#", "#")
         line = line.rstrip()

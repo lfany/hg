@@ -71,7 +71,6 @@ Run a dummy edit to make sure we get tip^^ correctly via revsingle.
   #  d, drop = remove commit from history
   #  m, mess = edit commit message without changing commit content
   #
-  0 files updated, 0 files merged, 0 files removed, 0 files unresolved
 
 Run on a revision not ancestors of the current working directory.
 --------------------------------------------------------------------
@@ -92,7 +91,6 @@ Test that we pick the minimum of a revrange
   > pick c8e68270e35a 3 four
   > pick 08d98a8350f3 4 five
   > EOF
-  0 files updated, 0 files merged, 0 files removed, 0 files unresolved
   $ hg up --quiet
 
   $ HGEDITOR=cat hg histedit 'tip:2' --commands - << EOF
@@ -100,7 +98,6 @@ Test that we pick the minimum of a revrange
   > pick c8e68270e35a 3 four
   > pick 08d98a8350f3 4 five
   > EOF
-  0 files updated, 0 files merged, 0 files removed, 0 files unresolved
   $ hg up --quiet
 
 Test config specified default
@@ -110,7 +107,6 @@ Test config specified default
   > pick c8e68270e35a 3 four
   > pick 08d98a8350f3 4 five
   > EOF
-  0 files updated, 0 files merged, 0 files removed, 0 files unresolved
 
 Run on a revision not descendants of the initial parent
 --------------------------------------------------------------------
@@ -142,7 +138,6 @@ temporarily.
   $ mv .hg/histedit-state.back .hg/histedit-state
 
   $ hg histedit --continue
-  0 files updated, 0 files merged, 0 files removed, 0 files unresolved
   saved backup bundle to $TESTTMP/foo/.hg/strip-backup/08d98a8350f3-02594089-backup.hg (glob)
   $ hg log -G -T '{rev} {shortest(node)} {desc}\n' -r 2::
   @  4 f5ed five
@@ -163,8 +158,8 @@ Test that missing revisions are detected
   > pick eb57da33312f 2 three
   > pick 08d98a8350f3 4 five
   > EOF
-  abort: missing rules for changeset c8e68270e35a
-  (do you want to use the drop action?)
+  hg: parse error: missing rules for changeset c8e68270e35a
+  (use "drop c8e68270e35a" to discard, see also: "hg help -e histedit.config")
   [255]
 
 Test that extra revisions are detected
@@ -175,7 +170,7 @@ Test that extra revisions are detected
   > pick c8e68270e35a 3 four
   > pick 08d98a8350f3 4 five
   > EOF
-  abort: may not use changesets other than the ones listed
+  hg: parse error: may not use "pick" with changesets other than the ones listed
   [255]
 
 Test malformed line
@@ -186,7 +181,7 @@ Test malformed line
   > pick c8e68270e35a 3 four
   > pick 08d98a8350f3 4 five
   > EOF
-  abort: malformed line "pickeb57da33312f2three"
+  hg: parse error: malformed line "pickeb57da33312f2three"
   [255]
 
 Test unknown changeset
@@ -197,7 +192,7 @@ Test unknown changeset
   > pick c8e68270e35a 3 four
   > pick 08d98a8350f3 4 five
   > EOF
-  abort: unknown changeset 0123456789ab listed
+  hg: parse error: unknown changeset 0123456789ab listed
   [255]
 
 Test unknown command
@@ -208,7 +203,7 @@ Test unknown command
   > pick c8e68270e35a 3 four
   > pick 08d98a8350f3 4 five
   > EOF
-  abort: unknown action "coin"
+  hg: parse error: unknown action "coin"
   [255]
 
 Test duplicated changeset
@@ -221,7 +216,18 @@ So one is missing and one appear twice.
   > pick eb57da33312f 2 three
   > pick 08d98a8350f3 4 five
   > EOF
-  abort: duplicated command for changeset eb57da33312f
+  hg: parse error: duplicated command for changeset eb57da33312f
+  [255]
+
+Test bogus rev
+---------------------------------------
+
+  $ HGEDITOR=cat hg histedit "tip^^" --commands - << EOF
+  > pick eb57da33312f 2 three
+  > pick 0
+  > pick 08d98a8350f3 4 five
+  > EOF
+  hg: parse error: invalid changeset 0
   [255]
 
 Test short version of command
@@ -251,9 +257,8 @@ short hash. This tests issue3893.
   HG: branch 'default'
   HG: changed alpha
   1 files updated, 0 files merged, 0 files removed, 0 files unresolved
-  0 files updated, 0 files merged, 0 files removed, 0 files unresolved
   saved backup bundle to $TESTTMP/foo/.hg/strip-backup/*-backup.hg (glob)
-  saved backup bundle to $TESTTMP/foo/.hg/strip-backup/c8e68270e35a-23a13bf9-backup.hg (glob)
+  saved backup bundle to $TESTTMP/foo/.hg/strip-backup/*-backup.hg (glob)
 
   $ hg update -q 2
   $ echo x > x
@@ -295,7 +300,6 @@ Test that trimming description using multi-byte characters
   #  d, drop = remove commit from history
   #  m, mess = edit commit message without changing commit content
   #
-  0 files updated, 0 files merged, 0 files removed, 0 files unresolved
 
 Test --continue with --keep
 
@@ -339,7 +343,7 @@ Corrupt histedit state file
   $ mv ../corrupt-histedit .hg/histedit-state
   $ hg histedit --abort
   warning: encountered an exception during histedit --abort; the repository may not have been completely cleaned up
-  abort: No such file or directory: * (glob)
+  abort: .*(No such file or directory:|The system cannot find the file specified).* (re)
   [255]
 Histedit state has been exited
   $ hg summary -q
@@ -347,3 +351,98 @@ Histedit state has been exited
   commit: 1 added, 1 unknown (new branch head)
   update: 4 new changesets (update)
 
+  $ cd ..
+
+Set up default base revision tests
+
+  $ hg init defaultbase
+  $ cd defaultbase
+  $ touch foo
+  $ hg -q commit -A -m root
+  $ echo 1 > foo
+  $ hg commit -m 'public 1'
+  $ hg phase --force --public -r .
+  $ echo 2 > foo
+  $ hg commit -m 'draft after public'
+  $ hg -q up -r 1
+  $ echo 3 > foo
+  $ hg commit -m 'head 1 public'
+  created new head
+  $ hg phase --force --public -r .
+  $ echo 4 > foo
+  $ hg commit -m 'head 1 draft 1'
+  $ echo 5 > foo
+  $ hg commit -m 'head 1 draft 2'
+  $ hg -q up -r 2
+  $ echo 6 > foo
+  $ hg commit -m 'head 2 commit 1'
+  $ echo 7 > foo
+  $ hg commit -m 'head 2 commit 2'
+  $ hg -q up -r 2
+  $ echo 8 > foo
+  $ hg commit -m 'head 3'
+  created new head
+  $ hg -q up -r 2
+  $ echo 9 > foo
+  $ hg commit -m 'head 4'
+  created new head
+  $ hg merge --tool :local -r 8
+  0 files updated, 1 files merged, 0 files removed, 0 files unresolved
+  (branch merge, don't forget to commit)
+  $ hg commit -m 'merge head 3 into head 4'
+  $ echo 11 > foo
+  $ hg commit -m 'commit 1 after merge'
+  $ echo 12 > foo
+  $ hg commit -m 'commit 2 after merge'
+
+  $ hg log -G -T '{rev}:{node|short} {phase} {desc}\n'
+  @  12:8cde254db839 draft commit 2 after merge
+  |
+  o  11:6f2f0241f119 draft commit 1 after merge
+  |
+  o    10:90506cc76b00 draft merge head 3 into head 4
+  |\
+  | o  9:f8607a373a97 draft head 4
+  | |
+  o |  8:0da92be05148 draft head 3
+  |/
+  | o  7:4c35cdf97d5e draft head 2 commit 2
+  | |
+  | o  6:931820154288 draft head 2 commit 1
+  |/
+  | o  5:8cdc02b9bc63 draft head 1 draft 2
+  | |
+  | o  4:463b8c0d2973 draft head 1 draft 1
+  | |
+  | o  3:23a0c4eefcbf public head 1 public
+  | |
+  o |  2:4117331c3abb draft draft after public
+  |/
+  o  1:4426d359ea59 public public 1
+  |
+  o  0:54136a8ddf32 public root
+  
+
+Default base revision should stop at public changesets
+
+  $ hg -q up 8cdc02b9bc63
+  $ hg histedit --commands - <<EOF
+  > pick 463b8c0d2973
+  > pick 8cdc02b9bc63
+  > EOF
+
+Default base revision should stop at branchpoint
+
+  $ hg -q up 4c35cdf97d5e
+  $ hg histedit --commands - <<EOF
+  > pick 931820154288
+  > pick 4c35cdf97d5e
+  > EOF
+
+Default base revision should stop at merge commit
+
+  $ hg -q up 8cde254db839
+  $ hg histedit --commands - <<EOF
+  > pick 6f2f0241f119
+  > pick 8cde254db839
+  > EOF

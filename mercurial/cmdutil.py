@@ -70,11 +70,11 @@ def recordfilter(ui, originalhunks, operation=None):
     testfile = ui.config('experimental', 'crecordtest', None)
     oldwrite = setupwrapcolorwrite(ui)
     try:
-        newchunks = filterchunks(ui, originalhunks, usecurses, testfile,
-                                 operation)
+        newchunks, newopts = filterchunks(ui, originalhunks, usecurses,
+                                          testfile, operation)
     finally:
         ui.write = oldwrite
-    return newchunks
+    return newchunks, newopts
 
 def dorecord(ui, repo, commitfunc, cmdsuggest, backupall,
             filterfn, *pats, **opts):
@@ -116,14 +116,16 @@ def dorecord(ui, repo, commitfunc, cmdsuggest, backupall,
         diffopts = patch.difffeatureopts(ui, opts=opts, whitespace=True)
         diffopts.nodates = True
         diffopts.git = True
+        diffopts.showfunc = True
         originaldiff =  patch.diff(repo, changes=status, opts=diffopts)
         originalchunks = patch.parsepatch(originaldiff)
 
         # 1. filter patch, so we have intending-to apply subset of it
         try:
-            chunks = filterfn(ui, originalchunks)
+            chunks, newopts = filterfn(ui, originalchunks)
         except patch.PatchError as err:
             raise error.Abort(_('error parsing patch: %s') % err)
+        opts.update(newopts)
 
         # We need to keep a backup of files that have been newly added and
         # modified during the recording process because there is a previous
@@ -181,9 +183,9 @@ def dorecord(ui, repo, commitfunc, cmdsuggest, backupall,
             # 3a. apply filtered patch to clean repo  (clean)
             if backups:
                 # Equivalent to hg.revert
-                choices = lambda key: key in backups
+                m = scmutil.matchfiles(repo, backups.keys())
                 mergemod.update(repo, repo.dirstate.p1(),
-                        False, True, choices)
+                        False, True, matcher=m)
 
             # 3b. (apply)
             if dopatch:
@@ -436,6 +438,19 @@ def makefilename(repo, pat, node, desc=None,
         raise error.Abort(_("invalid format spec '%%%s' in output filename") %
                          inst.args[0])
 
+class _unclosablefile(object):
+    def __init__(self, fp):
+        self._fp = fp
+
+    def close(self):
+        pass
+
+    def __iter__(self):
+        return iter(self._fp)
+
+    def __getattr__(self, attr):
+        return getattr(self._fp, attr)
+
 def makefileobj(repo, pat, node=None, desc=None, total=None,
                 seqno=None, revwidth=None, mode='wb', modemap=None,
                 pathname=None):
@@ -447,22 +462,7 @@ def makefileobj(repo, pat, node=None, desc=None, total=None,
             fp = repo.ui.fout
         else:
             fp = repo.ui.fin
-        if util.safehasattr(fp, 'fileno'):
-            return os.fdopen(os.dup(fp.fileno()), mode)
-        else:
-            # if this fp can't be duped properly, return
-            # a dummy object that can be closed
-            class wrappedfileobj(object):
-                noop = lambda x: None
-                def __init__(self, f):
-                    self.f = f
-                def __getattr__(self, attr):
-                    if attr == 'close':
-                        return self.noop
-                    else:
-                        return getattr(self.f, attr)
-
-            return wrappedfileobj(fp)
+        return _unclosablefile(fp)
     if util.safehasattr(pat, 'write') and writable:
         return pat
     if util.safehasattr(pat, 'read') and 'r' in mode:
@@ -1052,9 +1052,8 @@ def export(repo, revs, template='hg-%h.patch', fp=None, switch_parent=False,
             fp = makefileobj(repo, template, node, desc=desc, total=total,
                              seqno=seqno, revwidth=revwidth, mode='wb',
                              modemap=filemode)
-            if fp != template:
-                shouldclose = True
-        if fp and fp != sys.stdout and util.safehasattr(fp, 'name'):
+            shouldclose = True
+        if fp and not getattr(fp, 'name', '<unnamed>').startswith('<'):
             repo.ui.note("%s\n" % fp.name)
 
         if not fp:
@@ -1182,9 +1181,9 @@ class changeset_printer(object):
 
     def show(self, ctx, copies=None, matchfn=None, **props):
         if self.buffered:
-            self.ui.pushbuffer()
+            self.ui.pushbuffer(labeled=True)
             self._show(ctx, copies, matchfn, props)
-            self.hunk[ctx.rev()] = self.ui.popbuffer(labeled=True)
+            self.hunk[ctx.rev()] = self.ui.popbuffer()
         else:
             self._show(ctx, copies, matchfn, props)
 
@@ -1297,16 +1296,17 @@ class changeset_printer(object):
                               label='log.summary')
         self.ui.write("\n")
 
-        self.showpatch(changenode, matchfn)
+        self.showpatch(ctx, matchfn)
 
-    def showpatch(self, node, matchfn):
+    def showpatch(self, ctx, matchfn):
         if not matchfn:
             matchfn = self.matchfn
         if matchfn:
             stat = self.diffopts.get('stat')
             diff = self.diffopts.get('patch')
             diffopts = patch.diffallopts(self.ui, self.diffopts)
-            prev = self.repo.changelog.parents(node)[0]
+            node = ctx.node()
+            prev = ctx.p1()
             if stat:
                 diffordiffstat(self.ui, self.repo, diffopts, prev, node,
                                match=matchfn, stat=True)
@@ -1488,7 +1488,7 @@ class changeset_templater(changeset_printer):
             # write changeset metadata, then patch if requested
             key = self._parts['changeset']
             self.ui.write(templater.stringify(self.t(key, **props)))
-            self.showpatch(ctx.node(), matchfn)
+            self.showpatch(ctx, matchfn)
 
             if self._parts['footer']:
                 if not self.footer:
@@ -2153,17 +2153,31 @@ def getlogrevs(repo, pats, opts):
 
     return revs, expr, filematcher
 
-def displaygraph(ui, dag, displayer, showparents, edgefn, getrenamed=None,
+def _graphnodeformatter(ui, displayer):
+    spec = ui.config('ui', 'graphnodetemplate')
+    if not spec:
+        return templatekw.showgraphnode  # fast path for "{graphnode}"
+
+    templ = formatter.gettemplater(ui, 'graphnode', spec)
+    cache = {}
+    if isinstance(displayer, changeset_templater):
+        cache = displayer.cache  # reuse cache of slow templates
+    props = templatekw.keywords.copy()
+    props['templ'] = templ
+    props['cache'] = cache
+    def formatnode(repo, ctx):
+        props['ctx'] = ctx
+        props['repo'] = repo
+        props['revcache'] = {}
+        return templater.stringify(templ('graphnode', **props))
+    return formatnode
+
+def displaygraph(ui, repo, dag, displayer, edgefn, getrenamed=None,
                  filematcher=None):
+    formatnode = _graphnodeformatter(ui, displayer)
     seen, state = [], graphmod.asciistate()
     for rev, type, ctx, parents in dag:
-        char = 'o'
-        if ctx.node() in showparents:
-            char = '@'
-        elif ctx.obsolete():
-            char = 'x'
-        elif ctx.closesbranch():
-            char = '_'
+        char = formatnode(repo, ctx)
         copies = None
         if getrenamed and ctx.rev():
             copies = []
@@ -2196,9 +2210,8 @@ def graphlog(ui, repo, *pats, **opts):
             endrev = scmutil.revrange(repo, opts.get('rev')).max() + 1
         getrenamed = templatekw.getrenamedfn(repo, endrev=endrev)
     displayer = show_changeset(ui, repo, opts, buffered=True)
-    showparents = [ctx.node() for ctx in repo[None].parents()]
-    displaygraph(ui, revdag, displayer, showparents,
-                 graphmod.asciiedges, getrenamed, filematcher)
+    displaygraph(ui, repo, revdag, displayer, graphmod.asciiedges, getrenamed,
+                 filematcher)
 
 def checkunsupportedgraphflags(pats, opts):
     for op in ["newest_first"]:
@@ -2614,6 +2627,11 @@ def amend(ui, repo, commitfunc, old, extra, pats, opts):
                 message = old.description()
 
             pureextra = extra.copy()
+            if 'amend_source' in pureextra:
+                del pureextra['amend_source']
+            pureoldextra = old.extra()
+            if 'amend_source' in pureoldextra:
+                del pureoldextra['amend_source']
             extra['amend_source'] = old.hex()
 
             new = context.memctx(repo,
@@ -2631,7 +2649,7 @@ def amend(ui, repo, commitfunc, old, extra, pats, opts):
                 and newdesc == old.description()
                 and user == old.user()
                 and date == old.date()
-                and pureextra == old.extra()):
+                and pureextra == pureoldextra):
                 # nothing changed. continuing here would create a new node
                 # anyway because of the amend_source noise.
                 #
@@ -3078,7 +3096,7 @@ def revert(ui, repo, ctx, parents, *pats, **opts):
                     xlist.append(abs)
                     if dobackup and (backup <= dobackup
                                      or wctx[abs].cmp(ctx[abs])):
-                            bakname = "%s.orig" % rel
+                            bakname = origpath(ui, repo, rel)
                             ui.note(_('saving current version of %s as %s\n') %
                                     (rel, bakname))
                             if not opts.get('dry_run'):
@@ -3109,6 +3127,26 @@ def revert(ui, repo, ctx, parents, *pats, **opts):
                                       % (sub, short(ctx.node())))
     finally:
         wlock.release()
+
+def origpath(ui, repo, filepath):
+    '''customize where .orig files are created
+
+    Fetch user defined path from config file: [ui] origbackuppath = <path>
+    Fall back to default (filepath) if not specified
+    '''
+    origbackuppath = ui.config('ui', 'origbackuppath', None)
+    if origbackuppath is None:
+        return filepath + ".orig"
+
+    filepathfromroot = os.path.relpath(filepath, start=repo.root)
+    fullorigpath = repo.wjoin(origbackuppath, filepathfromroot)
+
+    origbackupdir = repo.vfs.dirname(fullorigpath)
+    if not repo.vfs.exists(origbackupdir):
+        ui.note(_('creating directory: %s\n') % origbackupdir)
+        util.makedirs(origbackupdir)
+
+    return fullorigpath + ".orig"
 
 def _revertprefetch(repo, ctx, *files):
     """Let extension changing the storage layer prefetch content"""
@@ -3171,7 +3209,7 @@ def _performrevert(repo, parents, ctx, actions, interactive=False):
 
         try:
 
-            chunks = recordfilter(repo.ui, originalchunks)
+            chunks, opts = recordfilter(repo.ui, originalchunks)
             if reversehunks:
                 chunks = patch.reversehunks(chunks)
 

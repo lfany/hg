@@ -6,9 +6,8 @@ import sys, os
 import optparse
 
 # import from the live mercurial repo
+os.environ['HGMODULEPOLICY'] = 'py'
 sys.path.insert(0, "..")
-# fall back to pure modules if required C extensions are not available
-sys.path.append(os.path.join('..', 'mercurial', 'pure'))
 from mercurial import demandimport; demandimport.enable()
 from mercurial.commands import table
 from mercurial.help import helptable
@@ -88,7 +87,7 @@ def checkhghelps(ui):
 
     for name in sorted(extensions.enabled().keys() +
                        extensions.disabled().keys()):
-        mod = extensions.load(None, name, None)
+        mod = extensions.load(ui, name, None)
         if not mod.__doc__:
             ui.note(('skip checking %s extension: no help document\n') % name)
             continue
@@ -128,6 +127,9 @@ option.
     optparser.add_option("-v", "--verbose",
                          help="enable additional output",
                          action="store_true")
+    optparser.add_option("-d", "--debug",
+                         help="debug mode",
+                         action="store_true")
     optparser.add_option("-f", "--file",
                          help="filename to read in (or '-' for stdin)",
                          action="store", default="")
@@ -153,6 +155,7 @@ option.
 
     ui = uimod.ui()
     ui.setconfig('ui', 'verbose', options.verbose, '--verbose')
+    ui.setconfig('ui', 'debug', options.debug, '--debug')
 
     if options.file:
         if checkfile(ui, options.file, options.initlevel):

@@ -111,6 +111,7 @@ Short help:
    glossary      Glossary
    hgignore      Syntax for Mercurial Ignore Files
    hgweb         Configuring hgweb
+   internals     Technical implementation topics
    merge-tools   Merge Tools
    multirevs     Specifying Multiple Revisions
    patterns      File Name Patterns
@@ -187,6 +188,7 @@ Short help:
    glossary      Glossary
    hgignore      Syntax for Mercurial Ignore Files
    hgweb         Configuring hgweb
+   internals     Technical implementation topics
    merge-tools   Merge Tools
    multirevs     Specifying Multiple Revisions
    patterns      File Name Patterns
@@ -345,7 +347,8 @@ Test short command list with verbose option
       The files will be added to the repository at the next commit. To undo an
       add before that, see "hg forget".
   
-      If no names are given, add all files to the repository.
+      If no names are given, add all files to the repository (except files
+      matching ".hgignore").
   
       Returns 0 if all files are successfully added.
   
@@ -370,19 +373,33 @@ Verbose help for add
       The files will be added to the repository at the next commit. To undo an
       add before that, see "hg forget".
   
-      If no names are given, add all files to the repository.
+      If no names are given, add all files to the repository (except files
+      matching ".hgignore").
   
-      An example showing how new (unknown) files are added automatically by "hg
-      add":
+      Examples:
   
-        $ ls
-        foo.c
-        $ hg status
-        ? foo.c
-        $ hg add
-        adding foo.c
-        $ hg status
-        A foo.c
+        - New (unknown) files are added automatically by "hg add":
+  
+            $ ls
+            foo.c
+            $ hg status
+            ? foo.c
+            $ hg add
+            adding foo.c
+            $ hg status
+            A foo.c
+  
+        - Specific files to be added can be specified:
+  
+            $ ls
+            bar.c  foo.c
+            $ hg status
+            ? bar.c
+            ? foo.c
+            $ hg add bar.c
+            $ hg status
+            A bar.c
+            ? foo.c
   
       Returns 0 if all files are successfully added.
   
@@ -481,14 +498,14 @@ Test command without options
       Differences between files are shown using the unified diff format.
   
       Note:
-         diff may generate unexpected results for merges, as it will default to
-         comparing against the working directory's first parent changeset if no
-         revisions are specified.
+         "hg diff" may generate unexpected results for merges, as it will
+         default to comparing against the working directory's first parent
+         changeset if no revisions are specified.
   
       When two revision arguments are given, then changes are shown between
       those revisions. If only one revision is specified then that revision is
       compared to the working directory, and, when no revisions are specified,
-      the working directory files are compared to its parent.
+      the working directory files are compared to its first parent.
   
       Alternatively you can specify -c/--change with a revision to see the
       changes in that changeset relative to its first parent.
@@ -541,10 +558,10 @@ Test command without options
       explicitly requested with -u/--unknown or -i/--ignored.
   
       Note:
-         status may appear to disagree with diff if permissions have changed or
-         a merge has occurred. The standard diff format does not report
-         permission changes and diff only reports changes relative to one merge
-         parent.
+         "hg status" may appear to disagree with diff if permissions have
+         changed or a merge has occurred. The standard diff format does not
+         report permission changes and diff only reports changes relative to one
+         merge parent.
   
       If one revision is given, it is used as the base revision. If two
       revisions are given, the differences between them are shown. The --change
@@ -760,6 +777,7 @@ Test that default list of commands omits extension commands
    glossary      Glossary
    hgignore      Syntax for Mercurial Ignore Files
    hgweb         Configuring hgweb
+   internals     Technical implementation topics
    merge-tools   Merge Tools
    multirevs     Specifying Multiple Revisions
    patterns      File Name Patterns
@@ -799,6 +817,8 @@ Test list of internal help commands
                  description
    debugdata     dump the contents of a data file revision
    debugdate     parse and display a date
+   debugdeltachain
+                 dump information about delta chains in a revlog
    debugdirstate
                  show the contents of the current dirstate
    debugdiscovery
@@ -847,6 +867,174 @@ Test list of internal help commands
   
   (use "hg help -v debug" to show built-in aliases and global options)
 
+internals topic renders index of available sub-topics
+
+  $ hg help internals
+  Technical implementation topics
+  """""""""""""""""""""""""""""""
+  
+       bundles       container for exchange of repository data
+       changegroups  representation of revlog data
+
+sub-topics can be accessed
+
+  $ hg help internals.changegroups
+      Changegroups
+      ============
+  
+      Changegroups are representations of repository revlog data, specifically
+      the changelog, manifest, and filelogs.
+  
+      There are 3 versions of changegroups: "1", "2", and "3". From a high-
+      level, versions "1" and "2" are almost exactly the same, with the only
+      difference being a header on entries in the changeset segment. Version "3"
+      adds support for exchanging treemanifests and includes revlog flags in the
+      delta header.
+  
+      Changegroups consists of 3 logical segments:
+  
+        +---------------------------------+
+        |           |          |          |
+        | changeset | manifest | filelogs |
+        |           |          |          |
+        +---------------------------------+
+  
+      The principle building block of each segment is a *chunk*. A *chunk* is a
+      framed piece of data:
+  
+        +---------------------------------------+
+        |           |                           |
+        |  length   |           data            |
+        | (32 bits) |       <length> bytes      |
+        |           |                           |
+        +---------------------------------------+
+  
+      Each chunk starts with a 32-bit big-endian signed integer indicating the
+      length of the raw data that follows.
+  
+      There is a special case chunk that has 0 length ("0x00000000"). We call
+      this an *empty chunk*.
+  
+      Delta Groups
+      ------------
+  
+      A *delta group* expresses the content of a revlog as a series of deltas,
+      or patches against previous revisions.
+  
+      Delta groups consist of 0 or more *chunks* followed by the *empty chunk*
+      to signal the end of the delta group:
+  
+        +------------------------------------------------------------------------+
+        |                |             |               |             |           |
+        | chunk0 length  | chunk0 data | chunk1 length | chunk1 data |    0x0    |
+        |   (32 bits)    |  (various)  |   (32 bits)   |  (various)  | (32 bits) |
+        |                |             |               |             |           |
+        +------------------------------------------------------------+-----------+
+  
+      Each *chunk*'s data consists of the following:
+  
+        +-----------------------------------------+
+        |              |              |           |
+        | delta header | mdiff header |   delta   |
+        |  (various)   |  (12 bytes)  | (various) |
+        |              |              |           |
+        +-----------------------------------------+
+  
+      The *length* field is the byte length of the remaining 3 logical pieces of
+      data. The *delta* is a diff from an existing entry in the changelog.
+  
+      The *delta header* is different between versions "1", "2", and "3" of the
+      changegroup format.
+  
+      Version 1:
+  
+        +------------------------------------------------------+
+        |            |             |             |             |
+        |    node    |   p1 node   |   p2 node   |  link node  |
+        | (20 bytes) |  (20 bytes) |  (20 bytes) |  (20 bytes) |
+        |            |             |             |             |
+        +------------------------------------------------------+
+  
+      Version 2:
+  
+        +------------------------------------------------------------------+
+        |            |             |             |            |            |
+        |    node    |   p1 node   |   p2 node   | base node  | link node  |
+        | (20 bytes) |  (20 bytes) |  (20 bytes) | (20 bytes) | (20 bytes) |
+        |            |             |             |            |            |
+        +------------------------------------------------------------------+
+  
+      Version 3:
+  
+        +------------------------------------------------------------------------------+
+        |            |             |             |            |            |           |
+        |    node    |   p1 node   |   p2 node   | base node  | link node  | flags     |
+        | (20 bytes) |  (20 bytes) |  (20 bytes) | (20 bytes) | (20 bytes) | (2 bytes) |
+        |            |             |             |            |            |           |
+        +------------------------------------------------------------------------------+
+  
+      The *mdiff header* consists of 3 32-bit big-endian signed integers
+      describing offsets at which to apply the following delta content:
+  
+        +-------------------------------------+
+        |           |            |            |
+        |  offset   | old length | new length |
+        | (32 bits) |  (32 bits) |  (32 bits) |
+        |           |            |            |
+        +-------------------------------------+
+  
+      In version 1, the delta is always applied against the previous node from
+      the changegroup or the first parent if this is the first entry in the
+      changegroup.
+  
+      In version 2, the delta base node is encoded in the entry in the
+      changegroup. This allows the delta to be expressed against any parent,
+      which can result in smaller deltas and more efficient encoding of data.
+  
+      Changeset Segment
+      -----------------
+  
+      The *changeset segment* consists of a single *delta group* holding
+      changelog data. It is followed by an *empty chunk* to denote the boundary
+      to the *manifests segment*.
+  
+      Manifest Segment
+      ----------------
+  
+      The *manifest segment* consists of a single *delta group* holding manifest
+      data. It is followed by an *empty chunk* to denote the boundary to the
+      *filelogs segment*.
+  
+      Filelogs Segment
+      ----------------
+  
+      The *filelogs* segment consists of multiple sub-segments, each
+      corresponding to an individual file whose data is being described:
+  
+        +--------------------------------------+
+        |          |          |          |     |
+        | filelog0 | filelog1 | filelog2 | ... |
+        |          |          |          |     |
+        +--------------------------------------+
+  
+      In version "3" of the changegroup format, filelogs may include directory
+      logs when treemanifests are in use. directory logs are identified by
+      having a trailing '/' on their filename (see below).
+  
+      The final filelog sub-segment is followed by an *empty chunk* to denote
+      the end of the segment and the overall changegroup.
+  
+      Each filelog sub-segment consists of the following:
+  
+        +------------------------------------------+
+        |               |            |             |
+        | filename size |  filename  | delta group |
+        |   (32 bits)   |  (various) |  (various)  |
+        |               |            |             |
+        +------------------------------------------+
+  
+      That is, a *chunk* consisting of the filename (not terminated or padded)
+      followed by N chunks constituting the *delta group* for this file.
 
 Test list of commands with command with no help text
 
@@ -1026,14 +1214,33 @@ Test help hooks
       helphook1
       helphook2
 
+help -c should only show debug --debug
+
+  $ hg help -c --debug|egrep debug|wc -l|egrep '^\s*0\s*$'
+  [1]
+
+help -c should only show deprecated for -v
+
+  $ hg help -c -v|egrep DEPRECATED|wc -l|egrep '^\s*0\s*$'
+  [1]
+
 Test -e / -c / -k combinations
 
-  $ hg help -c progress
-  abort: no such help topic: progress
-  (try "hg help --keyword progress")
+  $ hg help -c|egrep '^[A-Z].*:|^ debug'
+  Commands:
+  $ hg help -e|egrep '^[A-Z].*:|^ debug'
+  Extensions:
+  $ hg help -k|egrep '^[A-Z].*:|^ debug'
+  Topics:
+  Commands:
+  Extensions:
+  Extension Commands:
+  $ hg help -c schemes
+  abort: no such help topic: schemes
+  (try "hg help --keyword schemes")
   [255]
-  $ hg help -e progress |head -1
-  progress extension - show progress bars for some actions (DEPRECATED)
+  $ hg help -e schemes |head -1
+  schemes extension - extend schemes with shortcuts to repository swarms
   $ hg help -c -k dates |egrep '^(Topics|Extensions|Commands):'
   Commands:
   $ hg help -e -k a |egrep '^(Topics|Extensions|Commands):'
@@ -1068,12 +1275,10 @@ Test keyword search help
   
   Commands:
   
-   bookmarks                    create a new bookmark or list existing bookmarks
-   clone                        make a copy of an existing repository
-   debugapplystreamclonebundle  apply a stream clone bundle file
-   debugcreatestreamclonebundle create a stream clone bundle file
-   paths                        show aliases for remote repositories
-   update                       update working directory (or switch revisions)
+   bookmarks create a new bookmark or list existing bookmarks
+   clone     make a copy of an existing repository
+   paths     show aliases for remote repositories
+   update    update working directory (or switch revisions)
   
   Extensions:
   
@@ -1192,28 +1397,43 @@ Test section lookup
       "paths"
       -------
   
-      Assigns symbolic names to repositories. The left side is the symbolic
-      name, and the right gives the directory or URL that is the location of the
-      repository. Default paths can be declared by setting the following
-      entries.
+      Assigns symbolic names and behavior to repositories.
   
-      "default"
-          Directory or URL to use when pulling if no source is specified.
-          (default: repository from which the current repository was cloned)
-  
-      "default-push"
-          Optional. Directory or URL to use when pushing if no destination is
-          specified.
-  
-      Custom paths can be defined by assigning the path to a name that later can
-      be used from the command line. Example:
+      Options are symbolic names defining the URL or directory that is the
+      location of the repository. Example:
   
         [paths]
-        my_path = http://example.com/path
+        my_server = https://example.com/my_repo
+        local_path = /home/me/repo
   
-      To push to the path defined in "my_path" run the command:
+      These symbolic names can be used from the command line. To pull from
+      "my_server": "hg pull my_server". To push to "local_path": "hg push
+      local_path".
   
-        hg push my_path
+      Options containing colons (":") denote sub-options that can influence
+      behavior for that specific path. Example:
+  
+        [paths]
+        my_server = https://example.com/my_path
+        my_server:pushurl = ssh://example.com/my_path
+  
+      The following sub-options can be defined:
+  
+      "pushurl"
+         The URL to use for push operations. If not defined, the location
+         defined by the path's main entry is used.
+  
+      The following special named paths exist:
+  
+      "default"
+         The URL or directory to use when no source or remote is specified.
+  
+         "hg clone" will automatically define this path to the location the
+         repository was cloned from.
+  
+      "default-push"
+         (deprecated) The URL or directory for the default "hg push" location.
+         "default:pushurl" should be used instead.
   
   $ hg help glossary.mcguffin
   abort: help section not found
@@ -1481,6 +1701,13 @@ Dish up an empty repo; serve it cold.
   </a>
   </td><td>
   Configuring hgweb
+  </td></tr>
+  <tr><td>
+  <a href="/help/internals">
+  internals
+  </a>
+  </td><td>
+  Technical implementation topics
   </td></tr>
   <tr><td>
   <a href="/help/merge-tools">
@@ -1992,12 +2219,14 @@ Dish up an empty repo; serve it cold.
   undo an add before that, see &quot;hg forget&quot;.
   </p>
   <p>
-  If no names are given, add all files to the repository.
+  If no names are given, add all files to the repository (except
+  files matching &quot;.hgignore&quot;).
   </p>
   <p>
-  An example showing how new (unknown) files are added
-  automatically by &quot;hg add&quot;:
+  Examples:
   </p>
+  <ul>
+   <li> New (unknown) files are added   automatically by &quot;hg add&quot;:
   <pre>
   \$ ls (re)
   foo.c
@@ -2008,6 +2237,19 @@ Dish up an empty repo; serve it cold.
   \$ hg status (re)
   A foo.c
   </pre>
+   <li> Specific files to be added can be specified:
+  <pre>
+  \$ ls (re)
+  bar.c  foo.c
+  \$ hg status (re)
+  ? bar.c
+  ? foo.c
+  \$ hg add bar.c (re)
+  \$ hg status (re)
+  A bar.c
+  ? foo.c
+  </pre>
+  </ul>
   <p>
   Returns 0 if all files are successfully added.
   </p>
@@ -2195,8 +2437,11 @@ Dish up an empty repo; serve it cold.
   <td>R</td></tr>
   </table>
   <p>
-  Note that remove never deletes files in Added [A] state from the
-  working directory, not even if option --force is specified.
+  <b>Note:</b> 
+  </p>
+  <p>
+  &quot;hg remove&quot; never deletes files in Added [A] state from the
+  working directory, not even if &quot;--force&quot; is specified.
   </p>
   <p>
   Returns 0 on success, 1 if any warnings encountered.

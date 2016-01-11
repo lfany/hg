@@ -5,17 +5,34 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
-from i18n import _
-from mercurial.node import wdirrev
-import util, error, osutil, revset, similar, encoding, phases
-import pathutil
-import match as matchmod
-import os, errno, re, glob, tempfile, shutil, stat
+from __future__ import absolute_import
+
+import errno
+import glob
+import os
+import re
+import shutil
+import stat
+import tempfile
+
+from .i18n import _
+from .node import wdirrev
+from . import (
+    encoding,
+    error,
+    match as matchmod,
+    osutil,
+    pathutil,
+    phases,
+    revset,
+    similar,
+    util,
+)
 
 if os.name == 'nt':
-    import scmwindows as scmplatform
+    from . import scmwindows as scmplatform
 else:
-    import scmposix as scmplatform
+    from . import scmposix as scmplatform
 
 systemrcpath = scmplatform.systemrcpath
 userrcpath = scmplatform.userrcpath
@@ -821,6 +838,26 @@ def matchfiles(repo, files, badfn=None):
     '''Return a matcher that will efficiently match exactly these files.'''
     return matchmod.exact(repo.root, repo.getcwd(), files, badfn=badfn)
 
+def origpath(ui, repo, filepath):
+    '''customize where .orig files are created
+
+    Fetch user defined path from config file: [ui] origbackuppath = <path>
+    Fall back to default (filepath) if not specified
+    '''
+    origbackuppath = ui.config('ui', 'origbackuppath', None)
+    if origbackuppath is None:
+        return filepath + ".orig"
+
+    filepathfromroot = os.path.relpath(filepath, start=repo.root)
+    fullorigpath = repo.wjoin(origbackuppath, filepathfromroot)
+
+    origbackupdir = repo.vfs.dirname(fullorigpath)
+    if not repo.vfs.exists(origbackupdir):
+        ui.note(_('creating directory: %s\n') % origbackupdir)
+        util.makedirs(origbackupdir)
+
+    return fullorigpath + ".orig"
+
 def addremove(repo, matcher, prefix, opts=None, dry_run=None, similarity=None):
     if opts is None:
         opts = {}
@@ -1181,3 +1218,16 @@ def wlocksub(repo, cmd, *args, **kwargs):
     subprocess."""
     return _locksub(repo, repo.currentwlock(), 'HG_WLOCK_LOCKER', cmd, *args,
                     **kwargs)
+
+def gdinitconfig(ui):
+    """helper function to know if a repo should be created as general delta
+    """
+    # experimental config: format.generaldelta
+    return (ui.configbool('format', 'generaldelta', False)
+            or ui.configbool('format', 'usegeneraldelta', True))
+
+def gddeltaconfig(ui):
+    """helper function to know if incoming delta should be optimised
+    """
+    # experimental config: format.generaldelta
+    return ui.configbool('format', 'generaldelta', False)

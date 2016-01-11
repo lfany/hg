@@ -6,14 +6,36 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
-import collections
-import cStringIO, email, os, errno, re, posixpath, copy
-import tempfile, zlib, shutil
+from __future__ import absolute_import
 
-from i18n import _
-from node import hex, short
-import base85, mdiff, scmutil, util, diffhelpers, copies, encoding, error
-import pathutil
+import cStringIO
+import collections
+import copy
+import email
+import errno
+import os
+import posixpath
+import re
+import shutil
+import tempfile
+import zlib
+
+from .i18n import _
+from .node import (
+    hex,
+    short,
+)
+from . import (
+    base85,
+    copies,
+    diffhelpers,
+    encoding,
+    error,
+    mdiff,
+    pathutil,
+    scmutil,
+    util,
+)
 
 gitre = re.compile('diff --git a/(.*) b/(.*)')
 tabsplitter = re.compile(r'(\t+|[^\t]+)')
@@ -1106,8 +1128,8 @@ the hunk is left unchanged.
                         applied[newhunk.filename()].append(newhunk)
             else:
                 fixoffset += chunk.removed - chunk.added
-    return sum([h for h in applied.itervalues()
-               if h[0].special() or len(h) > 1], [])
+    return (sum([h for h in applied.itervalues()
+               if h[0].special() or len(h) > 1], []), {})
 class hunk(object):
     def __init__(self, desc, num, lr, context):
         self.number = num
@@ -1446,7 +1468,7 @@ def reversehunks(hunks):
 
     '''
 
-    import crecord as crecordmod
+    from . import crecord as crecordmod
     newhunks = []
     for c in hunks:
         if isinstance(c, crecordmod.uihunk):
@@ -1491,7 +1513,6 @@ def parsepatch(originalchunks):
                 self.toline += len(self.before) + h.added
                 self.before = []
                 self.hunk = []
-                self.proc = ''
             self.context = context
 
         def addhunk(self, hunk):
@@ -2146,7 +2167,7 @@ def difffeatureopts(ui, opts=None, untrusted=False, section='diff', git=False,
                                             'ignoreblanklines')
     if formatchanging:
         buildopts['text'] = opts and opts.get('text')
-        buildopts['nobinary'] = get('nobinary')
+        buildopts['nobinary'] = get('nobinary', forceplain=False)
         buildopts['noprefix'] = get('noprefix', forceplain=False)
 
     return mdiff.diffopts(**buildopts)

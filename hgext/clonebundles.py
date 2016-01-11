@@ -47,7 +47,7 @@ To work, this extension requires the following of server operators:
 * Generating bundle files of repository content (typically periodically,
   such as once per day).
 * A file server that clients have network access to and that Python knows
-  how to talk to through its normal URL handling facility (typically a
+  how to talk to through its normal URL handling facility (typically an
   HTTP server).
 * A process for keeping the bundles manifest in sync with available bundle
   files.
@@ -183,7 +183,7 @@ experimental.clonebundles
 experimental.clonebundleprefers
    List of "key=value" properties the client prefers in bundles. Downloaded
    bundle manifests will be sorted by the preferences in this list. e.g.
-   the value "BUNDLESPEC=gzip-v1, BUNDLESPEC=bzip2=v1" will prefer a gzipped
+   the value "BUNDLESPEC=gzip-v1, BUNDLESPEC=bzip2-v1" will prefer a gzipped
    version 1 bundle type then bzip2 version 1 bundle type.
 
    If not defined, the order in the manifest will be used and the first

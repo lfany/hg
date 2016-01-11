@@ -224,7 +224,14 @@ def _aborttransaction(repo):
 
 def createcmd(ui, repo, pats, opts):
     """subcommand that creates a new shelve"""
+    wlock = repo.wlock()
+    try:
+        cmdutil.checkunfinished(repo)
+        return _docreatecmd(ui, repo, pats, opts)
+    finally:
+        lockmod.release(wlock)
 
+def _docreatecmd(ui, repo, pats, opts):
     def mutableancestors(ctx):
         """return all mutable ancestors for ctx (included)
 
@@ -276,7 +283,7 @@ def createcmd(ui, repo, pats, opts):
                 repo.mq.checkapplied = saved
 
     if parent.node() != nullid:
-        desc = "changes to '%s'" % parent.description().split('\n', 1)[0]
+        desc = "changes to: %s" % parent.description().split('\n', 1)[0]
     else:
         desc = '(changes in empty repository)'
 
@@ -285,9 +292,8 @@ def createcmd(ui, repo, pats, opts):
 
     name = opts['name']
 
-    wlock = lock = tr = None
+    lock = tr = None
     try:
-        wlock = repo.wlock()
         lock = repo.lock()
 
         # use an uncommitted transaction to generate the bundle to avoid
@@ -346,7 +352,7 @@ def createcmd(ui, repo, pats, opts):
 
         _aborttransaction(repo)
     finally:
-        lockmod.release(tr, lock, wlock)
+        lockmod.release(tr, lock)
 
 def cleanupcmd(ui, repo):
     """subcommand that deletes all shelves"""
@@ -467,7 +473,6 @@ def pathtofiles(repo, files):
 
 def unshelveabort(ui, repo, state, opts):
     """subcommand that abort an in-progress unshelve"""
-    wlock = repo.wlock()
     lock = None
     try:
         checkparents(repo, state)
@@ -491,7 +496,7 @@ def unshelveabort(ui, repo, state, opts):
     finally:
         shelvedstate.clear(repo)
         ui.warn(_("unshelve of '%s' aborted\n") % state.name)
-        lockmod.release(lock, wlock)
+        lockmod.release(lock)
 
 def mergefiles(ui, repo, wctx, shelvectx):
     """updates to wctx and merges the changes from shelvectx into the
@@ -507,7 +512,7 @@ def mergefiles(ui, repo, wctx, shelvectx):
         # revert will overwrite unknown files, so move them out of the way
         for file in repo.status(unknown=True).unknown:
             if file in files:
-                util.rename(file, file + ".orig")
+                util.rename(file, scmutil.origpath(ui, repo, file))
         ui.pushbuffer(True)
         cmdutil.revert(ui, repo, shelvectx, repo.dirstate.parents(),
                        *pathtofiles(repo, files),
@@ -527,11 +532,10 @@ def unshelvecontinue(ui, repo, state, opts):
     """subcommand to continue an in-progress unshelve"""
     # We're finishing off a merge. First parent is our original
     # parent, second is the temporary "fake" commit we're unshelving.
-    wlock = repo.wlock()
     lock = None
     try:
         checkparents(repo, state)
-        ms = merge.mergestate(repo)
+        ms = merge.mergestate.read(repo)
         if [f for f in ms if ms[f] == 'u']:
             raise error.Abort(
                 _("unresolved conflicts, can't continue"),
@@ -565,15 +569,16 @@ def unshelvecontinue(ui, repo, state, opts):
         unshelvecleanup(ui, repo, state.name, opts)
         ui.status(_("unshelve of '%s' complete\n") % state.name)
     finally:
-        lockmod.release(lock, wlock)
+        lockmod.release(lock)
 
 @command('unshelve',
          [('a', 'abort', None,
            _('abort an incomplete unshelve operation')),
           ('c', 'continue', None,
            _('continue an incomplete unshelve operation')),
-          ('', 'keep', None,
+          ('k', 'keep', None,
            _('keep shelve after unshelving')),
+          ('t', 'tool', '', _('specify merge tool')),
           ('', 'date', '',
            _('set date for temporary commits (DEPRECATED)'), _('DATE'))],
          _('hg unshelve [SHELVED]'))
@@ -609,6 +614,13 @@ def unshelve(ui, repo, *shelved, **opts):
        than ``maxbackups`` backups are kept, if same timestamp
        prevents from deciding exact order of them, for safety.
     """
+    wlock = repo.wlock()
+    try:
+        return _dounshelve(ui, repo, *shelved, **opts)
+    finally:
+        lockmod.release(wlock)
+
+def _dounshelve(ui, repo, *shelved, **opts):
     abortf = opts['abort']
     continuef = opts['continue']
     if not abortf and not continuef:
@@ -620,6 +632,8 @@ def unshelve(ui, repo, *shelved, **opts):
         if shelved:
             raise error.Abort(_('cannot combine abort/continue with '
                                'naming a shelved change'))
+        if abortf and opts.get('tool', False):
+            ui.warn(_('tool option will be ignored\n'))
 
         try:
             state = shelvedstate.load(repo)
@@ -647,9 +661,10 @@ def unshelve(ui, repo, *shelved, **opts):
         raise error.Abort(_("shelved change '%s' not found") % basename)
 
     oldquiet = ui.quiet
-    wlock = lock = tr = None
+    lock = tr = None
+    forcemerge = ui.backupconfig('ui', 'forcemerge')
     try:
-        wlock = repo.wlock()
+        ui.setconfig('ui', 'forcemerge', opts.get('tool', ''), 'unshelve')
         lock = repo.lock()
 
         tr = repo.transaction('unshelve', report=lambda x: None)
@@ -675,7 +690,7 @@ def unshelve(ui, repo, *shelved, **opts):
 
                 backup = repo.ui.backupconfig('phases', 'new-commit')
                 try:
-                    repo.ui. setconfig('phases', 'new-commit', phases.secret)
+                    repo.ui.setconfig('phases', 'new-commit', phases.secret)
                     return repo.commit(message, 'shelve@localhost',
                                        opts.get('date'), match)
                 finally:
@@ -706,6 +721,7 @@ def unshelve(ui, repo, *shelved, **opts):
                     'rev' : [shelvectx.rev()],
                     'dest' : str(tmpwctx.rev()),
                     'keep' : True,
+                    'tool' : opts.get('tool', ''),
                 })
             except error.InterventionRequired:
                 tr.close()
@@ -743,7 +759,8 @@ def unshelve(ui, repo, *shelved, **opts):
         ui.quiet = oldquiet
         if tr:
             tr.release()
-        lockmod.release(lock, wlock)
+        lockmod.release(lock)
+        ui.restoreconfig(forcemerge)
 
 @command('shelve',
          [('A', 'addremove', None,
@@ -796,8 +813,6 @@ def shelvecmd(ui, repo, *pats, **opts):
     To delete specific shelved changes, use ``--delete``. To delete
     all shelved changes, use ``--cleanup``.
     '''
-    cmdutil.checkunfinished(repo)
-
     allowables = [
         ('addremove', set(['create'])), # 'create' is pseudo action
         ('cleanup', set(['cleanup'])),
@@ -837,3 +852,5 @@ def extsetup(ui):
         [shelvedstate._filename, False, False,
          _('unshelve already in progress'),
          _("use 'hg unshelve --continue' or 'hg unshelve --abort'")])
+    cmdutil.afterresolvedstates.append(
+        [shelvedstate._filename, _('hg unshelve --continue')])

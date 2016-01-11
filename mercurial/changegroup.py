@@ -32,6 +32,7 @@ from . import (
 
 _CHANGEGROUPV1_DELTA_HEADER = "20s20s20s20s"
 _CHANGEGROUPV2_DELTA_HEADER = "20s20s20s20s20s"
+_CHANGEGROUPV3_DELTA_HEADER = ">20s20s20s20s20sH"
 
 def readexactly(stream, n):
     '''read n bytes from stream.read and abort if less was available'''
@@ -246,7 +247,8 @@ class cg1unpacker(object):
             deltabase = p1
         else:
             deltabase = prevnode
-        return node, p1, p2, deltabase, cs
+        flags = 0
+        return node, p1, p2, deltabase, cs, flags
 
     def deltachunk(self, prevnode):
         l = self._chunklength()
@@ -255,9 +257,9 @@ class cg1unpacker(object):
         headerdata = readexactly(self._stream, self.deltaheadersize)
         header = struct.unpack(self.deltaheader, headerdata)
         delta = readexactly(self._stream, l - self.deltaheadersize)
-        node, p1, p2, deltabase, cs = self._deltaheader(header, prevnode)
+        node, p1, p2, deltabase, cs, flags = self._deltaheader(header, prevnode)
         return {'node': node, 'p1': p1, 'p2': p2, 'cs': cs,
-                'deltabase': deltabase, 'delta': delta}
+                'deltabase': deltabase, 'delta': delta, 'flags': flags}
 
     def getchunks(self):
         """returns all the chunks contains in the bundle
@@ -312,6 +314,7 @@ class cg1unpacker(object):
         - number of heads stays the same: 1
         """
         repo = repo.unfiltered()
+        wasempty = (len(repo.changelog) == 0)
         def csmap(x):
             repo.ui.debug("add changeset %s\n" % short(x))
             return len(cl)
@@ -386,7 +389,7 @@ class cg1unpacker(object):
             self.callback = None
             pr = prog(_('files'), efiles)
             newrevs, newfiles = _addchangegroupfiles(
-                repo, self, revmap, trp, pr, needfiles)
+                repo, self, revmap, trp, pr, needfiles, wasempty)
             revisions += newrevs
             files += newfiles
 
@@ -494,7 +497,23 @@ class cg2unpacker(cg1unpacker):
 
     def _deltaheader(self, headertuple, prevnode):
         node, p1, p2, deltabase, cs = headertuple
-        return node, p1, p2, deltabase, cs
+        flags = 0
+        return node, p1, p2, deltabase, cs, flags
+
+class cg3unpacker(cg2unpacker):
+    """Unpacker for cg3 streams.
+
+    cg3 streams add support for exchanging treemanifests and revlog
+    flags, so the only changes from cg2 are the delta header and
+    version number.
+    """
+    deltaheader = _CHANGEGROUPV3_DELTA_HEADER
+    deltaheadersize = struct.calcsize(deltaheader)
+    version = '03'
+
+    def _deltaheader(self, headertuple, prevnode):
+        node, p1, p2, deltabase, cs, flags = headertuple
+        return node, p1, p2, deltabase, cs, flags
 
 class headerlessfixup(object):
     def __init__(self, fh, h):
@@ -507,6 +526,27 @@ class headerlessfixup(object):
                 d += readexactly(self._fh, n - len(d))
             return d
         return readexactly(self._fh, n)
+
+def _moddirs(files):
+    """Given a set of modified files, find the list of modified directories.
+
+    This returns a list of (path to changed dir, changed dir) tuples,
+    as that's what the one client needs anyway.
+
+    >>> _moddirs(['a/b/c.py', 'a/b/c.txt', 'a/d/e/f/g.txt', 'i.txt', ])
+    [('/', 'a/'), ('a/', 'b/'), ('a/', 'd/'), ('a/d/', 'e/'), ('a/d/e/', 'f/')]
+
+    """
+    alldirs = set()
+    for f in files:
+        path = f.split('/')[:-1]
+        for i in xrange(len(path) - 1, -1, -1):
+            dn = '/'.join(path[:i])
+            current = dn + '/', path[i] + '/'
+            if current in alldirs:
+                break
+            alldirs.add(current)
+    return sorted(alldirs)
 
 class cg1packer(object):
     deltaheader = _CHANGEGROUPV1_DELTA_HEADER
@@ -593,7 +633,7 @@ class cg1packer(object):
         rr, rl = revlog.rev, revlog.linkrev
         return [n for n in missing if rl(rr(n)) not in commonrevs]
 
-    def _packmanifests(self, mfnodes, lookuplinknode):
+    def _packmanifests(self, mfnodes, tmfnodes, lookuplinknode):
         """Pack flat manifests into a changegroup stream."""
         ml = self._repo.manifest
         size = 0
@@ -602,6 +642,11 @@ class cg1packer(object):
             size += len(chunk)
             yield chunk
         self._verbosenote(_('%8.i (manifests)\n') % size)
+        # It looks odd to assert this here, but tmfnodes doesn't get
+        # filled in until after we've called lookuplinknode for
+        # sending root manifests, so the only way to tell the streams
+        # got crossed is to check after we've done all the work.
+        assert not tmfnodes
 
     def generate(self, commonrevs, clnodes, fastpathlinkrev, source):
         '''yield a sequence of changegroup chunks (strings)'''
@@ -611,8 +656,10 @@ class cg1packer(object):
 
         clrevorder = {}
         mfs = {} # needed manifests
+        tmfnodes = {}
         fnodes = {} # needed file nodes
-        changedfiles = set()
+        # maps manifest node id -> set(changed files)
+        mfchangedfiles = {}
 
         # Callback for the changelog, used to collect changed files and manifest
         # nodes.
@@ -620,9 +667,12 @@ class cg1packer(object):
         def lookupcl(x):
             c = cl.read(x)
             clrevorder[x] = len(clrevorder)
-            changedfiles.update(c[3])
+            n = c[0]
             # record the first changeset introducing this manifest version
-            mfs.setdefault(c[0], x)
+            mfs.setdefault(n, x)
+            # Record a complete list of potentially-changed files in
+            # this manifest.
+            mfchangedfiles.setdefault(n, set()).update(c[3])
             return x
 
         self._verbosenote(_('uncompressed size of bundle content:\n'))
@@ -648,41 +698,91 @@ class cg1packer(object):
         # simply take the slowpath, which already has the 'clrevorder' logic.
         # This was also fixed in cc0ff93d0c0c.
         fastpathlinkrev = fastpathlinkrev and not self._reorder
+        # Treemanifests don't work correctly with fastpathlinkrev
+        # either, because we don't discover which directory nodes to
+        # send along with files. This could probably be fixed.
+        fastpathlinkrev = fastpathlinkrev and (
+            'treemanifest' not in repo.requirements)
         # Callback for the manifest, used to collect linkrevs for filelog
         # revisions.
         # Returns the linkrev node (collected in lookupcl).
-        def lookupmflinknode(x):
-            clnode = mfs[x]
-            if not fastpathlinkrev:
-                mdata = ml.readfast(x)
-                for f, n in mdata.iteritems():
-                    if f in changedfiles:
-                        # record the first changeset introducing this filelog
-                        # version
-                        fclnodes = fnodes.setdefault(f, {})
-                        fclnode = fclnodes.setdefault(n, clnode)
+        if fastpathlinkrev:
+            lookupmflinknode = mfs.__getitem__
+        else:
+            def lookupmflinknode(x):
+                """Callback for looking up the linknode for manifests.
+
+                Returns the linkrev node for the specified manifest.
+
+                SIDE EFFECT:
+
+                1) fclnodes gets populated with the list of relevant
+                   file nodes if we're not using fastpathlinkrev
+                2) When treemanifests are in use, collects treemanifest nodes
+                   to send
+
+                Note that this means manifests must be completely sent to
+                the client before you can trust the list of files and
+                treemanifests to send.
+                """
+                clnode = mfs[x]
+                # We no longer actually care about reading deltas of
+                # the manifest here, because we already know the list
+                # of changed files, so for treemanifests (which
+                # lazily-load anyway to *generate* a readdelta) we can
+                # just load them with read() and then we'll actually
+                # be able to correctly load node IDs from the
+                # submanifest entries.
+                if 'treemanifest' in repo.requirements:
+                    mdata = ml.read(x)
+                else:
+                    mdata = ml.readfast(x)
+                for f in mfchangedfiles[x]:
+                    try:
+                        n = mdata[f]
+                    except KeyError:
+                        continue
+                    # record the first changeset introducing this filelog
+                    # version
+                    fclnodes = fnodes.setdefault(f, {})
+                    fclnode = fclnodes.setdefault(n, clnode)
+                    if clrevorder[clnode] < clrevorder[fclnode]:
+                        fclnodes[n] = clnode
+                # gather list of changed treemanifest nodes
+                if 'treemanifest' in repo.requirements:
+                    submfs = {'/': mdata}
+                    for dn, bn in _moddirs(mfchangedfiles[x]):
+                        submf = submfs[dn]
+                        submf = submf._dirs[bn]
+                        submfs[submf.dir()] = submf
+                        tmfclnodes = tmfnodes.setdefault(submf.dir(), {})
+                        tmfclnodes.setdefault(submf._node, clnode)
                         if clrevorder[clnode] < clrevorder[fclnode]:
-                            fclnodes[n] = clnode
-            return clnode
+                            tmfclnodes[n] = clnode
+                return clnode
 
         mfnodes = self.prune(ml, mfs, commonrevs)
-        for x in self._packmanifests(mfnodes, lookupmflinknode):
+        for x in self._packmanifests(
+            mfnodes, tmfnodes, lookupmflinknode):
             yield x
 
         mfs.clear()
         clrevs = set(cl.rev(x) for x in clnodes)
 
-        def linknodes(filerevlog, fname):
-            if fastpathlinkrev:
+        if not fastpathlinkrev:
+            def linknodes(unused, fname):
+                return fnodes.get(fname, {})
+        else:
+            cln = cl.node
+            def linknodes(filerevlog, fname):
                 llr = filerevlog.linkrev
-                def genfilenodes():
-                    for r in filerevlog:
-                        linkrev = llr(r)
-                        if linkrev in clrevs:
-                            yield filerevlog.node(r), cl.node(linkrev)
-                return dict(genfilenodes())
-            return fnodes.get(fname, {})
+                fln = filerevlog.node
+                revs = ((r, llr(r)) for r in filerevlog)
+                return dict((fln(r), cln(lr)) for r, lr in revs if lr in clrevs)
 
+        changedfiles = set()
+        for x in mfchangedfiles.itervalues():
+            changedfiles.update(x)
         for chunk in self.generatefiles(changedfiles, linknodes, commonrevs,
                                         source):
             yield chunk
@@ -751,14 +851,16 @@ class cg1packer(object):
             delta = revlog.revdiff(base, rev)
         p1n, p2n = revlog.parents(node)
         basenode = revlog.node(base)
-        meta = self.builddeltaheader(node, p1n, p2n, basenode, linknode)
+        flags = revlog.flags(rev)
+        meta = self.builddeltaheader(node, p1n, p2n, basenode, linknode, flags)
         meta += prefix
         l = len(meta) + len(delta)
         yield chunkheader(l)
         yield meta
         yield delta
-    def builddeltaheader(self, node, p1n, p2n, basenode, linknode):
+    def builddeltaheader(self, node, p1n, p2n, basenode, linknode, flags):
         # do nothing with basenode, it is implicitly the previous one in HG10
+        # do nothing with flags, it is implicitly 0 for cg1 and cg2
         return struct.pack(self.deltaheader, node, p1n, p2n, linknode)
 
 class cg2packer(cg1packer):
@@ -781,12 +883,40 @@ class cg2packer(cg1packer):
             return prev
         return dp
 
-    def builddeltaheader(self, node, p1n, p2n, basenode, linknode):
+    def builddeltaheader(self, node, p1n, p2n, basenode, linknode, flags):
+        # Do nothing with flags, it is implicitly 0 in cg1 and cg2
         return struct.pack(self.deltaheader, node, p1n, p2n, basenode, linknode)
+
+class cg3packer(cg2packer):
+    version = '03'
+    deltaheader = _CHANGEGROUPV3_DELTA_HEADER
+
+    def _packmanifests(self, mfnodes, tmfnodes, lookuplinknode):
+        # Note that debug prints are super confusing in this code, as
+        # tmfnodes gets populated by the calls to lookuplinknode in
+        # the superclass's manifest packer. In the future we should
+        # probably see if we can refactor this somehow to be less
+        # confusing.
+        for x in super(cg3packer, self)._packmanifests(
+            mfnodes, {}, lookuplinknode):
+            yield x
+        dirlog = self._repo.manifest.dirlog
+        for name, nodes in tmfnodes.iteritems():
+            # For now, directory headers are simply file headers with
+            # a trailing '/' on the path (already in the name).
+            yield self.fileheader(name)
+            for chunk in self.group(nodes, dirlog(name), nodes.get):
+                yield chunk
+
+    def builddeltaheader(self, node, p1n, p2n, basenode, linknode, flags):
+        return struct.pack(
+            self.deltaheader, node, p1n, p2n, basenode, linknode, flags)
 
 packermap = {'01': (cg1packer, cg1unpacker),
              # cg2 adds support for exchanging generaldelta
              '02': (cg2packer, cg2unpacker),
+             # cg3 adds support for exchanging treemanifests
+             '03': (cg3packer, cg3unpacker),
 }
 
 def _changegroupinfo(repo, nodes, source):
@@ -903,7 +1033,7 @@ def changegroup(repo, basenodes, source):
     # to avoid a race we use changegroupsubset() (issue1320)
     return changegroupsubset(repo, basenodes, repo.heads(), source)
 
-def _addchangegroupfiles(repo, source, revmap, trp, pr, needfiles):
+def _addchangegroupfiles(repo, source, revmap, trp, pr, needfiles, wasempty):
     revisions = 0
     files = 0
     while True:
@@ -913,15 +1043,32 @@ def _addchangegroupfiles(repo, source, revmap, trp, pr, needfiles):
         f = chunkdata["filename"]
         repo.ui.debug("adding %s revisions\n" % f)
         pr()
-        fl = repo.file(f)
+        directory = (f[-1] == '/')
+        if directory:
+            # a directory using treemanifests
+            # TODO fixup repo requirements safely
+            if 'treemanifest' not in repo.requirements:
+                if not wasempty:
+                    raise error.Abort(_(
+                        "bundle contains tree manifests, but local repo is "
+                        "non-empty and does not use tree manifests"))
+                repo.requirements.add('treemanifest')
+                repo._applyopenerreqs()
+                repo._writerequirements()
+                repo.manifest._treeondisk = True
+                repo.manifest._treeinmem = True
+            fl = repo.manifest.dirlog(f)
+        else:
+            fl = repo.file(f)
         o = len(fl)
         try:
             if not fl.addgroup(source, revmap, trp):
                 raise error.Abort(_("received file revlog group is empty"))
         except error.CensoredBaseError as e:
             raise error.Abort(_("received delta base is censored: %s") % e)
-        revisions += len(fl) - o
-        files += 1
+        if not directory:
+            revisions += len(fl) - o
+            files += 1
         if f in needfiles:
             needs = needfiles[f]
             for new in xrange(o, len(fl)):

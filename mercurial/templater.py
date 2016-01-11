@@ -336,7 +336,7 @@ def diff(context, mapping, args):
     specifying files to include or exclude."""
     if len(args) > 2:
         # i18n: "diff" is a keyword
-        raise error.ParseError(_("diff expects one, two or no arguments"))
+        raise error.ParseError(_("diff expects zero, one, or two arguments"))
 
     def getpatterns(i):
         if i < len(args):
@@ -832,7 +832,7 @@ def stylelist():
     paths = templatepaths()
     if not paths:
         return _('no templates found, try `hg debuginstall` for more info')
-    dirlist =  os.listdir(paths[0])
+    dirlist = os.listdir(paths[0])
     stylelist = []
     for file in dirlist:
         split = file.split(".")

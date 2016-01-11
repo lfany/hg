@@ -458,11 +458,11 @@ def overridecheckunknownfile(origfn, repo, wctx, mctx, f, f2=None):
 # writing the files into the working copy and lfcommands.updatelfiles
 # will update the largefiles.
 def overridecalculateupdates(origfn, repo, p1, p2, pas, branchmerge, force,
-                             partial, acceptremote, followcopies):
+                             acceptremote, followcopies, matcher=None):
     overwrite = force and not branchmerge
     actions, diverge, renamedelete = origfn(
-        repo, p1, p2, pas, branchmerge, force, partial, acceptremote,
-        followcopies)
+        repo, p1, p2, pas, branchmerge, force, acceptremote,
+        followcopies, matcher=matcher)
 
     if overwrite:
         return actions, diverge, renamedelete
@@ -481,6 +481,9 @@ def overridecalculateupdates(origfn, repo, p1, p2, pas, branchmerge, force,
         (lm, largs, lmsg) = actions.get(lfile, (None, None, None))
         (sm, sargs, smsg) = actions.get(standin, (None, None, None))
         if sm in ('g', 'dc') and lm != 'r':
+            if sm == 'dc':
+                f1, f2, fa, move, anc = sargs
+                sargs = (p2[f2].flags(), False)
             # Case 1: normal file in the working copy, largefile in
             # the second parent
             usermsg = _('remote turned local normal file %s into a largefile\n'
@@ -496,6 +499,9 @@ def overridecalculateupdates(origfn, repo, p1, p2, pas, branchmerge, force,
                 else:
                     actions[standin] = ('r', None, 'replaced by non-standin')
         elif lm in ('g', 'dc') and sm != 'r':
+            if lm == 'dc':
+                f1, f2, fa, move, anc = largs
+                largs = (p2[f2].flags(), False)
             # Case 2: largefile in the working copy, normal file in
             # the second parent
             usermsg = _('remote turned local largefile %s into a normal file\n'
@@ -538,7 +544,7 @@ def mergerecordupdates(orig, repo, actions, branchmerge):
 # largefiles. This will handle identical edits without prompting the user.
 def overridefilemerge(origfn, premerge, repo, mynode, orig, fcd, fco, fca,
                       labels=None):
-    if not lfutil.isstandin(orig):
+    if not lfutil.isstandin(orig) or fcd.isabsent() or fco.isabsent():
         return origfn(premerge, repo, mynode, orig, fcd, fco, fca,
                       labels=labels)
 
@@ -555,7 +561,7 @@ def overridefilemerge(origfn, premerge, repo, mynode, orig, fcd, fco, fca,
                (lfutil.splitstandin(orig), ahash, dhash, ohash),
              0) == 1)):
         repo.wwrite(fcd.path(), fco.data(), fco.flags())
-    return True, 0
+    return True, 0, False
 
 def copiespathcopies(orig, ctx1, ctx2, match=None):
     copies = orig(ctx1, ctx2, match=match)
@@ -806,9 +812,11 @@ def overridepull(orig, ui, repo, source=None, **opts):
         ui.status(_("%d largefiles cached\n") % numcached)
     return result
 
+revsetpredicate = revset.extpredicate()
+
+@revsetpredicate('pulled()')
 def pulledrevsetsymbol(repo, subset, x):
-    """``pulled()``
-    Changesets that just has been pulled.
+    """Changesets that just has been pulled.
 
     Only available with largefiles from pull --lfrev expressions.
 
@@ -1358,8 +1366,11 @@ def overridecat(orig, ui, repo, file1, *pats, **opts):
         err = 0
     return err
 
-def mergeupdate(orig, repo, node, branchmerge, force, partial,
+def mergeupdate(orig, repo, node, branchmerge, force,
                 *args, **kwargs):
+    matcher = kwargs.get('matcher', None)
+    # note if this is a partial update
+    partial = matcher and not matcher.always()
     wlock = repo.wlock()
     try:
         # branch |       |         |
@@ -1399,7 +1410,7 @@ def mergeupdate(orig, repo, node, branchmerge, force, partial,
 
         oldstandins = lfutil.getstandinsstate(repo)
 
-        result = orig(repo, node, branchmerge, force, partial, *args, **kwargs)
+        result = orig(repo, node, branchmerge, force, *args, **kwargs)
 
         newstandins = lfutil.getstandinsstate(repo)
         filelist = lfutil.getlfilestoupdate(oldstandins, newstandins)

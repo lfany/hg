@@ -20,6 +20,7 @@ from mercurial.node import short
 from mercurial import bundlerepo, hg, merge, match
 from mercurial import patch, revlog, scmutil, util, error, cmdutil
 from mercurial import revset, templatekw, exchange
+from mercurial import lock as lockmod
 
 class TransplantError(error.Abort):
     pass
@@ -127,9 +128,8 @@ class transplanter(object):
         diffopts = patch.difffeatureopts(self.ui, opts)
         diffopts.git = True
 
-        lock = wlock = tr = None
+        lock = tr = None
         try:
-            wlock = repo.wlock()
             lock = repo.lock()
             tr = repo.transaction('transplant')
             for rev in revs:
@@ -152,7 +152,7 @@ class transplanter(object):
                     if pulls:
                         if source != repo:
                             exchange.pull(repo, source.peer(), heads=pulls)
-                        merge.update(repo, pulls[-1], False, False, None)
+                        merge.update(repo, pulls[-1], False, False)
                         p1, p2 = repo.dirstate.parents()
                         pulls = []
 
@@ -216,7 +216,7 @@ class transplanter(object):
             tr.close()
             if pulls:
                 exchange.pull(repo, source.peer(), heads=pulls)
-                merge.update(repo, pulls[-1], False, False, None)
+                merge.update(repo, pulls[-1], False, False)
         finally:
             self.saveseries(revmap, merges)
             self.transplants.write()
@@ -224,7 +224,6 @@ class transplanter(object):
                 tr.release()
             if lock:
                 lock.release()
-            wlock.release()
 
     def filter(self, filter, node, changelog, patchfile):
         '''arbitrarily rewrite changeset before applying it'''
@@ -283,7 +282,7 @@ class transplanter(object):
                 p2 = node
                 self.log(user, date, message, p1, p2, merge=merge)
                 self.ui.write(str(inst) + '\n')
-                raise TransplantError(_('fix up the merge and run '
+                raise TransplantError(_('fix up the working directory and run '
                                         'hg transplant --continue'))
         else:
             files = None
@@ -303,6 +302,9 @@ class transplanter(object):
             self.transplants.set(n, node)
 
         return n
+
+    def canresume(self):
+        return os.path.exists(os.path.join(self.path, 'journal'))
 
     def resume(self, repo, source, opts):
         '''recover last transaction and apply remaining changesets'''
@@ -345,7 +347,6 @@ class transplanter(object):
                 merge = True
 
         extra = {'transplant_source': node}
-        wlock = repo.wlock()
         try:
             p1, p2 = repo.dirstate.parents()
             if p1 != parent:
@@ -367,7 +368,9 @@ class transplanter(object):
 
             return n, node
         finally:
-            wlock.release()
+            # TODO: get rid of this meaningless try/finally enclosing.
+            # this is kept only to reduce changes in a patch.
+            pass
 
     def readseries(self):
         nodes = []
@@ -572,6 +575,14 @@ def transplant(ui, repo, *revs, **opts):
     and then resume where you left off by calling :hg:`transplant
     --continue/-c`.
     '''
+    wlock = None
+    try:
+        wlock = repo.wlock()
+        return _dotransplant(ui, repo, *revs, **opts)
+    finally:
+        lockmod.release(wlock)
+
+def _dotransplant(ui, repo, *revs, **opts):
     def incwalk(repo, csets, match=util.always):
         for node in csets:
             if match(node):
@@ -599,7 +610,7 @@ def transplant(ui, repo, *revs, **opts):
             return
         if not (opts.get('source') or revs or
                 opts.get('merge') or opts.get('branch')):
-            raise error.Abort(_('no source URL, branch revision or revision '
+            raise error.Abort(_('no source URL, branch revision, or revision '
                                'list provided'))
         if opts.get('all'):
             if not opts.get('branch'):
@@ -619,11 +630,14 @@ def transplant(ui, repo, *revs, **opts):
 
     tp = transplanter(ui, repo, opts)
 
-    cmdutil.checkunfinished(repo)
     p1, p2 = repo.dirstate.parents()
     if len(repo) > 0 and p1 == revlog.nullid:
         raise error.Abort(_('no revision checked out'))
-    if not opts.get('continue'):
+    if opts.get('continue'):
+        if not tp.canresume():
+            raise error.Abort(_('no transplant to continue'))
+    else:
+        cmdutil.checkunfinished(repo)
         if p2 != revlog.nullid:
             raise error.Abort(_('outstanding uncommitted merges'))
         m, a, r, d = repo.status()[:4]
@@ -685,9 +699,11 @@ def transplant(ui, repo, *revs, **opts):
         if cleanupfn:
             cleanupfn()
 
+revsetpredicate = revset.extpredicate()
+
+@revsetpredicate('transplanted([set])')
 def revsettransplanted(repo, subset, x):
-    """``transplanted([set])``
-    Transplanted changesets in set, or all transplanted changesets.
+    """Transplanted changesets in set, or all transplanted changesets.
     """
     if x:
         s = revset.getset(repo, subset, x)
@@ -703,10 +719,10 @@ def kwtransplanted(repo, ctx, **args):
     return n and revlog.hex(n) or ''
 
 def extsetup(ui):
-    revset.symbols['transplanted'] = revsettransplanted
+    revsetpredicate.setup()
     templatekw.keywords['transplanted'] = kwtransplanted
     cmdutil.unfinishedstates.append(
-        ['series', True, False, _('transplant in progress'),
+        ['transplant/journal', True, False, _('transplant in progress'),
          _("use 'hg transplant --continue' or 'hg update' to abort")])
 
 # tell hggettext to extract docstrings from these functions:

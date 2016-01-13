@@ -68,6 +68,7 @@ from mercurial.lock import release
 from mercurial import commands, cmdutil, hg, scmutil, util, revset
 from mercurial import extensions, error, phases
 from mercurial import patch as patchmod
+from mercurial import lock as lockmod
 from mercurial import localrepo
 from mercurial import subrepo
 import os, re, errno, shutil
@@ -699,11 +700,13 @@ class queue(object):
             absf = repo.wjoin(f)
             if os.path.lexists(absf):
                 self.ui.note(_('saving current version of %s as %s\n') %
-                             (f, f + '.orig'))
+                             (f, scmutil.origpath(self.ui, repo, f)))
+
+                absorig = scmutil.origpath(self.ui, repo, absf)
                 if copy:
-                    util.copyfile(absf, absf + '.orig')
+                    util.copyfile(absf, absorig)
                 else:
-                    util.rename(absf, absf + '.orig')
+                    util.rename(absf, absorig)
 
     def printdiff(self, repo, diffopts, node1, node2=None, files=None,
                   fp=None, changes=None, opts={}):
@@ -1790,27 +1793,34 @@ class queue(object):
 
                 # Ensure we create a new changeset in the same phase than
                 # the old one.
-                n = newcommit(repo, oldphase, message, user, ph.date,
+                lock = tr = None
+                try:
+                    lock = repo.lock()
+                    tr = repo.transaction('mq')
+                    n = newcommit(repo, oldphase, message, user, ph.date,
                               match=match, force=True, editor=editor)
-                # only write patch after a successful commit
-                c = [list(x) for x in refreshchanges]
-                if inclsubs:
-                    self.putsubstate2changes(substatestate, c)
-                chunks = patchmod.diff(repo, patchparent,
-                                       changes=c, opts=diffopts)
-                comments = str(ph)
-                if comments:
-                    patchf.write(comments)
-                for chunk in chunks:
-                    patchf.write(chunk)
-                patchf.close()
+                    # only write patch after a successful commit
+                    c = [list(x) for x in refreshchanges]
+                    if inclsubs:
+                        self.putsubstate2changes(substatestate, c)
+                    chunks = patchmod.diff(repo, patchparent,
+                                           changes=c, opts=diffopts)
+                    comments = str(ph)
+                    if comments:
+                        patchf.write(comments)
+                    for chunk in chunks:
+                        patchf.write(chunk)
+                    patchf.close()
 
-                marks = repo._bookmarks
-                for bm in bmlist:
-                    marks[bm] = n
-                marks.write()
+                    marks = repo._bookmarks
+                    for bm in bmlist:
+                        marks[bm] = n
+                    marks.recordchange(tr)
+                    tr.close()
 
-                self.applied.append(statusentry(n, patchfn))
+                    self.applied.append(statusentry(n, patchfn))
+                finally:
+                    lockmod.release(lock, tr)
             except: # re-raises
                 ctx = repo[cparents[0]]
                 repo.dirstate.rebuild(ctx.node(), ctx.manifest())
@@ -3548,9 +3558,11 @@ def summaryhook(ui, repo):
         # i18n: column positioning for "hg summary"
         ui.note(_("mq:     (empty queue)\n"))
 
+revsetpredicate = revset.extpredicate()
+
+@revsetpredicate('mq()')
 def revsetmq(repo, subset, x):
-    """``mq()``
-    Changesets managed by MQ.
+    """Changesets managed by MQ.
     """
     revset.getargs(x, 0, 0, _("mq takes no arguments"))
     applied = set([repo[r.node].rev() for r in repo.mq.applied])
@@ -3586,7 +3598,7 @@ def extsetup(ui):
         if extmodule.__file__ != __file__:
             dotable(getattr(extmodule, 'cmdtable', {}))
 
-    revset.symbols['mq'] = revsetmq
+    revsetpredicate.setup()
 
 colortable = {'qguard.negative': 'red',
               'qguard.positive': 'yellow',

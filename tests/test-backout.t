@@ -686,7 +686,7 @@ Test usage of `hg resolve` in case of conflict
   * version 2 records
   local: b71750c4b0fdf719734971e3ef90dbeab5919a2d
   other: a30dd8addae3ce71b8667868478542bc417439e6
-  file: foo (state "u", hash 0beec7b5ea3f0fdbc95d0dd47f3c5bc275da8a33)
+  file: foo (record type "F", state "u", hash 0beec7b5ea3f0fdbc95d0dd47f3c5bc275da8a33)
     local path: foo (flags "")
     ancestor path: foo (node f89532f44c247a0e993d63e3a734dd781ab04708)
     other path: foo (node f50039b486d6fa1a90ae51778388cad161f425ee)
@@ -694,7 +694,7 @@ Test usage of `hg resolve` in case of conflict
   $ hg debugmergestate
   * version 1 records
   local: b71750c4b0fdf719734971e3ef90dbeab5919a2d
-  file: foo (state "u", hash 0beec7b5ea3f0fdbc95d0dd47f3c5bc275da8a33)
+  file: foo (record type "F", state "u", hash 0beec7b5ea3f0fdbc95d0dd47f3c5bc275da8a33)
     local path: foo (flags "")
     ancestor path: foo (node f89532f44c247a0e993d63e3a734dd781ab04708)
     other path: foo (node not stored in v1 format)
@@ -709,11 +709,12 @@ Test usage of `hg resolve` in case of conflict
   update: (current)
   phases: 3 draft
   $ hg resolve --all --debug
-  picked tool ':merge' for foo (binary False symlink False)
+  picked tool ':merge' for foo (binary False symlink False changedelete False)
   merging foo
   my foo@b71750c4b0fd+ other foo@a30dd8addae3 ancestor foo@913609522437
    premerge successful
   (no more unresolved files)
+  continue: hg commit
   $ hg status
   M foo
   ? foo.orig

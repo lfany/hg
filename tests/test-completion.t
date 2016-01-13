@@ -80,6 +80,7 @@ Show debug commands if there are no other candidates
   debugdag
   debugdata
   debugdate
+  debugdeltachain
   debugdirstate
   debugdiscovery
   debugextensions
@@ -243,6 +244,7 @@ Show all commands + options
   debugdag: tags, branches, dots, spaces
   debugdata: changelog, manifest, dir
   debugdate: extended
+  debugdeltachain: changelog, manifest, dir, template
   debugdirstate: nodates, datesort
   debugdiscovery: old, nonheads, ssh, remotecmd, insecure
   debugextensions: template
@@ -251,7 +253,7 @@ Show all commands + options
   debuggetbundle: head, common, type
   debugignore: 
   debugindex: changelog, manifest, dir, format
-  debugindexdot: 
+  debugindexdot: changelog, manifest, dir
   debuginstall: 
   debugknown: 
   debuglabelcomplete: 
@@ -284,7 +286,7 @@ Show all commands + options
   manifest: rev, all, template
   outgoing: force, rev, newest-first, bookmarks, branch, patch, git, limit, no-merges, stat, graph, style, template, ssh, remotecmd, insecure, subrepos
   parents: rev, style, template
-  paths: 
+  paths: template
   phase: public, draft, secret, force, rev
   recover: 
   rename: after, force, include, exclude, dry-run

@@ -212,12 +212,7 @@ def generatev1(repo):
                 # partially encode name over the wire for backwards compat
                 yield '%s\0%d\n' % (store.encodedir(name), size)
                 if size <= 65536:
-                    fp = svfs(name)
-                    try:
-                        data = fp.read(size)
-                    finally:
-                        fp.close()
-                    yield data
+                    yield svfs.read(name)
                 else:
                     for chunk in util.filechunkiter(svfs(name), limit=size):
                         yield chunk
@@ -324,12 +319,12 @@ def consumev1(repo, fp, filecount, bytecount):
                     repo.ui.debug('adding %s (%s)\n' %
                                   (name, util.bytecount(size)))
                 # for backwards compat, name was partially encoded
-                ofp = repo.svfs(store.decodedir(name), 'w')
-                for chunk in util.filechunkiter(fp, limit=size):
-                    handled_bytes += len(chunk)
-                    repo.ui.progress(_('clone'), handled_bytes, total=bytecount)
-                    ofp.write(chunk)
-                ofp.close()
+                with repo.svfs(store.decodedir(name), 'w') as ofp:
+                    for chunk in util.filechunkiter(fp, limit=size):
+                        handled_bytes += len(chunk)
+                        repo.ui.progress(_('clone'), handled_bytes,
+                                         total=bytecount)
+                        ofp.write(chunk)
             tr.close()
         finally:
             tr.release()

@@ -1,7 +1,7 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
-"""advertise pre-generated bundles to seed clones (experimental)
+"""advertise pre-generated bundles to seed clones
 
 "clonebundles" is a server-side extension used to advertise the existence
 of pre-generated, externally hosted bundle files to clients that are
@@ -47,7 +47,7 @@ To work, this extension requires the following of server operators:
 * Generating bundle files of repository content (typically periodically,
   such as once per day).
 * A file server that clients have network access to and that Python knows
-  how to talk to through its normal URL handling facility (typically a
+  how to talk to through its normal URL handling facility (typically an
   HTTP server).
 * A process for keeping the bundles manifest in sync with available bundle
   files.
@@ -160,40 +160,9 @@ message informing them how to bypass the clone bundles facility when a failure
 occurs. So server operators should prepare for some people to follow these
 instructions when a failure occurs, thus driving more load to the original
 Mercurial server when the bundle hosting service fails.
-
-The following config options influence the behavior of the clone bundles
-feature:
-
-ui.clonebundleadvertise
-   Whether the server advertises the existence of the clone bundles feature
-   to compatible clients that aren't using it.
-
-   When this is enabled (the default), a server will send a message to
-   compatible clients performing a traditional clone informing them of the
-   available clone bundles feature. Compatible clients are those that support
-   bundle2 and are advertising support for the clone bundles feature.
-
-ui.clonebundlefallback
-   Whether to automatically fall back to a traditional clone in case of
-   clone bundles failure. Defaults to false for reasons described above.
-
-experimental.clonebundles
-   Whether the clone bundles feature is enabled on clients. Defaults to true.
-
-experimental.clonebundleprefers
-   List of "key=value" properties the client prefers in bundles. Downloaded
-   bundle manifests will be sorted by the preferences in this list. e.g.
-   the value "BUNDLESPEC=gzip-v1, BUNDLESPEC=bzip2=v1" will prefer a gzipped
-   version 1 bundle type then bzip2 version 1 bundle type.
-
-   If not defined, the order in the manifest will be used and the first
-   available bundle will be downloaded.
 """
 
-from mercurial.i18n import _
-from mercurial.node import nullid
 from mercurial import (
-    exchange,
     extensions,
     wireproto,
 )
@@ -210,45 +179,6 @@ def capabilities(orig, repo, proto):
         caps.append('clonebundles')
 
     return caps
-
-@exchange.getbundle2partsgenerator('clonebundlesadvertise', 0)
-def advertiseclonebundlespart(bundler, repo, source, bundlecaps=None,
-                              b2caps=None, heads=None, common=None,
-                              cbattempted=None, **kwargs):
-    """Inserts an output part to advertise clone bundles availability."""
-    # Allow server operators to disable this behavior.
-    # # experimental config: ui.clonebundleadvertise
-    if not repo.ui.configbool('ui', 'clonebundleadvertise', True):
-        return
-
-    # Only advertise if a manifest is present.
-    if not repo.opener.exists('clonebundles.manifest'):
-        return
-
-    # And when changegroup data is requested.
-    if not kwargs.get('cg', True):
-        return
-
-    # And when the client supports clone bundles.
-    if cbattempted is None:
-        return
-
-    # And when the client didn't attempt a clone bundle as part of this pull.
-    if cbattempted:
-        return
-
-    # And when a full clone is requested.
-    # Note: client should not send "cbattempted" for regular pulls. This check
-    # is defense in depth.
-    if common and common != [nullid]:
-        return
-
-    msg = _('this server supports the experimental "clone bundles" feature '
-            'that should enable faster and more reliable cloning\n'
-            'help test it by setting the "experimental.clonebundles" config '
-            'flag to "true"')
-
-    bundler.newpart('output', data=msg)
 
 def extsetup(ui):
     extensions.wrapfunction(wireproto, '_capabilities', capabilities)

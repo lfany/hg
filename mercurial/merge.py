@@ -65,6 +65,7 @@ class mergestate(object):
        (experimental)
     m: the external merge driver defined for this merge plus its run state
        (experimental)
+    f: a (filename, dictonary) tuple of optional values for a given file
     X: unsupported mandatory record type (used in tests)
     x: unsupported advisory record type (used in tests)
 
@@ -102,6 +103,7 @@ class mergestate(object):
 
     def reset(self, node=None, other=None):
         self._state = {}
+        self._stateextras = {}
         self._local = None
         self._other = None
         for var in ('localctx', 'otherctx'):
@@ -126,6 +128,7 @@ class mergestate(object):
         of on disk file.
         """
         self._state = {}
+        self._stateextras = {}
         self._local = None
         self._other = None
         for var in ('localctx', 'otherctx'):
@@ -152,6 +155,16 @@ class mergestate(object):
             elif rtype in 'FDC':
                 bits = record.split('\0')
                 self._state[bits[0]] = bits[1:]
+            elif rtype == 'f':
+                filename, rawextras = record.split('\0', 1)
+                extraparts = rawextras.split('\0')
+                extras = {}
+                i = 0
+                while i < len(extraparts):
+                    extras[extraparts[i]] = extraparts[i + 1]
+                    i += 2
+
+                self._stateextras[filename] = extras
             elif not rtype.islower():
                 unsupported.add(rtype)
         self._results = {}
@@ -298,7 +311,7 @@ class mergestate(object):
     @util.propertycache
     def otherctx(self):
         if self._other is None:
-            raise RuntimeError("localctx accessed but self._local isn't set")
+            raise RuntimeError("otherctx accessed but self._other isn't set")
         return self._repo[self._other]
 
     def active(self):
@@ -336,6 +349,10 @@ class mergestate(object):
                 records.append(('C', '\0'.join([d] + v)))
             else:
                 records.append(('F', '\0'.join([d] + v)))
+        for filename, extras in sorted(self._stateextras.iteritems()):
+            rawextras = '\0'.join('%s\0%s' % (k, v) for k, v in
+                                  extras.iteritems())
+            records.append(('f', '%s\0%s' % (filename, rawextras)))
         return records
 
     def _writerecords(self, records):
@@ -388,6 +405,7 @@ class mergestate(object):
                            fca.path(), hex(fca.filenode()),
                            fco.path(), hex(fco.filenode()),
                            fcl.flags()]
+        self._stateextras[fd] = { 'ancestorlinknode' : hex(fca.node()) }
         self._dirty = True
 
     def __contains__(self, dfile):
@@ -423,6 +441,9 @@ class mergestate(object):
             if entry[0] == 'd':
                 yield f
 
+    def extras(self, filename):
+        return self._stateextras.setdefault(filename, {})
+
     def _resolve(self, preresolve, dfile, wctx, labels=None):
         """rerun merge process for file path `dfile`"""
         if self[dfile] in 'rd':
@@ -430,10 +451,16 @@ class mergestate(object):
         stateentry = self._state[dfile]
         state, hash, lfile, afile, anode, ofile, onode, flags = stateentry
         octx = self._repo[self._other]
+        extras = self.extras(dfile)
+        anccommitnode = extras.get('ancestorlinknode')
+        if anccommitnode:
+            actx = self._repo[anccommitnode]
+        else:
+            actx = None
         fcd = self._filectxorabsent(hash, wctx, dfile)
         fco = self._filectxorabsent(onode, octx, ofile)
         # TODO: move this to filectxorabsent
-        fca = self._repo.filectx(afile, fileid=anode)
+        fca = self._repo.filectx(afile, fileid=anode, changeid=actx)
         # "premerge" x flags
         flo = fco.flags()
         fla = fca.flags()
@@ -462,6 +489,7 @@ class mergestate(object):
         if r is None:
             # no real conflict
             del self._state[dfile]
+            self._stateextras.pop(dfile, None)
             self._dirty = True
         elif not r:
             self.mark(dfile, 'r')
@@ -570,29 +598,29 @@ def _getcheckunknownconfig(repo, section, name):
 def _checkunknownfile(repo, wctx, mctx, f, f2=None):
     if f2 is None:
         f2 = f
-    return (repo.wvfs.isfileorlink(f)
-        and repo.wvfs.audit.check(f)
+    return (repo.wvfs.audit.check(f)
+        and repo.wvfs.isfileorlink(f)
         and repo.dirstate.normalize(f) not in repo.dirstate
         and mctx[f2].cmp(wctx[f]))
 
-def _checkunknownfiles(repo, wctx, mctx, force, actions):
+def _checkunknownfiles(repo, wctx, mctx, force, actions, mergeforce):
     """
     Considers any actions that care about the presence of conflicting unknown
     files. For some actions, the result is to abort; for others, it is to
     choose a different action.
     """
     conflicts = set()
+    warnconflicts = set()
+    abortconflicts = set()
+    unknownconfig = _getcheckunknownconfig(repo, 'merge', 'checkunknown')
+    ignoredconfig = _getcheckunknownconfig(repo, 'merge', 'checkignored')
     if not force:
-        abortconflicts = set()
-        warnconflicts = set()
         def collectconflicts(conflicts, config):
             if config == 'abort':
                 abortconflicts.update(conflicts)
             elif config == 'warn':
                 warnconflicts.update(conflicts)
 
-        unknownconfig = _getcheckunknownconfig(repo, 'merge', 'checkunknown')
-        ignoredconfig = _getcheckunknownconfig(repo, 'merge', 'checkignored')
         for f, (m, args, msg) in actions.iteritems():
             if m in ('c', 'dc'):
                 if _checkunknownfile(repo, wctx, mctx, f):
@@ -606,28 +634,54 @@ def _checkunknownfiles(repo, wctx, mctx, force, actions):
         unknownconflicts = conflicts - ignoredconflicts
         collectconflicts(ignoredconflicts, ignoredconfig)
         collectconflicts(unknownconflicts, unknownconfig)
-        for f in sorted(abortconflicts):
-            repo.ui.warn(_("%s: untracked file differs\n") % f)
-        if abortconflicts:
-            raise error.Abort(_("untracked files in working directory "
-                                "differ from files in requested revision"))
+    else:
+        for f, (m, args, msg) in actions.iteritems():
+            if m == 'cm':
+                fl2, anc = args
+                different = _checkunknownfile(repo, wctx, mctx, f)
+                if repo.dirstate._ignore(f):
+                    config = ignoredconfig
+                else:
+                    config = unknownconfig
 
-        for f in sorted(warnconflicts):
-            repo.ui.warn(_("%s: replacing untracked file\n") % f)
+                # The behavior when force is True is described by this table:
+                #  config  different  mergeforce  |    action    backup
+                #    *         n          *       |      get        n
+                #    *         y          y       |     merge       -
+                #   abort      y          n       |     merge       -   (1)
+                #   warn       y          n       |  warn + get     y
+                #  ignore      y          n       |      get        y
+                #
+                # (1) this is probably the wrong behavior here -- we should
+                #     probably abort, but some actions like rebases currently
+                #     don't like an abort happening in the middle of
+                #     merge.update.
+                if not different:
+                    actions[f] = ('g', (fl2, False), "remote created")
+                elif mergeforce or config == 'abort':
+                    actions[f] = ('m', (f, f, None, False, anc),
+                                  "remote differs from untracked local")
+                elif config == 'abort':
+                    abortconflicts.add(f)
+                else:
+                    if config == 'warn':
+                        warnconflicts.add(f)
+                    actions[f] = ('g', (fl2, True), "remote created")
+
+    for f in sorted(abortconflicts):
+        repo.ui.warn(_("%s: untracked file differs\n") % f)
+    if abortconflicts:
+        raise error.Abort(_("untracked files in working directory "
+                            "differ from files in requested revision"))
+
+    for f in sorted(warnconflicts):
+        repo.ui.warn(_("%s: replacing untracked file\n") % f)
 
     for f, (m, args, msg) in actions.iteritems():
         backup = f in conflicts
         if m == 'c':
             flags, = args
             actions[f] = ('g', (flags, backup), msg)
-        elif m == 'cm':
-            fl2, anc = args
-            different = _checkunknownfile(repo, wctx, mctx, f)
-            if different:
-                actions[f] = ('m', (f, f, None, False, anc),
-                              "remote differs from untracked local")
-            else:
-                actions[f] = ('g', (fl2, backup), "remote created")
 
 def _forgetremoved(wctx, mctx, branchmerge):
     """
@@ -747,10 +801,8 @@ def manifestmerge(repo, wctx, p2, pa, branchmerge, force, matcher,
 
     if '.hgsubstate' in m1:
         # check whether sub state is modified
-        for s in sorted(wctx.substate):
-            if wctx.sub(s).dirty():
-                m1['.hgsubstate'] += '+'
-                break
+        if any(wctx.sub(s).dirty() for s in wctx.substate):
+            m1['.hgsubstate'] += '+'
 
     # Compare manifests
     if matcher is not None:
@@ -876,13 +928,14 @@ def _resolvetrivial(repo, wctx, mctx, ancestor, actions):
             del actions[f] # don't get = keep local deleted
 
 def calculateupdates(repo, wctx, mctx, ancestors, branchmerge, force,
-                     acceptremote, followcopies, matcher=None):
+                     acceptremote, followcopies, matcher=None,
+                     mergeforce=False):
     "Calculate the actions needed to merge mctx into wctx using ancestors"
     if len(ancestors) == 1: # default
         actions, diverge, renamedelete = manifestmerge(
             repo, wctx, mctx, ancestors[0], branchmerge, force, matcher,
             acceptremote, followcopies)
-        _checkunknownfiles(repo, wctx, mctx, force, actions)
+        _checkunknownfiles(repo, wctx, mctx, force, actions, mergeforce)
 
     else: # only when merge.preferancestor=* - the default
         repo.ui.note(
@@ -897,7 +950,7 @@ def calculateupdates(repo, wctx, mctx, ancestors, branchmerge, force,
             actions, diverge1, renamedelete1 = manifestmerge(
                 repo, wctx, mctx, ancestor, branchmerge, force, matcher,
                 acceptremote, followcopies)
-            _checkunknownfiles(repo, wctx, mctx, force, actions)
+            _checkunknownfiles(repo, wctx, mctx, force, actions, mergeforce)
 
             # Track the shortest set of warning on the theory that bid
             # merge will correctly incorporate more information
@@ -1003,29 +1056,30 @@ def batchget(repo, mctx, actions):
     wwrite = repo.wwrite
     ui = repo.ui
     i = 0
-    for f, (flags, backup), msg in actions:
-        repo.ui.debug(" %s: %s -> g\n" % (f, msg))
-        if verbose:
-            repo.ui.note(_("getting %s\n") % f)
+    with repo.wvfs.backgroundclosing(ui, expectedcount=len(actions)):
+        for f, (flags, backup), msg in actions:
+            repo.ui.debug(" %s: %s -> g\n" % (f, msg))
+            if verbose:
+                repo.ui.note(_("getting %s\n") % f)
 
-        if backup:
-            absf = repo.wjoin(f)
-            orig = scmutil.origpath(ui, repo, absf)
-            try:
-                # TODO Mercurial has always aborted if an untracked directory
-                # is replaced by a tracked file, or generally with
-                # file/directory merges. This needs to be sorted out.
-                if repo.wvfs.isfileorlink(f):
-                    util.rename(absf, orig)
-            except OSError as e:
-                if e.errno != errno.ENOENT:
-                    raise
+            if backup:
+                absf = repo.wjoin(f)
+                orig = scmutil.origpath(ui, repo, absf)
+                try:
+                    # TODO Mercurial has always aborted if an untracked
+                    # directory is replaced by a tracked file, or generally
+                    # with file/directory merges. This needs to be sorted out.
+                    if repo.wvfs.isfileorlink(f):
+                        util.rename(absf, orig)
+                except OSError as e:
+                    if e.errno != errno.ENOENT:
+                        raise
 
-        wwrite(f, fctx(f).data(), flags)
-        if i == 100:
-            yield i, f
-            i = 0
-        i += 1
+            wwrite(f, fctx(f).data(), flags, backgroundclose=True)
+            if i == 100:
+                yield i, f
+                i = 0
+            i += 1
     if i > 0:
         yield i, f
 
@@ -1315,7 +1369,7 @@ def recordupdates(repo, actions, branchmerge):
             repo.dirstate.normal(f)
 
 def update(repo, node, branchmerge, force, ancestor=None,
-           mergeancestor=False, labels=None, matcher=None):
+           mergeancestor=False, labels=None, matcher=None, mergeforce=False):
     """
     Perform a merge between the working directory and the given node
 
@@ -1328,6 +1382,9 @@ def update(repo, node, branchmerge, force, ancestor=None,
       If false, merging with an ancestor (fast-forward) is only allowed
       between different named branches. This flag is used by rebase extension
       as a temporary fix and should be avoided in general.
+    labels = labels to use for base, local and other
+    mergeforce = whether the merge was run with 'merge --force' (deprecated): if
+      this is True, then 'force' should be True as well.
 
     The table below shows all the behaviors of the update command
     given the -c and -C or no options, whether the working directory
@@ -1463,7 +1520,7 @@ def update(repo, node, branchmerge, force, ancestor=None,
         ### calculate phase
         actionbyfile, diverge, renamedelete = calculateupdates(
             repo, wc, p2, pas, branchmerge, force, mergeancestor,
-            followcopies, matcher=matcher)
+            followcopies, matcher=matcher, mergeforce=mergeforce)
 
         # Prompt and create actions. Most of this is in the resolve phase
         # already, but we can't handle .hgsubstate in filemerge or

@@ -103,6 +103,29 @@ delete a remote bookmark
   deleting remote bookmark W
   [1]
 
+export the active bookmark
+
+  $ hg bookmark V
+  $ hg push -B . ../a
+  pushing to ../a
+  searching for changes
+  no changes found
+  exporting bookmark V
+  [1]
+
+delete the bookmark
+
+  $ hg book -d V
+  $ hg push -B V ../a
+  pushing to ../a
+  searching for changes
+  no changes found
+  deleting remote bookmark V
+  [1]
+  $ hg up foobar
+  0 files updated, 0 files merged, 0 files removed, 0 files unresolved
+  (activating bookmark foobar)
+
 push/pull name that doesn't exist
 
   $ hg push -B badname ../a
@@ -680,12 +703,12 @@ pushing a new bookmark on a new head does not require -f if -B is specified
 
 pushing an existing but divergent bookmark with -B still requires -f
 
-  $ hg clone -q . r
+  $ hg clone -q . ../r
   $ hg up -q X
   $ echo 1 > f2
   $ hg ci -qAml
 
-  $ cd r
+  $ cd ../r
   $ hg up -q X
   $ echo 2 > f2
   $ hg ci -qAmr
@@ -696,7 +719,7 @@ pushing an existing but divergent bookmark with -B still requires -f
   abort: push creates new remote head 54694f811df9 with bookmark 'X'!
   (pull and merge or see "hg help push" for details about pushing new heads)
   [255]
-  $ cd ..
+  $ cd ../addmarks
 
 Check summary output for incoming/outgoing bookmarks
 

@@ -2457,20 +2457,21 @@ def debugignore(ui, repo, *files, **opts):
             raise error.Abort(_("no ignore patterns found"))
     else:
         for f in files:
+            nf = util.normpath(f)
             ignored = None
             ignoredata = None
-            if f != '.':
-                if ignore(f):
-                    ignored = f
-                    ignoredata = repo.dirstate._ignorefileandline(f)
+            if nf != '.':
+                if ignore(nf):
+                    ignored = nf
+                    ignoredata = repo.dirstate._ignorefileandline(nf)
                 else:
-                    for p in util.finddirs(f):
+                    for p in util.finddirs(nf):
                         if ignore(p):
                             ignored = p
                             ignoredata = repo.dirstate._ignorefileandline(p)
                             break
             if ignored:
-                if ignored == f:
+                if ignored == nf:
                     ui.write("%s is ignored\n" % f)
                 else:
                     ui.write("%s is ignored because of containing folder %s\n"
@@ -2813,6 +2814,17 @@ def debugmergestate(ui, repo, *args):
                          % (afile, _hashornull(anode)))
                 ui.write(('  other path: %s (node %s)\n')
                          % (ofile, _hashornull(onode)))
+            elif rtype == 'f':
+                filename, rawextras = record.split('\0', 1)
+                extras = rawextras.split('\0')
+                i = 0
+                extrastrings = []
+                while i < len(extras):
+                    extrastrings.append('%s = %s' % (extras[i], extras[i + 1]))
+                    i += 2
+
+                ui.write(('file extras: %s (%s)\n')
+                         % (filename, ', '.join(extrastrings)))
             else:
                 ui.write(('unrecognized entry: %s\t%s\n')
                          % (rtype, record.replace('\0', '\t')))
@@ -3204,12 +3216,16 @@ def debugrevlog(ui, repo, file_=None, **opts):
             ts = ts + rs
             heads -= set(r.parentrevs(rev))
             heads.add(rev)
+            try:
+                compression = ts / r.end(rev)
+            except ZeroDivisionError:
+                compression = 0
             ui.write("%5d %5d %5d %5d %5d %10d %4d %4d %4d %7d %9d "
                      "%11d %5d %8d\n" %
                      (rev, p1, p2, r.start(rev), r.end(rev),
                       r.start(dbase), r.start(cbase),
                       r.start(p1), r.start(p2),
-                      rs, ts, ts / r.end(rev), len(heads), clen))
+                      rs, ts, compression, len(heads), clen))
         return 0
 
     v = r.version
@@ -3917,7 +3933,7 @@ def _dograft(ui, repo, *revs, **opts):
         except IOError as inst:
             if inst.errno != errno.ENOENT:
                 raise
-            raise error.Abort(_("no graft state found, can't continue"))
+            cmdutil.wrongtooltocontinue(repo, _('graft'))
     else:
         cmdutil.checkunfinished(repo)
         cmdutil.bailifchanged(repo)
@@ -5231,7 +5247,8 @@ def merge(ui, repo, node=None, **opts):
     try:
         # ui.forcemerge is an internal variable, do not document
         repo.ui.setconfig('ui', 'forcemerge', opts.get('tool', ''), 'merge')
-        return hg.merge(repo, node, force=opts.get('force'))
+        force = opts.get('force')
+        return hg.merge(repo, node, force=force, mergeforce=force)
     finally:
         ui.setconfig('ui', 'forcemerge', '', 'merge')
 
@@ -5526,17 +5543,20 @@ def phase(ui, repo, *revs, **opts):
             ui.warn(_('no phases changed\n'))
     return ret
 
-def postincoming(ui, repo, modheads, optupdate, checkout):
+def postincoming(ui, repo, modheads, optupdate, checkout, brev):
     if modheads == 0:
         return
     if optupdate:
+        warndest = False
         try:
-            brev = checkout
             movemarkfrom = None
             if not checkout:
+                warndest = True
                 updata = destutil.destupdate(repo)
                 checkout, movemarkfrom, brev = updata
             ret = hg.update(repo, checkout)
+            if warndest:
+                destutil.statusotherdests(ui, repo)
         except error.UpdateAbort as inst:
             msg = _("not updating: %s") % str(inst)
             hint = inst.hint
@@ -5546,6 +5566,15 @@ def postincoming(ui, repo, modheads, optupdate, checkout):
                 pass # no-op update
             elif bookmarks.update(repo, [movemarkfrom], repo['.'].node()):
                 ui.status(_("updating bookmark %s\n") % repo._activebookmark)
+        elif brev in repo._bookmarks:
+            if brev != repo._activebookmark:
+                ui.status(_("(activating bookmark %s)\n") % brev)
+            bookmarks.activate(repo, brev)
+        elif brev:
+            if repo._activebookmark:
+                ui.status(_("(leaving bookmark %s)\n") %
+                          repo._activebookmark)
+            bookmarks.deactivate(repo)
         return ret
     if modheads > 1:
         currentbranchheads = len(repo.branchheads())
@@ -5634,11 +5663,28 @@ def pull(ui, repo, source="default", **opts):
                                  force=opts.get('force'),
                                  bookmarks=opts.get('bookmark', ()),
                                  opargs=pullopargs).cgresult
+
+        # brev is a name, which might be a bookmark to be activated at
+        # the end of the update. In other words, it is an explicit
+        # destination of the update
+        brev = None
+
         if checkout:
             checkout = str(repo.changelog.rev(checkout))
+
+            # order below depends on implementation of
+            # hg.addbranchrevs(). opts['bookmark'] is ignored,
+            # because 'checkout' is determined without it.
+            if opts.get('rev'):
+                brev = opts['rev'][0]
+            elif opts.get('branch'):
+                brev = opts['branch'][0]
+            else:
+                brev = branches[0]
         repo._subtoppath = source
         try:
-            ret = postincoming(ui, repo, modheads, opts.get('update'), checkout)
+            ret = postincoming(ui, repo, modheads, opts.get('update'),
+                               checkout, brev)
 
         finally:
             del repo._subtoppath
@@ -5687,7 +5733,8 @@ def push(ui, repo, dest=None, **opts):
 
     If -B/--bookmark is used, the specified bookmarked revision, its
     ancestors, and the bookmark will be pushed to the remote
-    repository.
+    repository. Specifying ``.`` is equivalent to specifying the active
+    bookmark's name.
 
     Please see :hg:`help urls` for important details about ``ssh://``
     URLs. If DESTINATION is omitted, a default path will be used.
@@ -5699,6 +5746,7 @@ def push(ui, repo, dest=None, **opts):
         ui.setconfig('bookmarks', 'pushing', opts['bookmark'], 'push')
         for b in opts['bookmark']:
             # translate -B options to -r so changesets get pushed
+            b = repo._bookmarks.expandname(b)
             if b in repo._bookmarks:
                 opts.setdefault('rev', []).append(b)
             else:
@@ -6185,7 +6233,7 @@ def root(ui, repo):
     [('A', 'accesslog', '', _('name of access log file to write to'),
      _('FILE')),
     ('d', 'daemon', None, _('run server in background')),
-    ('', 'daemon-pipefds', '', _('used internally by daemon mode'), _('FILE')),
+    ('', 'daemon-postexec', '', _('used internally by daemon mode')),
     ('E', 'errorlog', '', _('name of error log file to write to'), _('FILE')),
     # use string type, then we can check if something was passed
     ('p', 'port', '', _('port to listen on (default: 8000)'), _('PORT')),
@@ -6875,7 +6923,7 @@ def unbundle(ui, repo, fname1, *fnames, **opts):
             else:
                 modheads = gen.apply(repo, 'unbundle', 'bundle:' + fname)
 
-    return postincoming(ui, repo, modheads, opts.get('update'), None)
+    return postincoming(ui, repo, modheads, opts.get('update'), None, None)
 
 @command('^update|up|checkout|co',
     [('C', 'clean', None, _('discard uncommitted changes (no backup)')),
@@ -6943,27 +6991,30 @@ def update(ui, repo, node=None, rev=None, clean=False, date=None, check=False,
     if rev is None or rev == '':
         rev = node
 
+    if date and rev is not None:
+        raise error.Abort(_("you can't specify a revision and a date"))
+
+    if check and clean:
+        raise error.Abort(_("cannot specify both -c/--check and -C/--clean"))
+
+    warndest = False
+
     with repo.wlock():
         cmdutil.clearunfinished(repo)
 
         if date:
-            if rev is not None:
-                raise error.Abort(_("you can't specify a revision and a date"))
             rev = cmdutil.finddate(ui, repo, date)
 
         # if we defined a bookmark, we have to remember the original name
         brev = rev
         rev = scmutil.revsingle(repo, rev, rev).rev()
 
-        if check and clean:
-            raise error.Abort(_("cannot specify both -c/--check and -C/--clean")
-                             )
-
         if check:
             cmdutil.bailifchanged(repo, merge=False)
         if rev is None:
             updata = destutil.destupdate(repo, clean=clean, check=check)
             rev, movemarkfrom, brev = updata
+            warndest = True
 
         repo.ui.setconfig('ui', 'forcemerge', tool, 'update')
 
@@ -6990,7 +7041,8 @@ def update(ui, repo, node=None, rev=None, clean=False, date=None, check=False,
                 ui.status(_("(leaving bookmark %s)\n") %
                           repo._activebookmark)
             bookmarks.deactivate(repo)
-
+        if warndest:
+            destutil.statusotherdests(ui, repo)
     return ret
 
 @command('verify', [])
@@ -7030,10 +7082,16 @@ def version_(ui):
         # format names and versions into columns
         names = []
         vers = []
+        place = []
         for name, module in extensions.extensions():
             names.append(name)
             vers.append(extensions.moduleversion(module))
+            if extensions.ismoduleinternal(module):
+                place.append(_("internal"))
+            else:
+                place.append(_("external"))
         if names:
             maxnamelen = max(len(n) for n in names)
             for i, name in enumerate(names):
-                ui.write("  %-*s  %s\n" % (maxnamelen, name, vers[i]))
+                ui.write("  %-*s  %s  %s\n" %
+                         (maxnamelen, name, place[i], vers[i]))

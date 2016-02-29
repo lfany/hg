@@ -133,6 +133,11 @@ temporarily.
   (hg histedit --continue to resume)
   [1]
 
+  $ hg graft --continue
+  abort: no graft in progress
+  (continue: hg histedit --continue)
+  [255]
+
   $ mv .hg/histedit-state .hg/histedit-state.back
   $ hg update --quiet --clean 2
   $ echo alpha >> alpha
@@ -243,9 +248,6 @@ short hash. This tests issue3893.
   > p    c8e68270e35a 3 four
   > f 08d98a8350f3 4 five
   > EOF
-  1 files updated, 0 files merged, 0 files removed, 0 files unresolved
-  reverting alpha
-  1 files updated, 0 files merged, 0 files removed, 0 files unresolved
   four
   ***
   five
@@ -258,7 +260,6 @@ short hash. This tests issue3893.
   HG: user: test
   HG: branch 'default'
   HG: changed alpha
-  1 files updated, 0 files merged, 0 files removed, 0 files unresolved
   saved backup bundle to $TESTTMP/foo/.hg/strip-backup/*-backup.hg (glob)
   saved backup bundle to $TESTTMP/foo/.hg/strip-backup/*-backup.hg (glob)
 

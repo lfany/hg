@@ -48,6 +48,7 @@ from __future__ import print_function
 from distutils import version
 import difflib
 import errno
+import json
 import optparse
 import os
 import shutil
@@ -69,15 +70,6 @@ from xml.dom import minidom
 import unittest
 
 osenvironb = getattr(os, 'environb', os.environ)
-
-try:
-    import json
-except ImportError:
-    try:
-        import simplejson as json
-    except ImportError:
-        json = None
-
 processlock = threading.Lock()
 
 if sys.version_info > (3, 5, 0):
@@ -257,6 +249,10 @@ def getparser():
         metavar="HG",
         help="test using specified hg script rather than a "
              "temporary installation")
+    parser.add_option("--chg", action="store_true",
+                      help="install and use chg wrapper in place of hg")
+    parser.add_option("--with-chg", metavar="CHG",
+                      help="use specified chg wrapper in place of hg")
     parser.add_option("-3", "--py3k-warnings", action="store_true",
         help="enable Py3k warnings on Python 2.6+")
     parser.add_option('--extra-config-opt', action="append",
@@ -285,11 +281,12 @@ def parseargs(args, parser):
         options.pure = True
 
     if options.with_hg:
-        options.with_hg = os.path.expanduser(options.with_hg)
+        options.with_hg = os.path.realpath(
+            os.path.expanduser(_bytespath(options.with_hg)))
         if not (os.path.isfile(options.with_hg) and
                 os.access(options.with_hg, os.X_OK)):
             parser.error('--with-hg must specify an executable hg script')
-        if not os.path.basename(options.with_hg) == 'hg':
+        if not os.path.basename(options.with_hg) == b'hg':
             sys.stderr.write('warning: --with-hg should specify an hg script\n')
     if options.local:
         testdir = os.path.dirname(_bytespath(os.path.realpath(sys.argv[0])))
@@ -298,6 +295,20 @@ def parseargs(args, parser):
             parser.error('--local specified, but %r not found or not executable'
                          % hgbin)
         options.with_hg = hgbin
+
+    if (options.chg or options.with_chg) and os.name == 'nt':
+        parser.error('chg does not work on %s' % os.name)
+    if options.with_chg:
+        options.chg = False  # no installation to temporary location
+        options.with_chg = os.path.realpath(
+            os.path.expanduser(_bytespath(options.with_chg)))
+        if not (os.path.isfile(options.with_chg) and
+                os.access(options.with_chg, os.X_OK)):
+            parser.error('--with-chg must specify a chg executable')
+    if options.chg and options.with_hg:
+        # chg shares installation location with hg
+        parser.error('--chg does not work when --with-hg is specified '
+                     '(use --with-chg instead)')
 
     options.anycoverage = options.cover or options.annotate or options.htmlcov
     if options.anycoverage:
@@ -443,7 +454,7 @@ class Test(unittest.TestCase):
                  debug=False,
                  timeout=defaults['timeout'],
                  startport=defaults['port'], extraconfigopts=None,
-                 py3kwarnings=False, shell=None,
+                 py3kwarnings=False, shell=None, hgcommand=None,
                  slowtimeout=defaults['slowtimeout']):
         """Create a test from parameters.
 
@@ -490,6 +501,7 @@ class Test(unittest.TestCase):
         self._extraconfigopts = extraconfigopts or []
         self._py3kwarnings = py3kwarnings
         self._shell = _bytespath(shell)
+        self._hgcommand = hgcommand or b'hg'
 
         self._aborted = False
         self._daemonpids = []
@@ -686,7 +698,8 @@ class Test(unittest.TestCase):
 
         if self._keeptmpdir:
             log('\nKeeping testtmp dir: %s\nKeeping threadtmp dir: %s' %
-                (self._testtmp, self._threadtmp))
+                (self._testtmp.decode('utf-8'),
+                 self._threadtmp.decode('utf-8')))
         else:
             shutil.rmtree(self._testtmp, True)
             shutil.rmtree(self._threadtmp, True)
@@ -708,6 +721,10 @@ class Test(unittest.TestCase):
         """Terminate execution of this test."""
         self._aborted = True
 
+    def _portmap(self, i):
+        offset = b'' if i == 0 else b'%d' % i
+        return (br':%d\b' % (self._startport + i), b':$HGPORT%s' % offset)
+
     def _getreplacements(self):
         """Obtain a mapping of text replacements to apply to test output.
 
@@ -716,31 +733,39 @@ class Test(unittest.TestCase):
         occur.
         """
         r = [
-            (br':%d\b' % self._startport, b':$HGPORT'),
-            (br':%d\b' % (self._startport + 1), b':$HGPORT1'),
-            (br':%d\b' % (self._startport + 2), b':$HGPORT2'),
+            # This list should be parallel to defineport in _getenv
+            self._portmap(0),
+            self._portmap(1),
+            self._portmap(2),
             (br'(?m)^(saved backup bundle to .*\.hg)( \(glob\))?$',
              br'\1 (glob)'),
             ]
-
-        if os.name == 'nt':
-            r.append(
-                (b''.join(c.isalpha() and b'[%s%s]' % (c.lower(), c.upper()) or
-                    c in b'/\\' and br'[/\\]' or c.isdigit() and c or b'\\' + c
-                    for c in self._testtmp), b'$TESTTMP'))
-        else:
-            r.append((re.escape(self._testtmp), b'$TESTTMP'))
+        r.append((self._escapepath(self._testtmp), b'$TESTTMP'))
 
         return r
 
+    def _escapepath(self, p):
+        if os.name == 'nt':
+            return (
+                (b''.join(c.isalpha() and b'[%s%s]' % (c.lower(), c.upper()) or
+                    c in b'/\\' and br'[/\\]' or c.isdigit() and c or b'\\' + c
+                    for c in p))
+            )
+        else:
+            return re.escape(p)
+
     def _getenv(self):
         """Obtain environment variables to use during test execution."""
+        def defineport(i):
+            offset = '' if i == 0 else '%s' % i
+            env["HGPORT%s" % offset] = '%s' % (self._startport + i)
         env = os.environ.copy()
         env['TESTTMP'] = self._testtmp
         env['HOME'] = self._testtmp
-        env["HGPORT"] = str(self._startport)
-        env["HGPORT1"] = str(self._startport + 1)
-        env["HGPORT2"] = str(self._startport + 2)
+        # This number should match portneeded in _getport
+        for port in xrange(3):
+            # This list should be parallel to _portmap in _getreplacements
+            defineport(port)
         env["HGRCPATH"] = os.path.join(self._threadtmp, b'.hgrc')
         env["DAEMON_PIDS"] = os.path.join(self._threadtmp, b'daemon.pids')
         env["HGEDITOR"] = ('"' + sys.executable + '"'
@@ -885,8 +910,8 @@ if PYTHON3:
 class TTest(Test):
     """A "t test" is a test backed by a .t file."""
 
-    SKIPPED_PREFIX = 'skipped: '
-    FAILED_PREFIX = 'hghave check failed: '
+    SKIPPED_PREFIX = b'skipped: '
+    FAILED_PREFIX = b'hghave check failed: '
     NEEDESCAPE = re.compile(br'[\x00-\x08\x0b-\x1f\x7f-\xff]').search
 
     ESCAPESUB = re.compile(br'[\x00-\x08\x0b-\x1f\\\x7f-\xff]').sub
@@ -981,6 +1006,8 @@ class TTest(Test):
 
         if self._debug:
             script.append(b'set -x\n')
+        if self._hgcommand != b'hg':
+            script.append(b'alias hg="%s"\n' % self._hgcommand)
         if os.getenv('MSYSTEM'):
             script.append(b'alias pwd="pwd -W"\n')
 
@@ -1187,7 +1214,7 @@ class TTest(Test):
         if el:
             if el.endswith(b" (?)\n"):
                 retry = "retry"
-                el = el[:-5] + "\n"
+                el = el[:-5] + b"\n"
             if el.endswith(b" (esc)\n"):
                 if PYTHON3:
                     el = el[:-7].decode('unicode_escape') + '\n'
@@ -1219,10 +1246,10 @@ class TTest(Test):
         for line in lines:
             if line.startswith(TTest.SKIPPED_PREFIX):
                 line = line.splitlines()[0]
-                missing.append(line[len(TTest.SKIPPED_PREFIX):])
+                missing.append(line[len(TTest.SKIPPED_PREFIX):].decode('utf-8'))
             elif line.startswith(TTest.FAILED_PREFIX):
                 line = line.splitlines()[0]
-                failed.append(line[len(TTest.FAILED_PREFIX):])
+                failed.append(line[len(TTest.FAILED_PREFIX):].decode('utf-8'))
 
         return missing, failed
 
@@ -1347,7 +1374,6 @@ class TestResult(unittest._TextTestResult):
             return
 
         accepted = False
-        failed = False
         lines = []
 
         with iolock:
@@ -1388,7 +1414,7 @@ class TestResult(unittest._TextTestResult):
                     else:
                         rename(test.errpath, '%s.out' % test.path)
                     accepted = True
-            if not accepted and not failed:
+            if not accepted:
                 self.faildata[test.name] = b''.join(lines)
 
         return accepted
@@ -1481,7 +1507,7 @@ class TestSuite(unittest.TestSuite):
             def get():
                 num_tests[0] += 1
                 if getattr(test, 'should_reload', False):
-                    return self._loadtest(test.bname, num_tests[0])
+                    return self._loadtest(test.path, num_tests[0])
                 return test
             if not os.path.exists(test.path):
                 result.addSkip(test, "Doesn't exist")
@@ -1617,7 +1643,7 @@ class TestSuite(unittest.TestSuite):
 def loadtimes(testdir):
     times = []
     try:
-        with open(os.path.join(testdir, '.testtimes-')) as fp:
+        with open(os.path.join(testdir, b'.testtimes-')) as fp:
             for line in fp:
                 ts = line.split()
                 times.append((ts[0], [float(t) for t in ts[1:]]))
@@ -1637,12 +1663,12 @@ def savetimes(testdir, result):
             ts.append(real)
             ts[:] = ts[-maxruns:]
 
-    fd, tmpname = tempfile.mkstemp(prefix='.testtimes',
+    fd, tmpname = tempfile.mkstemp(prefix=b'.testtimes',
                                    dir=testdir, text=True)
     with os.fdopen(fd, 'w') as fp:
-        for name, ts in sorted(saved.iteritems()):
+        for name, ts in sorted(saved.items()):
             fp.write('%s %s\n' % (name, ' '.join(['%.3f' % (t,) for t in ts])))
-    timepath = os.path.join(testdir, '.testtimes')
+    timepath = os.path.join(testdir, b'.testtimes')
     try:
         os.unlink(timepath)
     except OSError:
@@ -1714,9 +1740,7 @@ class TextTestRunner(unittest.TextTestRunner):
                     xuf.write(doc.toprettyxml(indent='  ', encoding='utf-8'))
 
             if self._runner.options.json:
-                if json is None:
-                    raise ImportError("json module not installed")
-                jsonpath = os.path.join(self._runner._testdir, 'report.json')
+                jsonpath = os.path.join(self._runner._testdir, b'report.json')
                 with open(jsonpath, 'w') as fp:
                     timesd = {}
                     for tdata in result.times:
@@ -1731,14 +1755,14 @@ class TextTestRunner(unittest.TextTestRunner):
                     for res, testcases in groups:
                         for tc, __ in testcases:
                             if tc.name in timesd:
+                                diff = result.faildata.get(tc.name, b'')
                                 tres = {'result': res,
                                         'time': ('%0.3f' % timesd[tc.name][2]),
                                         'cuser': ('%0.3f' % timesd[tc.name][0]),
                                         'csys': ('%0.3f' % timesd[tc.name][1]),
                                         'start': ('%0.3f' % timesd[tc.name][3]),
                                         'end': ('%0.3f' % timesd[tc.name][4]),
-                                        'diff': result.faildata.get(tc.name,
-                                                                    ''),
+                                        'diff': diff.decode('unicode_escape'),
                                         }
                             else:
                                 # blacklisted test
@@ -1809,7 +1833,9 @@ class TestRunner(object):
         self._pythondir = None
         self._coveragefile = None
         self._createdfiles = []
+        self._hgcommand = None
         self._hgpath = None
+        self._chgsockdir = None
         self._portoffset = 0
         self._ports = {}
 
@@ -1871,7 +1897,7 @@ class TestRunner(object):
                     for kw, mul in slow.items():
                         if kw in f:
                             val *= mul
-                    if f.endswith('.py'):
+                    if f.endswith(b'.py'):
                         val /= 10.0
                     perf[f] = val / 1000.0
                     return perf[f]
@@ -1915,14 +1941,9 @@ class TestRunner(object):
         if self.options.with_hg:
             self._installdir = None
             whg = self.options.with_hg
-            # If --with-hg is not specified, we have bytes already,
-            # but if it was specified in python3 we get a str, so we
-            # have to encode it back into a bytes.
-            if PYTHON3:
-                if not isinstance(whg, bytes):
-                    whg = _bytespath(whg)
             self._bindir = os.path.dirname(os.path.realpath(whg))
             assert isinstance(self._bindir, bytes)
+            self._hgcommand = os.path.basename(whg)
             self._tmpbindir = os.path.join(self._hgtmp, b'install', b'bin')
             os.makedirs(self._tmpbindir)
 
@@ -1934,10 +1955,23 @@ class TestRunner(object):
             self._pythondir = self._bindir
         else:
             self._installdir = os.path.join(self._hgtmp, b"install")
-            self._bindir = osenvironb[b"BINDIR"] = \
-                os.path.join(self._installdir, b"bin")
+            self._bindir = os.path.join(self._installdir, b"bin")
+            self._hgcommand = b'hg'
             self._tmpbindir = self._bindir
             self._pythondir = os.path.join(self._installdir, b"lib", b"python")
+
+        # set up crafted chg environment, then replace "hg" command by "chg"
+        chgbindir = self._bindir
+        if self.options.chg or self.options.with_chg:
+            self._chgsockdir = d = os.path.join(self._hgtmp, b'chgsock')
+            os.mkdir(d)
+            osenvironb[b'CHGSOCKNAME'] = os.path.join(d, b"server")
+            osenvironb[b'CHGHG'] = os.path.join(self._bindir, self._hgcommand)
+        if self.options.chg:
+            self._hgcommand = b'chg'
+        elif self.options.with_chg:
+            chgbindir = os.path.dirname(os.path.realpath(self.options.with_chg))
+            self._hgcommand = os.path.basename(self.options.with_chg)
 
         osenvironb[b"BINDIR"] = self._bindir
         osenvironb[b"PYTHON"] = PYTHON
@@ -1955,6 +1989,8 @@ class TestRunner(object):
             realfile = os.path.realpath(fileb)
             realdir = os.path.abspath(os.path.dirname(realfile))
             path.insert(2, realdir)
+        if chgbindir != self._bindir:
+            path.insert(1, chgbindir)
         if self._testdir != runtestdir:
             path = [self._testdir] + path
         if self._tmpbindir != self._bindir:
@@ -2023,6 +2059,9 @@ class TestRunner(object):
                 self._checkhglib("Testing")
             else:
                 self._usecorrectpython()
+            if self.options.chg:
+                assert self._installdir
+                self._installchg()
 
             if self.options.restart:
                 orig = list(tests)
@@ -2116,12 +2155,15 @@ class TestRunner(object):
                     startport=self._getport(count),
                     extraconfigopts=self.options.extra_config_opt,
                     py3kwarnings=self.options.py3k_warnings,
-                    shell=self.options.shell)
+                    shell=self.options.shell,
+                    hgcommand=self._hgcommand)
         t.should_reload = True
         return t
 
     def _cleanup(self):
         """Clean up state from this test invocation."""
+        if self._chgsockdir:
+            self._killchgdaemons()
 
         if self.options.keep_tmpdir:
             return
@@ -2320,6 +2362,34 @@ class TestRunner(object):
             pipe.close()
 
         return self._hgpath
+
+    def _installchg(self):
+        """Install chg into the test environment"""
+        vlog('# Performing temporary installation of CHG')
+        assert os.path.dirname(self._bindir) == self._installdir
+        assert self._hgroot, 'must be called after _installhg()'
+        cmd = (b'"%(make)s" clean install PREFIX="%(prefix)s"'
+               % {b'make': 'make',  # TODO: switch by option or environment?
+                  b'prefix': self._installdir})
+        cwd = os.path.join(self._hgroot, b'contrib', b'chg')
+        vlog("# Running", cmd)
+        proc = subprocess.Popen(cmd, shell=True, cwd=cwd,
+                                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT)
+        out, _err = proc.communicate()
+        if proc.returncode != 0:
+            if PYTHON3:
+                sys.stdout.buffer.write(out)
+            else:
+                sys.stdout.write(out)
+            sys.exit(1)
+
+    def _killchgdaemons(self):
+        """Kill all background chg command servers spawned by tests"""
+        for f in os.listdir(self._chgsockdir):
+            if not f.endswith(b'.pid'):
+                continue
+            killdaemons(os.path.join(self._chgsockdir, f))
 
     def _outputcoverage(self):
         """Produce code coverage output."""

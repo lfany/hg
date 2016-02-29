@@ -758,14 +758,14 @@ def service(opts, parentfn=None, initfn=None, runfn=None, logfile=None,
             fp.write(str(pid) + '\n')
             fp.close()
 
-    if opts['daemon'] and not opts['daemon_pipefds']:
+    if opts['daemon'] and not opts['daemon_postexec']:
         # Signal child process startup with file removal
         lockfd, lockpath = tempfile.mkstemp(prefix='hg-service-')
         os.close(lockfd)
         try:
             if not runargs:
                 runargs = util.hgcmd() + sys.argv[1:]
-            runargs.append('--daemon-pipefds=%s' % lockpath)
+            runargs.append('--daemon-postexec=unlink:%s' % lockpath)
             # Don't pass --cwd to the child process, because we've already
             # changed directory.
             for i in xrange(1, len(runargs)):
@@ -796,15 +796,19 @@ def service(opts, parentfn=None, initfn=None, runfn=None, logfile=None,
         initfn()
 
     if not opts['daemon']:
-        writepid(os.getpid())
+        writepid(util.getpid())
 
-    if opts['daemon_pipefds']:
-        lockpath = opts['daemon_pipefds']
+    if opts['daemon_postexec']:
+        inst = opts['daemon_postexec']
         try:
             os.setsid()
         except AttributeError:
             pass
-        os.unlink(lockpath)
+        if inst.startswith('unlink:'):
+            lockpath = inst[7:]
+            os.unlink(lockpath)
+        elif inst != 'none':
+            raise error.Abort(_('invalid value for --daemon-postexec'))
         util.hidewindow()
         sys.stdout.flush()
         sys.stderr.flush()
@@ -1142,7 +1146,7 @@ def diffordiffstat(ui, repo, diffopts, node1, node2, match,
                 # node2 (inclusive). Thus, ctx2's substate won't contain that
                 # subpath. The best we can do is to ignore it.
                 tempnode2 = None
-            submatch = matchmod.narrowmatcher(subpath, match)
+            submatch = matchmod.subdirmatcher(subpath, match)
             sub.diff(ui, diffopts, tempnode2, submatch, changes=changes,
                      stat=stat, fp=fp, prefix=prefix)
 
@@ -2260,7 +2264,7 @@ def add(ui, repo, match, prefix, explicitonly, **opts):
     for subpath in sorted(wctx.substate):
         sub = wctx.sub(subpath)
         try:
-            submatch = matchmod.narrowmatcher(subpath, match)
+            submatch = matchmod.subdirmatcher(subpath, match)
             if opts.get('subrepos'):
                 bad.extend(sub.add(ui, submatch, prefix, False, **opts))
             else:
@@ -2289,7 +2293,7 @@ def forget(ui, repo, match, prefix, explicitonly):
     for subpath in sorted(wctx.substate):
         sub = wctx.sub(subpath)
         try:
-            submatch = matchmod.narrowmatcher(subpath, match)
+            submatch = matchmod.subdirmatcher(subpath, match)
             subbad, subforgot = sub.forget(submatch, prefix)
             bad.extend([subpath + '/' + f for f in subbad])
             forgot.extend([subpath + '/' + f for f in subforgot])
@@ -2346,7 +2350,7 @@ def files(ui, ctx, m, fm, fmt, subrepos):
         if subrepos or matchessubrepo(subpath):
             sub = ctx.sub(subpath)
             try:
-                submatch = matchmod.narrowmatcher(subpath, m)
+                submatch = matchmod.subdirmatcher(subpath, m)
                 if sub.printfiles(ui, submatch, fm, fmt, subrepos) == 0:
                     ret = 0
             except error.LookupError:
@@ -2375,7 +2379,7 @@ def remove(ui, repo, m, prefix, after, force, subrepos):
         if subrepos or matchessubrepo(m, subpath):
             sub = wctx.sub(subpath)
             try:
-                submatch = matchmod.narrowmatcher(subpath, m)
+                submatch = matchmod.subdirmatcher(subpath, m)
                 if sub.removefiles(submatch, prefix, after, force, subrepos):
                     ret = 1
             except error.LookupError:
@@ -2473,7 +2477,7 @@ def cat(ui, repo, ctx, matcher, prefix, **opts):
     for subpath in sorted(ctx.substate):
         sub = ctx.sub(subpath)
         try:
-            submatch = matchmod.narrowmatcher(subpath, matcher)
+            submatch = matchmod.subdirmatcher(subpath, matcher)
 
             if not sub.cat(submatch, os.path.join(prefix, sub._path),
                            **opts):
@@ -3128,13 +3132,26 @@ def _performrevert(repo, parents, ctx, actions, interactive=False):
     """
     parent, p2 = parents
     node = ctx.node()
+    excluded_files = []
+    matcher_opts = {"exclude": excluded_files}
+
     def checkout(f):
         fc = ctx[f]
         repo.wwrite(f, fc.data(), fc.flags())
 
     audit_path = pathutil.pathauditor(repo.root)
     for f in actions['forget'][0]:
-        repo.dirstate.drop(f)
+        if interactive:
+            choice = \
+                repo.ui.promptchoice(
+                    _("forget added file %s (yn)?$$ &Yes $$ &No")
+                    % f)
+            if choice == 0:
+                repo.dirstate.drop(f)
+            else:
+                excluded_files.append(repo.wjoin(f))
+        else:
+            repo.dirstate.drop(f)
     for f in actions['remove'][0]:
         audit_path(f)
         try:
@@ -3160,7 +3177,7 @@ def _performrevert(repo, parents, ctx, actions, interactive=False):
     if interactive:
         # Prompt the user for changes to revert
         torevert = [repo.wjoin(f) for f in actions['revert'][0]]
-        m = scmutil.match(ctx, torevert, {})
+        m = scmutil.match(ctx, torevert, matcher_opts)
         diffopts = patch.difffeatureopts(repo.ui, whitespace=True)
         diffopts.nodates = True
         diffopts.git = True
@@ -3332,13 +3349,56 @@ afterresolvedstates = [
      _('hg graft --continue')),
     ]
 
-def checkafterresolved(repo):
-    contmsg = _("continue: %s\n")
+def howtocontinue(repo):
+    '''Check for an unfinished operation and return the command to finish
+    it.
+
+    afterresolvedstates tupples define a .hg/{file} and the corresponding
+    command needed to finish it.
+
+    Returns a (msg, warning) tuple. 'msg' is a string and 'warning' is
+    a boolean.
+    '''
+    contmsg = _("continue: %s")
     for f, msg in afterresolvedstates:
         if repo.vfs.exists(f):
-            repo.ui.warn(contmsg % msg)
-            return
-    repo.ui.note(contmsg % _("hg commit"))
+            return contmsg % msg, True
+    workingctx = repo[None]
+    dirty = any(repo.status()) or any(workingctx.sub(s).dirty()
+                                         for s in workingctx.substate)
+    if dirty:
+        return contmsg % _("hg commit"), False
+    return None, None
+
+def checkafterresolved(repo):
+    '''Inform the user about the next action after completing hg resolve
+
+    If there's a matching afterresolvedstates, howtocontinue will yield
+    repo.ui.warn as the reporter.
+
+    Otherwise, it will yield repo.ui.note.
+    '''
+    msg, warning = howtocontinue(repo)
+    if msg is not None:
+        if warning:
+            repo.ui.warn("%s\n" % msg)
+        else:
+            repo.ui.note("%s\n" % msg)
+
+def wrongtooltocontinue(repo, task):
+    '''Raise an abort suggesting how to properly continue if there is an
+    active task.
+
+    Uses howtocontinue() to find the active task.
+
+    If there's no task (repo.ui.note for 'hg commit'), it does not offer
+    a hint.
+    '''
+    after = howtocontinue(repo)
+    hint = None
+    if after[1]:
+        hint = after[0]
+    raise error.Abort(_('no %s in progress') % task, hint=hint)
 
 class dirstateguard(object):
     '''Restore dirstate at unexpected failure.

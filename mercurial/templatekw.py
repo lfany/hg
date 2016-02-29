@@ -9,6 +9,7 @@ from __future__ import absolute_import
 
 from .node import hex, nullid
 from . import (
+    encoding,
     error,
     hbisect,
     patch,
@@ -257,7 +258,12 @@ def showdate(repo, ctx, templ, **args):
 
 def showdescription(repo, ctx, templ, **args):
     """:desc: String. The text of the changeset description."""
-    return ctx.description().strip()
+    s = ctx.description()
+    if isinstance(s, encoding.localstr):
+        # try hard to preserve utf-8 bytes
+        return encoding.tolocal(encoding.fromlocal(s).strip())
+    else:
+        return s.strip()
 
 def showdiffstat(repo, ctx, templ, **args):
     """:diffstat: String. Statistics of changes with the following format:
@@ -468,11 +474,14 @@ def showparents(**args):
     revision) nothing is shown."""
     repo = args['repo']
     ctx = args['ctx']
+    pctxs = scmutil.meaningfulparents(repo, ctx)
+    prevs = [str(p.rev()) for p in pctxs]  # ifcontains() needs a list of str
     parents = [[('rev', p.rev()),
                 ('node', p.hex()),
                 ('phase', p.phasestr())]
-               for p in scmutil.meaningfulparents(repo, ctx)]
-    return showlist('parent', parents, **args)
+               for p in pctxs]
+    f = _showlist('parent', parents, **args)
+    return _hybrid(f, prevs, lambda x: {'ctx': repo[int(x)], 'revcache': {}})
 
 def showphase(repo, ctx, templ, **args):
     """:phase: String. The changeset phase name."""
@@ -490,9 +499,10 @@ def showrevslist(name, revs, **args):
     """helper to generate a list of revisions in which a mapped template will
     be evaluated"""
     repo = args['ctx'].repo()
+    revs = [str(r) for r in revs]  # ifcontains() needs a list of str
     f = _showlist(name, revs, **args)
     return _hybrid(f, revs,
-                   lambda x: {name: x, 'ctx': repo[x], 'revcache': {}})
+                   lambda x: {name: x, 'ctx': repo[int(x)], 'revcache': {}})
 
 def showsubrepos(**args):
     """:subrepos: List of strings. Updated subrepositories in the changeset."""

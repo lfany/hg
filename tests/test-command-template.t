@@ -1018,7 +1018,7 @@ Error if include fails:
   $ hg log --style ./t
   abort: template file ./q: Permission denied
   [255]
-  $ rm q
+  $ rm -f q
 #endif
 
 Include works:
@@ -3251,6 +3251,11 @@ Test ifcontains function
   1 did not add a
   0 added a
 
+  $ hg log --debug -T '{rev}{ifcontains(1, parents, " is parent of 1")}\n'
+  2 is parent of 1
+  1
+  0
+
 Test revset function
 
   $ hg log --template '{rev} {ifcontains(rev, revset("."), "current rev", "not current rev")}\n'
@@ -3293,12 +3298,17 @@ Test revset function
   $ hg log --template '{revset("TIP"|lower)}\n' -l1
   2
 
- a list template is evaluated for each item of revset
+ a list template is evaluated for each item of revset/parents
 
   $ hg log -T '{rev} p: {revset("p1(%s)", rev) % "{rev}:{node|short}"}\n'
   2 p: 1:bcc7ff960b8e
   1 p: 0:f7769ec2ab97
   0 p: 
+
+  $ hg log --debug -T '{rev} p:{parents % " {rev}:{node|short}"}\n'
+  2 p: 1:bcc7ff960b8e -1:000000000000
+  1 p: 0:f7769ec2ab97 -1:000000000000
+  0 p: -1:000000000000 -1:000000000000
 
  therefore, 'revcache' should be recreated for each rev
 
@@ -3309,6 +3319,21 @@ Test revset function
   p a
   0 a
   p 
+
+  $ hg log --debug -T '{rev} {file_adds}\np {parents % "{file_adds}"}\n'
+  2 aa b
+  p 
+  1 
+  p a
+  0 a
+  p 
+
+a revset item must be evaluated as an integer revision, not an offset from tip
+
+  $ hg log -l 1 -T '{revset("null") % "{rev}:{node|short}"}\n'
+  -1:000000000000
+  $ hg log -l 1 -T '{revset("%s", "null") % "{rev}:{node|short}"}\n'
+  -1:000000000000
 
 Test active bookmark templating
 
@@ -3535,25 +3560,47 @@ Test broken string escapes:
   hg: parse error: invalid \x escape
   [255]
 
+json filter should escape HTML tags so that the output can be embedded in hgweb:
+
+  $ hg log -T "{'<foo@example.org>'|json}\n" -R a -l1
+  "\u003cfoo@example.org\u003e"
+
 Set up repository for non-ascii encoding tests:
 
   $ hg init nonascii
   $ cd nonascii
   $ python <<EOF
+  > open('latin1', 'w').write('\xe9')
   > open('utf-8', 'w').write('\xc3\xa9')
   > EOF
   $ HGENCODING=utf-8 hg branch -q `cat utf-8`
-  $ HGENCODING=utf-8 hg ci -qAm 'non-ascii branch' utf-8
+  $ HGENCODING=utf-8 hg ci -qAm "non-ascii branch: `cat utf-8`" utf-8
 
 json filter should try round-trip conversion to utf-8:
 
   $ HGENCODING=ascii hg log -T "{branch|json}\n" -r0
   "\u00e9"
+  $ HGENCODING=ascii hg log -T "{desc|json}\n" -r0
+  "non-ascii branch: \u00e9"
 
-json filter should not abort if it can't decode bytes:
-(not sure the current behavior is right; we might want to use utf-8b encoding?)
+json filter takes input as utf-8b:
 
   $ HGENCODING=ascii hg log -T "{'`cat utf-8`'|json}\n" -l1
-  "\ufffd\ufffd"
+  "\u00e9"
+  $ HGENCODING=ascii hg log -T "{'`cat latin1`'|json}\n" -l1
+  "\udce9"
+
+utf8 filter:
+
+  $ HGENCODING=ascii hg log -T "round-trip: {branch|utf8|hex}\n" -r0
+  round-trip: c3a9
+  $ HGENCODING=latin1 hg log -T "decoded: {'`cat latin1`'|utf8|hex}\n" -l1
+  decoded: c3a9
+  $ HGENCODING=ascii hg log -T "replaced: {'`cat latin1`'|utf8|hex}\n" -l1
+  abort: decoding near * (glob)
+  [255]
+  $ hg log -T "invalid type: {rev|utf8}\n" -r0
+  abort: template filter 'utf8' is not compatible with keyword 'rev'
+  [255]
 
   $ cd ..

@@ -93,8 +93,8 @@ Cases are run as shown in that table, row by row.
   parent=5
 
   $ norevtest 'none clean same'   clean 2
-  abort: not a linear update
-  (merge or update --check to force update)
+  0 files updated, 0 files merged, 0 files removed, 0 files unresolved
+  1 other heads for branch "default"
   parent=2
 
 
@@ -140,8 +140,8 @@ Cases are run as shown in that table, row by row.
   M foo
 
   $ norevtest 'none dirty cross'  dirty 2
-  abort: uncommitted changes
-  (commit and merge, or update --clean to discard changes)
+  0 files updated, 0 files merged, 0 files removed, 0 files unresolved
+  1 other heads for branch "default"
   parent=2
   M foo
 
@@ -166,13 +166,49 @@ Cases are run as shown in that table, row by row.
   M sub/suba
 
   $ norevtest '-c clean same'   clean 2 -c
-  1 files updated, 0 files merged, 0 files removed, 0 files unresolved
-  parent=3
+  0 files updated, 0 files merged, 0 files removed, 0 files unresolved
+  1 other heads for branch "default"
+  parent=2
 
   $ revtest '-cC dirty linear'  dirty 1 2 -cC
   abort: cannot specify both -c/--check and -C/--clean
   parent=1
   M foo
+
+  $ cd ..
+
+Test updating with closed head
+---------------------------------------------------------------------
+
+  $ hg clone -U -q b1 closed-heads
+  $ cd closed-heads
+
+Test updating if at least one non-closed branch head exists
+
+if on the closed branch head:
+- updating is no-op
+- "N other heads for ...." message is displayed
+
+  $ hg update -q -C 3
+  $ hg commit --close-branch -m 6
+  $ norevtest "on closed branch head" clean 6
+  0 files updated, 0 files merged, 0 files removed, 0 files unresolved
+  1 other heads for branch "default"
+  parent=6
+
+Test updating if all branch heads are closed
+
+if on the closed branch head:
+- updating is no-op
+- "N other heads for ...." message isn't displayed
+
+  $ hg update -q -C 2
+  $ hg commit --close-branch -m 7
+  $ norevtest "all heads of branch default are closed" clean 6
+  0 files updated, 0 files merged, 0 files removed, 0 files unresolved
+  parent=6
+
+  $ cd ../b1
 
 Test obsolescence behavior
 ---------------------------------------------------------------------

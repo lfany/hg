@@ -296,9 +296,8 @@ def runmap(context, mapping, data):
     if util.safehasattr(d, 'itermaps'):
         d = d.itermaps()
 
-    lm = mapping.copy()
-
     for i in d:
+        lm = mapping.copy()
         if isinstance(i, dict):
             lm.update(i)
             lm['originalnode'] = mapping.get('node')
@@ -581,14 +580,14 @@ def revset(context, mapping, args):
     if len(args) > 1:
         formatargs = list([a[0](context, mapping, a[1]) for a in args[1:]])
         revs = query(revsetmod.formatspec(raw, *formatargs))
-        revs = list([str(r) for r in revs])
+        revs = list(revs)
     else:
         revsetcache = mapping['cache'].setdefault("revsetcache", {})
         if raw in revsetcache:
             revs = revsetcache[raw]
         else:
             revs = query(raw)
-            revs = list([str(r) for r in revs])
+            revs = list(revs)
             revsetcache[raw] = revs
 
     return templatekw.showrevslist("revision", revs, **mapping)

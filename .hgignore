@@ -21,10 +21,13 @@ syntax: glob
 .\#*
 tests/.coverage*
 tests/.testtimes*
+tests/.hypothesis
+tests/hypothesis-generated
 tests/annotated
 tests/*.err
 tests/htmlcov
 build
+contrib/chg/chg
 contrib/hgsh/hgsh
 contrib/vagrant/.vagrant
 dist

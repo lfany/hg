@@ -365,7 +365,7 @@ class basectx(object):
                     # node1 and node2 (inclusive). Thus, ctx2's substate
                     # won't contain that subpath. The best we can do ignore it.
                     rev2 = None
-                submatch = matchmod.narrowmatcher(subpath, match)
+                submatch = matchmod.subdirmatcher(subpath, match)
                 s = sub.status(rev2, match=submatch, ignored=listignored,
                                clean=listclean, unknown=listunknown,
                                listsubrepos=True)
@@ -789,7 +789,7 @@ class basefilectx(object):
         if fctx._customcmp:
             return fctx.cmp(self)
 
-        if (fctx._filerev is None
+        if (fctx._filenode is None
             and (self._repo._encodefilterpats
                  # if file data starts with '\1\n', empty metadata block is
                  # prepended, which adds 4 bytes to filelog.size().
@@ -1892,9 +1892,9 @@ class memctx(committablectx):
             p2node = nullid
             p = pctx[f].parents() # if file isn't in pctx, check p2?
             if len(p) > 0:
-                p1node = p[0].node()
+                p1node = p[0].filenode()
                 if len(p) > 1:
-                    p2node = p[1].node()
+                    p2node = p[1].filenode()
             man[f] = revlog.hash(self[f].data(), p1node, p2node)
 
         for f in self._status.added:

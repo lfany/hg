@@ -90,7 +90,7 @@ testpats = [
     (r'pushd|popd', "don't use 'pushd' or 'popd', use 'cd'"),
     (r'\W\$?\(\([^\)\n]*\)\)', "don't use (()) or $(()), use 'expr'"),
     (r'grep.*-q', "don't use 'grep -q', redirect to /dev/null"),
-    (r'(?<!hg )grep.*-a', "don't use 'grep -a', use in-line python"),
+    (r'(?<!hg )grep.* -a', "don't use 'grep -a', use in-line python"),
     (r'sed.*-i', "don't use 'sed -i', use a temporary file"),
     (r'\becho\b.*\\n', "don't use 'echo \\n', use printf"),
     (r'echo -n', "don't use 'echo -n', use printf"),
@@ -176,6 +176,19 @@ utestpats = [
      'write "file:/*/$TESTTMP" + (glob) to match on windows too'),
     (r'^  (cat|find): .*: No such file or directory',
      'use test -f to test for file existence'),
+    (r'^  diff -[^ -]*p',
+     "don't use (external) diff with -p for portability"),
+    (r'^  [-+][-+][-+] .* [-+]0000 \(glob\)',
+     "glob timezone field in diff output for portability"),
+    (r'^  @@ -[0-9]+ [+][0-9]+,[0-9]+ @@',
+     "use '@@ -N* +N,n @@ (glob)' style chunk header for portability"),
+    (r'^  @@ -[0-9]+,[0-9]+ [+][0-9]+ @@',
+     "use '@@ -N,n +N* @@ (glob)' style chunk header for portability"),
+    (r'^  @@ -[0-9]+ [+][0-9]+ @@',
+     "use '@@ -N* +N* @@ (glob)' style chunk header for portability"),
+    (uprefix + r'hg( +-[^ ]+( +[^ ]+)?)* +extdiff'
+     r'( +(-[^ po-]+|--(?!program|option)[^ ]+|[^-][^ ]*))*$',
+     "use $RUNTESTDIR/pdiff via extdiff (or -o/-p for false-positives)"),
   ],
   # warnings
   [
@@ -232,9 +245,11 @@ pypats = [
      "don't use camelcase in identifiers"),
     (r'^\s*(if|while|def|class|except|try)\s[^[\n]*:\s*[^\\n]#\s]+',
      "linebreak after :"),
-    (r'class\s[^( \n]+:', "old-style class, use class foo(object)"),
+    (r'class\s[^( \n]+:', "old-style class, use class foo(object)",
+     r'#.*old-style'),
     (r'class\s[^( \n]+\(\):',
-     "class foo() creates old style object, use class foo(object)"),
+     "class foo() creates old style object, use class foo(object)",
+     r'#.*old-style'),
     (r'\b(%s)\(' % '|'.join(k for k in keyword.kwlist
                             if k not in ('print', 'exec')),
      "Python keyword is not a function"),
@@ -475,7 +490,7 @@ def checkfile(f, logfunc=_defaultlogger.log, maxerr=None, warnings=False,
         if debug:
             print name, f
         fc = 0
-        if not (re.match(match, f) or (magic and re.search(magic, f))):
+        if not (re.match(match, f) or (magic and re.search(magic, pre))):
             if debug:
                 print "Skipping %s for %s it doesn't match %s" % (
                        name, match, f)

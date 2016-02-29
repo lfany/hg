@@ -693,12 +693,11 @@ Test opreand of '%' is optimized recursively (issue4670)
   * optimized:
   (func
     ('symbol', 'only')
-    (and
+    (difference
       (range
         ('symbol', '8')
         ('symbol', '9'))
-      (not
-        ('symbol', '8'))))
+      ('symbol', '8')))
   * set:
   <baseset+ [8, 9]>
   8
@@ -1230,7 +1229,7 @@ no crash by empty group "()" while optimizing `or` operations
 test that chained `or` operations never eat up stack (issue4624)
 (uses `0:1` instead of `0` to avoid future optimization of trivial revisions)
 
-  $ hg log -T '{rev}\n' -r "`python -c "print '|'.join(['0:1'] * 500)"`"
+  $ hg log -T '{rev}\n' -r `python -c "print '+'.join(['0:1'] * 500)"`
   0
   1
 

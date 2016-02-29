@@ -21,6 +21,27 @@ Define a helper to avoid the install step
   >     run-tests.py --with-hg=`which hg` "$@"
   > }
 
+error paths
+
+#if symlink
+  $ ln -s `which true` hg
+  $ run-tests.py --with-hg=./hg
+  warning: --with-hg should specify an hg script
+  
+  # Ran 0 tests, 0 skipped, 0 warned, 0 failed.
+  $ rm hg
+#endif
+
+#if execbit
+  $ touch hg
+  $ run-tests.py --with-hg=./hg
+  Usage: run-tests.py [options] [tests]
+  
+  run-tests.py: error: --with-hg must specify an executable hg script
+  [2]
+  $ rm hg
+#endif
+
 a succesful test
 =======================
 
@@ -509,8 +530,6 @@ Missing skips or blacklisted skips don't count as executed:
           "result": "skip"
       }
   } (no-eol)
-#if json
-
 test for --json
 ==================
 
@@ -613,8 +632,6 @@ Test that failed test accepted through interactive are properly reported:
   } (no-eol)
   $ mv backup test-failure.t
 
-#endif
-
 backslash on end of line with glob matching is handled properly
 
   $ cat > test-glob-backslash.t << EOF
@@ -699,5 +716,15 @@ test support for --allow-slow-tests
   Skipped test-very-slow-test.t: missing feature: allow slow tests
   # Ran 0 tests, 1 skipped, 0 warned, 0 failed.
   $ rt $HGTEST_RUN_TESTS_PURE --allow-slow-tests test-very-slow-test.t
+  .
+  # Ran 1 tests, 0 skipped, 0 warned, 0 failed.
+
+support for running a test outside the current directory
+  $ mkdir nonlocal
+  $ cat > nonlocal/test-is-not-here.t << EOF
+  >   $ echo pass
+  >   pass
+  > EOF
+  $ rt nonlocal/test-is-not-here.t
   .
   # Ran 1 tests, 0 skipped, 0 warned, 0 failed.

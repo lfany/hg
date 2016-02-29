@@ -436,6 +436,9 @@ def dagrange(repo, subset, x, y):
 def andset(repo, subset, x, y):
     return getset(repo, getset(repo, subset, x), y)
 
+def differenceset(repo, subset, x, y):
+    return getset(repo, subset, x) - getset(repo, subset, y)
+
 def orset(repo, subset, *xs):
     assert xs
     if len(xs) == 1:
@@ -541,8 +544,10 @@ def _destupdate(repo, subset, x):
 @predicate('_destmerge')
 def _destmerge(repo, subset, x):
     # experimental revset for merge destination
-    getargs(x, 0, 0, _("_mergedefaultdest takes no arguments"))
-    return subset & baseset([destutil.destmerge(repo)])
+    sourceset = None
+    if x is not None:
+        sourceset = getset(repo, fullreposet(repo), x)
+    return subset & baseset([destutil.destmerge(repo, sourceset=sourceset)])
 
 @predicate('adds(pattern)', safe=True)
 def adds(repo, subset, x):
@@ -1086,13 +1091,14 @@ def _follow(repo, subset, x, name, followfirst=False):
         matcher = matchmod.match(repo.root, repo.getcwd(), [x],
                                  ctx=repo[None], default='path')
 
+        files = c.manifest().walk(matcher)
+
         s = set()
-        for fname in c:
-            if matcher(fname):
-                fctx = c[fname]
-                s = s.union(set(c.rev() for c in fctx.ancestors(followfirst)))
-                # include the revision responsible for the most recent version
-                s.add(fctx.introrev())
+        for fname in files:
+            fctx = c[fname]
+            s = s.union(set(c.rev() for c in fctx.ancestors(followfirst)))
+            # include the revision responsible for the most recent version
+            s.add(fctx.introrev())
     else:
         s = _revancestors(repo, baseset([c.rev()]), followfirst)
 
@@ -1157,13 +1163,11 @@ def _matchfiles(repo, subset, x):
     # initialized. Use 'd:' to set the default matching mode, default
     # to 'glob'. At most one 'r:' and 'd:' argument can be passed.
 
-    # i18n: "_matchfiles" is a keyword
-    l = getargs(x, 1, -1, _("_matchfiles requires at least one argument"))
+    l = getargs(x, 1, -1, "_matchfiles requires at least one argument")
     pats, inc, exc = [], [], []
     rev, default = None, None
     for arg in l:
-        # i18n: "_matchfiles" is a keyword
-        s = getstring(arg, _("_matchfiles requires string arguments"))
+        s = getstring(arg, "_matchfiles requires string arguments")
         prefix, value = s[:2], s[2:]
         if prefix == 'p:':
             pats.append(value)
@@ -1173,20 +1177,17 @@ def _matchfiles(repo, subset, x):
             exc.append(value)
         elif prefix == 'r:':
             if rev is not None:
-                # i18n: "_matchfiles" is a keyword
-                raise error.ParseError(_('_matchfiles expected at most one '
-                                         'revision'))
+                raise error.ParseError('_matchfiles expected at most one '
+                                       'revision')
             if value != '': # empty means working directory; leave rev as None
                 rev = value
         elif prefix == 'd:':
             if default is not None:
-                # i18n: "_matchfiles" is a keyword
-                raise error.ParseError(_('_matchfiles expected at most one '
-                                         'default mode'))
+                raise error.ParseError('_matchfiles expected at most one '
+                                       'default mode')
             default = value
         else:
-            # i18n: "_matchfiles" is a keyword
-            raise error.ParseError(_('invalid _matchfiles prefix: %s') % prefix)
+            raise error.ParseError('invalid _matchfiles prefix: %s' % prefix)
     if not default:
         default = 'glob'
 
@@ -1981,6 +1982,7 @@ def subrepo(repo, subset, x):
     """
     # i18n: "subrepo" is a keyword
     args = getargs(x, 0, 1, _('subrepo takes at most one argument'))
+    pat = None
     if len(args) != 0:
         pat = getstring(args[0], _("subrepo requires a pattern"))
 
@@ -1996,7 +1998,7 @@ def subrepo(repo, subset, x):
         c = repo[x]
         s = repo.status(c.p1().node(), c.node(), match=m)
 
-        if len(args) == 0:
+        if pat is None:
             return s.added or s.modified or s.removed
 
         if s.added:
@@ -2144,6 +2146,7 @@ methods = {
     "and": andset,
     "or": orset,
     "not": notset,
+    "difference": differenceset,
     "list": listset,
     "keyvalue": keyvaluepair,
     "func": func,
@@ -2203,6 +2206,9 @@ def optimize(x, small):
             return w, ('func', ('symbol', 'only'), ('list', ta[2], tb[1][2]))
         if isonly(tb, ta):
             return w, ('func', ('symbol', 'only'), ('list', tb[2], ta[1][2]))
+
+        if tb is not None and tb[0] == 'not':
+            return wa, ('difference', ta, tb[1])
 
         if wa > wb:
             return w, (op, tb, ta)

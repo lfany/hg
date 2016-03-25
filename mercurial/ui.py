@@ -42,7 +42,6 @@ username =
 # (see "hg help extensions" for more info)
 #
 # pager =
-# progress =
 # color =""",
 
     'cloned':
@@ -86,7 +85,6 @@ default = %s
 # (see "hg help extensions" for more info)
 #
 # blackbox =
-# progress =
 # color =
 # pager =""",
 }
@@ -699,6 +697,77 @@ class ui(object):
             return False
         return util.isatty(fh)
 
+    def interface(self, feature):
+        """what interface to use for interactive console features?
+
+        The interface is controlled by the value of `ui.interface` but also by
+        the value of feature-specific configuration. For example:
+
+        ui.interface.histedit = text
+        ui.interface.chunkselector = curses
+
+        Here the features are "histedit" and "chunkselector".
+
+        The configuration above means that the default interfaces for commands
+        is curses, the interface for histedit is text and the interface for
+        selecting chunk is crecord (the best curses interface available).
+
+        Consider the following exemple:
+        ui.interface = curses
+        ui.interface.histedit = text
+
+        Then histedit will use the text interface and chunkselector will use
+        the default curses interface (crecord at the moment).
+        """
+        alldefaults = frozenset(["text", "curses"])
+
+        featureinterfaces = {
+            "chunkselector": [
+                "text",
+                "curses",
+            ]
+        }
+
+        # Feature-specific interface
+        if feature not in featureinterfaces.keys():
+            # Programming error, not user error
+            raise ValueError("Unknown feature requested %s" % feature)
+
+        availableinterfaces = frozenset(featureinterfaces[feature])
+        if alldefaults > availableinterfaces:
+            # Programming error, not user error. We need a use case to
+            # define the right thing to do here.
+            raise ValueError(
+                "Feature %s does not handle all default interfaces" %
+                feature)
+
+        if self.plain():
+            return "text"
+
+        # Default interface for all the features
+        defaultinterface = "text"
+        i = self.config("ui", "interface", None)
+        if i in alldefaults:
+            defaultinterface = i
+
+        choseninterface = defaultinterface
+        f = self.config("ui", "interface.%s" % feature, None)
+        if f in availableinterfaces:
+            choseninterface = f
+
+        if i is not None and defaultinterface != i:
+            if f is not None:
+                self.warn(_("invalid value for ui.interface: %s\n") %
+                          (i,))
+            else:
+                self.warn(_("invalid value for ui.interface: %s (using %s)\n") %
+                         (i, choseninterface))
+        if f is not None and choseninterface != f:
+            self.warn(_("invalid value for ui.interface.%s: %s (using %s)\n") %
+                      (feature, f, choseninterface))
+
+        return choseninterface
+
     def interactive(self):
         '''is interactive input allowed?
 
@@ -1006,9 +1075,8 @@ class ui(object):
     def progress(self, topic, pos, item="", unit="", total=None):
         '''show a progress message
 
-        With stock hg, this is simply a debug message that is hidden
-        by default, but with extensions or GUI tools it may be
-        visible. 'topic' is the current operation, 'item' is a
+        By default a textual progress bar will be displayed if an operation
+        takes too long. 'topic' is the current operation, 'item' is a
         non-numeric marker of the current position (i.e. the currently
         in-process file), 'pos' is the current numeric position (i.e.
         revision, bytes, etc.), unit is a corresponding unit label,
@@ -1071,11 +1139,15 @@ class ui(object):
         stacklevel += 1 # get in develwarn
         if self.tracebackflag:
             util.debugstacktrace(msg, stacklevel, self.ferr, self.fout)
+            self.log('develwarn', '%s at:\n%s' %
+                     (msg, ''.join(util.getstackframes(stacklevel))))
         else:
             curframe = inspect.currentframe()
             calframe = inspect.getouterframes(curframe, 2)
             self.write_err('%s at: %s:%s (%s)\n'
                            % ((msg,) + calframe[stacklevel][1:4]))
+            self.log('develwarn', '%s at: %s:%s (%s)\n',
+                     msg, *calframe[stacklevel][1:4])
 
     def deprecwarn(self, msg, version):
         """issue a deprecation warning

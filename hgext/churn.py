@@ -8,11 +8,22 @@
 
 '''command to display statistics about repository history'''
 
-from mercurial.i18n import _
-from mercurial import patch, cmdutil, scmutil, util, commands, error
-from mercurial import encoding
+from __future__ import absolute_import
+
+import datetime
 import os
-import time, datetime
+import time
+
+from mercurial.i18n import _
+from mercurial import (
+    cmdutil,
+    commands,
+    encoding,
+    error,
+    patch,
+    scmutil,
+    util,
+)
 
 cmdtable = {}
 command = cmdutil.command(cmdtable)
@@ -83,7 +94,8 @@ def countrate(ui, repo, amap, *pats, **opts):
             rate[key] = [r + l for r, l in zip(rate.get(key, (0, 0)), lines)]
 
         state['count'] += 1
-        ui.progress(_('analyzing'), state['count'], total=len(repo))
+        ui.progress(_('analyzing'), state['count'], total=len(repo),
+                    unit=_('revisions'))
 
     for ctx in cmdutil.walkchangerevs(repo, m, opts, prep):
         continue

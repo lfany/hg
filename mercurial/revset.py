@@ -2217,28 +2217,23 @@ def optimize(x, small):
 _aliassyminitletters = set(c for c in [chr(i) for i in xrange(256)]
                            if c.isalnum() or c in '._@$' or ord(c) > 127)
 
-def _tokenizealias(program, lookup=None):
-    """Parse alias declaration/definition into a stream of tokens
+def _parsewith(spec, lookup=None, syminitletters=None):
+    """Generate a parse tree of given spec with given tokenizing options
 
-    This allows symbol names to use also ``$`` as an initial letter
-    (for backward compatibility), and callers of this function should
-    examine whether ``$`` is used also for unexpected symbols or not.
-    """
-    return tokenize(program, lookup=lookup,
-                    syminitletters=_aliassyminitletters)
-
-def _parsealias(spec):
-    """Parse alias declaration/definition ``spec``
-
-    >>> _parsealias('foo($1)')
+    >>> _parsewith('foo($1)', syminitletters=_aliassyminitletters)
     ('func', ('symbol', 'foo'), ('symbol', '$1'))
-    >>> _parsealias('foo bar')
+    >>> _parsewith('$1')
+    Traceback (most recent call last):
+      ...
+    ParseError: ("syntax error in revset '$1'", 0)
+    >>> _parsewith('foo bar')
     Traceback (most recent call last):
       ...
     ParseError: ('invalid token', 4)
     """
     p = parser.parser(elements)
-    tree, pos = p.parse(_tokenizealias(spec))
+    tree, pos = p.parse(tokenize(spec, lookup=lookup,
+                                 syminitletters=syminitletters))
     if pos != len(spec):
         raise error.ParseError(_('invalid token'), pos)
     return parser.simplifyinfixops(tree, ('list', 'or'))
@@ -2246,7 +2241,16 @@ def _parsealias(spec):
 class _aliasrules(parser.basealiasrules):
     """Parsing and expansion rule set of revset aliases"""
     _section = _('revset alias')
-    _parse = staticmethod(_parsealias)
+
+    @staticmethod
+    def _parse(spec):
+        """Parse alias declaration/definition ``spec``
+
+        This allows symbol names to use also ``$`` as an initial letter
+        (for backward compatibility), and callers of this function should
+        examine whether ``$`` is used also for unexpected symbols or not.
+        """
+        return _parsewith(spec, syminitletters=_aliassyminitletters)
 
     @staticmethod
     def _trygetfunc(tree):
@@ -2286,11 +2290,7 @@ def foldconcat(tree):
         return tuple(foldconcat(t) for t in tree)
 
 def parse(spec, lookup=None):
-    p = parser.parser(elements)
-    tree, pos = p.parse(tokenize(spec, lookup=lookup))
-    if pos != len(spec):
-        raise error.ParseError(_("invalid token"), pos)
-    return parser.simplifyinfixops(tree, ('list', 'or'))
+    return _parsewith(spec, lookup=lookup)
 
 def posttreebuilthook(tree, repo):
     # hook for extensions to execute code on the optimized tree

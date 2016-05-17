@@ -80,6 +80,7 @@ def _hashlist(items):
 
 # sensitive config sections affecting confighash
 _configsections = [
+    'alias',  # affects global state commands.table
     'extdiff',  # uisetup will register new commands
     'extensions',
 ]
@@ -212,18 +213,6 @@ def _setuppagercmd(ui, options, cmd):
         ui.setconfig('ui', 'formatted', ui.formatted(), 'pager')
         ui.setconfig('ui', 'interactive', False, 'pager')
         return p
-
-_envvarre = re.compile(r'\$[a-zA-Z_]+')
-
-def _clearenvaliases(cmdtable):
-    """Remove stale command aliases referencing env vars; variable expansion
-    is done at dispatch.addaliases()"""
-    for name, tab in cmdtable.items():
-        cmddef = tab[0]
-        if (isinstance(cmddef, dispatch.cmdalias) and
-            not cmddef.definition.startswith('!') and  # shell alias
-            _envvarre.search(cmddef.definition)):
-            del cmdtable[name]
 
 def _newchgui(srcui, csystem):
     class chgui(srcui.__class__):
@@ -525,7 +514,6 @@ class chgcmdserver(commandserver.server):
         _log('setenv: %r\n' % sorted(newenv.keys()))
         os.environ.clear()
         os.environ.update(newenv)
-        _clearenvaliases(commands.table)
 
     capabilities = commandserver.server.capabilities.copy()
     capabilities.update({'attachio': attachio,

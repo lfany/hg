@@ -2089,51 +2089,56 @@ def debugbundle(ui, bundlepath, all=None, spec=None, **opts):
         gen = exchange.readbundle(ui, f, bundlepath)
         if isinstance(gen, bundle2.unbundle20):
             return _debugbundle2(ui, gen, all=all, **opts)
-        if all:
-            ui.write(("format: id, p1, p2, cset, delta base, len(delta)\n"))
+        _debugchangegroup(ui, gen, all=all, **opts)
 
-            def showchunks(named):
-                ui.write("\n%s\n" % named)
-                chain = None
-                while True:
-                    chunkdata = gen.deltachunk(chain)
-                    if not chunkdata:
-                        break
-                    node = chunkdata['node']
-                    p1 = chunkdata['p1']
-                    p2 = chunkdata['p2']
-                    cs = chunkdata['cs']
-                    deltabase = chunkdata['deltabase']
-                    delta = chunkdata['delta']
-                    ui.write("%s %s %s %s %s %s\n" %
-                             (hex(node), hex(p1), hex(p2),
-                              hex(cs), hex(deltabase), len(delta)))
-                    chain = node
+def _debugchangegroup(ui, gen, all=None, indent=0, **opts):
+    indent_string = ' ' * indent
+    if all:
+        ui.write("%sformat: id, p1, p2, cset, delta base, len(delta)\n"
+                 % indent_string)
 
-            chunkdata = gen.changelogheader()
-            showchunks("changelog")
-            chunkdata = gen.manifestheader()
-            showchunks("manifest")
-            while True:
-                chunkdata = gen.filelogheader()
-                if not chunkdata:
-                    break
-                fname = chunkdata['filename']
-                showchunks(fname)
-        else:
-            if isinstance(gen, bundle2.unbundle20):
-                raise error.Abort(_('use debugbundle2 for this file'))
-            chunkdata = gen.changelogheader()
+        def showchunks(named):
+            ui.write("\n%s%s\n" % (indent_string, named))
             chain = None
             while True:
                 chunkdata = gen.deltachunk(chain)
                 if not chunkdata:
                     break
                 node = chunkdata['node']
-                ui.write("%s\n" % hex(node))
+                p1 = chunkdata['p1']
+                p2 = chunkdata['p2']
+                cs = chunkdata['cs']
+                deltabase = chunkdata['deltabase']
+                delta = chunkdata['delta']
+                ui.write("%s%s %s %s %s %s %s\n" %
+                         (indent_string, hex(node), hex(p1), hex(p2),
+                          hex(cs), hex(deltabase), len(delta)))
                 chain = node
 
-def _debugbundle2(ui, gen, **opts):
+        chunkdata = gen.changelogheader()
+        showchunks("changelog")
+        chunkdata = gen.manifestheader()
+        showchunks("manifest")
+        while True:
+            chunkdata = gen.filelogheader()
+            if not chunkdata:
+                break
+            fname = chunkdata['filename']
+            showchunks(fname)
+    else:
+        if isinstance(gen, bundle2.unbundle20):
+            raise error.Abort(_('use debugbundle2 for this file'))
+        chunkdata = gen.changelogheader()
+        chain = None
+        while True:
+            chunkdata = gen.deltachunk(chain)
+            if not chunkdata:
+                break
+            node = chunkdata['node']
+            ui.write("%s%s\n" % (indent_string, hex(node)))
+            chain = node
+
+def _debugbundle2(ui, gen, all=None, **opts):
     """lists the contents of a bundle2"""
     if not isinstance(gen, bundle2.unbundle20):
         raise error.Abort(_('not a bundle2 file'))
@@ -2143,15 +2148,7 @@ def _debugbundle2(ui, gen, **opts):
         if part.type == 'changegroup':
             version = part.params.get('version', '01')
             cg = changegroup.getunbundler(version, part, 'UN')
-            chunkdata = cg.changelogheader()
-            chain = None
-            while True:
-                chunkdata = cg.deltachunk(chain)
-                if not chunkdata:
-                    break
-                node = chunkdata['node']
-                ui.write("    %s\n" % hex(node))
-                chain = node
+            _debugchangegroup(ui, cg, all=all, indent=4, **opts)
 
 @command('debugcreatestreamclonebundle', [], 'FILE')
 def debugcreatestreamclonebundle(ui, repo, fname):
@@ -3517,7 +3514,7 @@ def debugrevspec(ui, repo, expr, **opts):
         if newtree != tree:
             ui.note("* concatenated:\n", revset.prettyformat(newtree), "\n")
         if opts["optimize"]:
-            weight, optimizedtree = revset.optimize(newtree, True)
+            optimizedtree = revset.optimize(newtree)
             ui.note("* optimized:\n", revset.prettyformat(optimizedtree), "\n")
     func = revset.match(ui, expr, repo)
     revs = func(repo)
@@ -4570,7 +4567,10 @@ def help_(ui, name=None, **opts):
     Returns 0 if successful.
     """
 
-    textwidth = min(ui.termwidth(), 80) - 2
+    textwidth = ui.configint('ui', 'textwidth', 78)
+    termwidth = ui.termwidth() - 2
+    if textwidth <= 0 or termwidth < textwidth:
+        textwidth = termwidth
 
     keep = opts.get('system') or []
     if len(keep) == 0:
@@ -6300,7 +6300,10 @@ def revert(ui, repo, *pats, **opts):
     related method.
 
     Modified files are saved with a .orig suffix before reverting.
-    To disable these backups, use --no-backup.
+    To disable these backups, use --no-backup. It is possible to store
+    the backup files in a custom directory relative to the root of the
+    repository by setting the ``ui.origbackuppath`` configuration
+    option.
 
     See :hg:`help dates` for a list of formats valid for -d/--date.
 
@@ -6380,6 +6383,11 @@ def rollback(ui, repo, **opts):
       commit transaction if it isn't checked out. Use --force to
       override this protection.
 
+      The rollback command can be entirely disabled by setting the
+      ``ui.rollback`` configuration setting to false. If you're here
+      because you want to use rollback and it's disabled, you can
+      re-enable the command by setting ``ui.rollback`` to true.
+
     This command is not intended for use on public repositories. Once
     changes are visible for pull by other users, rolling a transaction
     back locally is ineffective (someone else may already have pulled
@@ -6389,6 +6397,9 @@ def rollback(ui, repo, **opts):
 
     Returns 0 on success, 1 if no rollback data is available.
     """
+    if not ui.configbool('ui', 'rollback', True):
+        raise error.Abort(_('rollback is disabled because it is unsafe'),
+                          hint=('see `hg help -v rollback` for information'))
     return repo.rollback(dryrun=opts.get('dry_run'),
                          force=opts.get('force'))
 

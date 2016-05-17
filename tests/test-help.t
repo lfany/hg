@@ -260,7 +260,6 @@ Test extension help:
        extdiff       command to allow external programs to compare revisions
        factotum      http authentication with factotum
        gpg           commands to sign and verify changesets
-       hgcia         hooks for integrating with the CIA.vc notification service
        hgk           browse the repository in a graphical way
        highlight     syntax highlighting for hgweb (requires Pygments)
        histedit      interactive history editing
@@ -428,6 +427,22 @@ Verbose help for add
       --version           output version information and exit
    -h --help              display help and exit
       --hidden            consider hidden changesets
+
+Test the textwidth config option
+
+  $ hg root -h  --config ui.textwidth=50
+  hg root
+  
+  print the root (top) of the current working
+  directory
+  
+      Print the root directory of the current
+      repository.
+  
+      Returns 0 on success.
+  
+  (some details hidden, use --verbose to show
+  complete help)
 
 Test help option with version option
 

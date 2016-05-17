@@ -65,34 +65,28 @@ class remotestore(basestore.basestore):
 
         return lfutil.copyandhash(chunks, tmpfile)
 
-    def _verifyfile(self, cctx, cset, contents, standin, verified):
-        filename = lfutil.splitstandin(standin)
-        if not filename:
-            return False
-        fctx = cctx[standin]
-        key = (filename, fctx.filenode())
-        if key in verified:
-            return False
-
-        verified.add(key)
-
-        expecthash = fctx.data()[0:40]
-        stat = self._stat([expecthash])[expecthash]
-        if not stat:
-            return False
-        elif stat == 1:
-            self.ui.warn(
-                _('changeset %s: %s: contents differ\n')
-                % (cset, filename))
-            return True # failed
-        elif stat == 2:
-            self.ui.warn(
-                _('changeset %s: %s missing\n')
-                % (cset, filename))
-            return True # failed
-        else:
-            raise RuntimeError('verify failed: unexpected response from '
-                               'statlfile (%r)' % stat)
+    def _verifyfiles(self, contents, filestocheck):
+        failed = False
+        expectedhashes = [expectedhash
+                          for cset, filename, expectedhash in filestocheck]
+        stats = self._stat(expectedhashes)
+        for cset, filename, expectedhash in filestocheck:
+            stat = stats[expectedhash]
+            if stat:
+                if stat == 1:
+                    self.ui.warn(
+                        _('changeset %s: %s: contents differ\n')
+                        % (cset, filename))
+                    failed = True
+                elif stat == 2:
+                    self.ui.warn(
+                        _('changeset %s: %s missing\n')
+                        % (cset, filename))
+                    failed = True
+                else:
+                    raise RuntimeError('verify failed: unexpected response '
+                                       'from statlfile (%r)' % stat)
+        return failed
 
     def batch(self):
         '''Support for remote batching.'''

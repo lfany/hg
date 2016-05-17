@@ -74,6 +74,8 @@ def _trypending(root, vfs, filename):
                 raise
     return (vfs(filename), False)
 
+_token = object()
+
 class dirstate(object):
 
     def __init__(self, opener, ui, root, validate):
@@ -688,16 +690,15 @@ class dirstate(object):
         self._pl = (parent, nullid)
         self._dirty = True
 
-    def write(self, tr=False):
+    def write(self, tr=_token):
         if not self._dirty:
             return
 
         filename = self._filename
-        if tr is False: # not explicitly specified
-            if (self._ui.configbool('devel', 'all-warnings')
-                or self._ui.configbool('devel', 'check-dirstate-write')):
-                self._ui.develwarn('use dirstate.write with '
-                                   'repo.currenttransaction()')
+        if tr is _token: # not explicitly specified
+            self._ui.deprecwarn('use dirstate.write with '
+                               'repo.currenttransaction()',
+                               '3.9')
 
             if self._opener.lexists(self._pendingfilename):
                 # if pending file already exists, in-memory changes
@@ -1206,7 +1207,7 @@ class dirstate(object):
         else:
             return self._filename
 
-    def _savebackup(self, tr, suffix):
+    def savebackup(self, tr, suffix):
         '''Save current dirstate into backup file with suffix'''
         filename = self._actualfilename(tr)
 
@@ -1229,7 +1230,7 @@ class dirstate(object):
 
         self._opener.write(filename + suffix, self._opener.tryread(filename))
 
-    def _restorebackup(self, tr, suffix):
+    def restorebackup(self, tr, suffix):
         '''Restore dirstate by backup file with suffix'''
         # this "invalidate()" prevents "wlock.release()" from writing
         # changes of dirstate out after restoring from backup file
@@ -1237,7 +1238,7 @@ class dirstate(object):
         filename = self._actualfilename(tr)
         self._opener.rename(filename + suffix, filename)
 
-    def _clearbackup(self, tr, suffix):
+    def clearbackup(self, tr, suffix):
         '''Clear backup file with suffix'''
         filename = self._actualfilename(tr)
         self._opener.unlink(filename + suffix)

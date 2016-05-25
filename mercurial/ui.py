@@ -107,6 +107,8 @@ class ui(object):
         self._trustusers = set()
         self._trustgroups = set()
         self.callhooks = True
+        # Insecure server connections requested.
+        self.insecureconnections = False
 
         if src:
             self.fout = src.fout
@@ -120,6 +122,7 @@ class ui(object):
             self._trustgroups = src._trustgroups.copy()
             self.environ = src.environ
             self.callhooks = src.callhooks
+            self.insecureconnections = src.insecureconnections
             self.fixconfig()
         else:
             self.fout = sys.stdout
@@ -1135,12 +1138,15 @@ class ui(object):
         '''
         return msg
 
-    def develwarn(self, msg, stacklevel=1):
+    def develwarn(self, msg, stacklevel=1, config=None):
         """issue a developer warning message
 
         Use 'stacklevel' to report the offender some layers further up in the
         stack.
         """
+        if not self.configbool('devel', 'all-warnings'):
+            if config is not None and not self.configbool('devel', config):
+                return
         msg = 'devel-warn: ' + msg
         stacklevel += 1 # get in develwarn
         if self.tracebackflag:
@@ -1166,7 +1172,7 @@ class ui(object):
             return
         msg += ("\n(compatibility will be dropped after Mercurial-%s,"
                 " update your code.)") % version
-        self.develwarn(msg, stacklevel=2)
+        self.develwarn(msg, stacklevel=2, config='deprec-warn')
 
 class paths(dict):
     """Represents a collection of paths and their configs.

@@ -41,7 +41,7 @@ def _unifiedheaderinit(self, *args, **kw):
     kw['continuation_ws'] = ' '
     _oldheaderinit(self, *args, **kw)
 
-email.Header.Header.__dict__['__init__'] = _unifiedheaderinit
+setattr(email.header.Header, '__init__', _unifiedheaderinit)
 
 class STARTTLS(smtplib.SMTP):
     '''Derived class to verify the peer certificate for STARTTLS.
@@ -139,7 +139,7 @@ def _smtp(ui):
         s.ehlo()
     if (starttls or smtps) and verifycert:
         ui.note(_('(verifying remote certificate)\n'))
-        sslutil.validator(ui, mailhost)(s.sock, verifycert == 'strict')
+        sslutil.validatesocket(s.sock, verifycert == 'strict')
     username = ui.config('smtp', 'username')
     password = ui.config('smtp', 'password')
     if username and not password:

@@ -26,6 +26,15 @@ import optparse
 import os
 import re
 import sys
+if sys.version_info[0] < 3:
+    opentext = open
+else:
+    def opentext(f):
+        return open(f, encoding='ascii')
+try:
+    xrange
+except NameError:
+    xrange = range
 try:
     import re2
 except ImportError:
@@ -103,7 +112,7 @@ testpats = [
     (r'tail -n', "don't use the '-n' option to tail, just use '-<num>'"),
     (r'sha1sum', "don't use sha1sum, use $TESTDIR/md5sum.py"),
     (r'ls.*-\w*R', "don't use 'ls -R', use 'find'"),
-    (r'printf.*[^\\]\\([1-9]|0\d)', "don't use 'printf \NNN', use Python"),
+    (r'printf.*[^\\]\\([1-9]|0\d)', r"don't use 'printf \NNN', use Python"),
     (r'printf.*[^\\]\\x', "don't use printf \\x, use Python"),
     (r'\$\(.*\)', "don't use $(expr), use `expr`"),
     (r'rm -rf \*', "don't use naked rm -rf, target a directory"),
@@ -133,6 +142,7 @@ testpats = [
     (r'\|&', "don't use |&, use 2>&1"),
     (r'\w =  +\w', "only one space after = allowed"),
     (r'\bsed\b.*[^\\]\\n', "don't use 'sed ... \\n', use a \\ and a newline"),
+    (r'env.*-u', "don't use 'env -u VAR', use 'unset VAR'")
   ],
   # warnings
   [
@@ -318,6 +328,7 @@ pypats = [
     (r'^import Queue', "don't use Queue, use util.queue + util.empty"),
     (r'^import cStringIO', "don't use cStringIO.StringIO, use util.stringio"),
     (r'^import urllib', "don't use urllib, use util.urlreq/util.urlerr"),
+    (r'\.next\(\)', "don't use .next(), use next(...)"),
   ],
   # warnings
   [
@@ -486,12 +497,15 @@ def checkfile(f, logfunc=_defaultlogger.log, maxerr=None, warnings=False,
     result = True
 
     try:
-        fp = open(f)
+        with opentext(f) as fp:
+            try:
+                pre = post = fp.read()
+            except UnicodeDecodeError as e:
+                print("%s while reading %s" % (e, f))
+                return result
     except IOError as e:
         print("Skipping %s, %s" % (f, str(e).split(':', 1)[0]))
         return result
-    pre = post = fp.read()
-    fp.close()
 
     for name, match, magic, filters, pats in checks:
         if debug:

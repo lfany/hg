@@ -373,7 +373,7 @@ class mergestate(object):
         """Write current state on disk in a version 1 file"""
         f = self._repo.vfs(self.statepathv1, 'w')
         irecords = iter(records)
-        lrecords = irecords.next()
+        lrecords = next(irecords)
         assert lrecords[0] == 'L'
         f.write(hex(self._local) + '\n')
         for rtype, data in irecords:
@@ -1442,9 +1442,7 @@ def update(repo, node, branchmerge, force, ancestor=None,
             pas = [repo[ancestor]]
 
         if node is None:
-            if (repo.ui.configbool('devel', 'all-warnings')
-                    or repo.ui.configbool('devel', 'oldapi')):
-                repo.ui.develwarn('update with no target')
+            repo.ui.deprecwarn('update with no target', '3.9')
             rev, _mark, _act = destutil.destupdate(repo)
             node = repo[rev].node()
 

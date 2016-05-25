@@ -5,10 +5,21 @@
 
 '''commands to sign and verify changesets'''
 
-import os, tempfile, binascii
-from mercurial import util, commands, match, cmdutil, error
-from mercurial import node as hgnode
+from __future__ import absolute_import
+
+import binascii
+import os
+import tempfile
+
 from mercurial.i18n import _
+from mercurial import (
+    cmdutil,
+    commands,
+    error,
+    match,
+    node as hgnode,
+    util,
+)
 
 cmdtable = {}
 command = cmdutil.command(cmdtable)

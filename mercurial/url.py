@@ -354,9 +354,9 @@ if has_https:
                 _generic_proxytunnel(self)
                 host = self.realhostport.rsplit(':', 1)[0]
             self.sock = sslutil.wrapsocket(
-                self.sock, self.key_file, self.cert_file, serverhostname=host,
-                **sslutil.sslkwargs(self.ui, host))
-            sslutil.validator(self.ui, host)(self.sock)
+                self.sock, self.key_file, self.cert_file, ui=self.ui,
+                serverhostname=host)
+            sslutil.validatesocket(self.sock)
 
     class httpshandler(keepalive.KeepAliveHandler, urlreq.httpshandler):
         def __init__(self, ui):

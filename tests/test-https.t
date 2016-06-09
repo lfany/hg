@@ -162,22 +162,21 @@ Test server address cannot be reused
 #endif
   $ cd ..
 
-OS X has a dummy CA cert that enables use of the system CA store when using
-Apple's OpenSSL. This trick do not work with plain OpenSSL.
+Our test cert is not signed by a trusted CA. It should fail to verify if
+we are able to load CA certs.
 
-  $ DISABLEOSXDUMMYCERT=
 #if defaultcacerts
   $ hg clone https://localhost:$HGPORT/ copy-pull
   abort: error: *certificate verify failed* (glob)
   [255]
-
-  $ DISABLEOSXDUMMYCERT="--insecure"
 #endif
+
+  $ DISABLECACERTS="--config devel.disableloaddefaultcerts=true"
 
 clone via pull
 
-  $ hg clone https://localhost:$HGPORT/ copy-pull $DISABLEOSXDUMMYCERT
-  warning: localhost certificate with fingerprint 91:4f:1a:ff:87:24:9c:09:b6:85:9b:88:b1:90:6d:30:75:64:91:ca not verified (check hostfingerprints or web.cacerts config setting)
+  $ hg clone https://localhost:$HGPORT/ copy-pull $DISABLECACERTS
+  warning: certificate for localhost not verified (set hostsecurity.localhost:certfingerprints=sha256:62:09:97:2f:97:60:e3:65:8f:12:5d:78:9e:35:a1:36:7a:65:4b:0e:9f:ac:db:c3:bc:6e:b6:a3:c0:16:e0:30 or web.cacerts config settings)
   requesting all changes
   adding changesets
   adding manifests
@@ -202,9 +201,9 @@ pull without cacert
   $ cd copy-pull
   $ echo '[hooks]' >> .hg/hgrc
   $ echo "changegroup = printenv.py changegroup" >> .hg/hgrc
-  $ hg pull $DISABLEOSXDUMMYCERT
+  $ hg pull $DISABLECACERTS
   pulling from https://localhost:$HGPORT/
-  warning: localhost certificate with fingerprint 91:4f:1a:ff:87:24:9c:09:b6:85:9b:88:b1:90:6d:30:75:64:91:ca not verified (check hostfingerprints or web.cacerts config setting)
+  warning: certificate for localhost not verified (set hostsecurity.localhost:certfingerprints=sha256:62:09:97:2f:97:60:e3:65:8f:12:5d:78:9e:35:a1:36:7a:65:4b:0e:9f:ac:db:c3:bc:6e:b6:a3:c0:16:e0:30 or web.cacerts config settings)
   searching for changes
   adding changesets
   adding manifests
@@ -236,7 +235,7 @@ variables in the filename
   no changes found
   $ P=`pwd` hg -R copy-pull pull --insecure
   pulling from https://localhost:$HGPORT/
-  warning: localhost certificate with fingerprint 91:4f:1a:ff:87:24:9c:09:b6:85:9b:88:b1:90:6d:30:75:64:91:ca not verified (check hostfingerprints or web.cacerts config setting)
+  warning: connection security to localhost is disabled per current settings; communication is susceptible to eavesdropping and tampering
   searching for changes
   no changes found
 
@@ -245,11 +244,11 @@ cacert mismatch
   $ hg -R copy-pull pull --config web.cacerts=pub.pem https://127.0.0.1:$HGPORT/
   pulling from https://127.0.0.1:$HGPORT/
   abort: 127.0.0.1 certificate error: certificate is for localhost
-  (configure hostfingerprint 91:4f:1a:ff:87:24:9c:09:b6:85:9b:88:b1:90:6d:30:75:64:91:ca or use --insecure to connect insecurely)
+  (set hostsecurity.127.0.0.1:certfingerprints=sha256:62:09:97:2f:97:60:e3:65:8f:12:5d:78:9e:35:a1:36:7a:65:4b:0e:9f:ac:db:c3:bc:6e:b6:a3:c0:16:e0:30 config setting or use --insecure to connect insecurely)
   [255]
   $ hg -R copy-pull pull --config web.cacerts=pub.pem https://127.0.0.1:$HGPORT/ --insecure
   pulling from https://127.0.0.1:$HGPORT/
-  warning: 127.0.0.1 certificate with fingerprint 91:4f:1a:ff:87:24:9c:09:b6:85:9b:88:b1:90:6d:30:75:64:91:ca not verified (check hostfingerprints or web.cacerts config setting)
+  warning: connection security to 127.0.0.1 is disabled per current settings; communication is susceptible to eavesdropping and tampering
   searching for changes
   no changes found
   $ hg -R copy-pull pull --config web.cacerts=pub-other.pem
@@ -258,7 +257,7 @@ cacert mismatch
   [255]
   $ hg -R copy-pull pull --config web.cacerts=pub-other.pem --insecure
   pulling from https://localhost:$HGPORT/
-  warning: localhost certificate with fingerprint 91:4f:1a:ff:87:24:9c:09:b6:85:9b:88:b1:90:6d:30:75:64:91:ca not verified (check hostfingerprints or web.cacerts config setting)
+  warning: connection security to localhost is disabled per current settings; communication is susceptible to eavesdropping and tampering
   searching for changes
   no changes found
 
@@ -282,20 +281,29 @@ Test server cert which no longer is valid
 
 Fingerprints
 
-  $ echo "[hostfingerprints]" >> copy-pull/.hg/hgrc
-  $ echo "localhost = 91:4f:1a:ff:87:24:9c:09:b6:85:9b:88:b1:90:6d:30:75:64:91:ca" >> copy-pull/.hg/hgrc
-  $ echo "127.0.0.1 = 914f1aff87249c09b6859b88b1906d30756491ca" >> copy-pull/.hg/hgrc
+- works without cacerts (hostkeyfingerprints)
+  $ hg -R copy-pull id https://localhost:$HGPORT/ --insecure --config hostfingerprints.localhost=91:4f:1a:ff:87:24:9c:09:b6:85:9b:88:b1:90:6d:30:75:64:91:ca
+  5fed3813f7f5
 
-- works without cacerts
-  $ hg -R copy-pull id https://localhost:$HGPORT/ --insecure
+- works without cacerts (hostsecurity)
+  $ hg -R copy-pull id https://localhost:$HGPORT/ --config hostsecurity.localhost:fingerprints=sha1:914f1aff87249c09b6859b88b1906d30756491ca
+  5fed3813f7f5
+
+  $ hg -R copy-pull id https://localhost:$HGPORT/ --config hostsecurity.localhost:fingerprints=sha256:62:09:97:2f:97:60:e3:65:8f:12:5d:78:9e:35:a1:36:7a:65:4b:0e:9f:ac:db:c3:bc:6e:b6:a3:c0:16:e0:30
   5fed3813f7f5
 
 - multiple fingerprints specified and first matches
   $ hg --config 'hostfingerprints.localhost=914f1aff87249c09b6859b88b1906d30756491ca, deadbeefdeadbeefdeadbeefdeadbeefdeadbeef' -R copy-pull id https://localhost:$HGPORT/ --insecure
   5fed3813f7f5
 
+  $ hg --config 'hostsecurity.localhost:fingerprints=sha1:914f1aff87249c09b6859b88b1906d30756491ca, sha1:deadbeefdeadbeefdeadbeefdeadbeefdeadbeef' -R copy-pull id https://localhost:$HGPORT/
+  5fed3813f7f5
+
 - multiple fingerprints specified and last matches
   $ hg --config 'hostfingerprints.localhost=deadbeefdeadbeefdeadbeefdeadbeefdeadbeef, 914f1aff87249c09b6859b88b1906d30756491ca' -R copy-pull id https://localhost:$HGPORT/ --insecure
+  5fed3813f7f5
+
+  $ hg --config 'hostsecurity.localhost:fingerprints=sha1:deadbeefdeadbeefdeadbeefdeadbeefdeadbeef, sha1:914f1aff87249c09b6859b88b1906d30756491ca' -R copy-pull id https://localhost:$HGPORT/
   5fed3813f7f5
 
 - multiple fingerprints specified and none match
@@ -305,15 +313,20 @@ Fingerprints
   (check hostfingerprint configuration)
   [255]
 
+  $ hg --config 'hostsecurity.localhost:fingerprints=sha1:deadbeefdeadbeefdeadbeefdeadbeefdeadbeef, sha1:aeadbeefdeadbeefdeadbeefdeadbeefdeadbeef' -R copy-pull id https://localhost:$HGPORT/
+  abort: certificate for localhost has unexpected fingerprint sha1:91:4f:1a:ff:87:24:9c:09:b6:85:9b:88:b1:90:6d:30:75:64:91:ca
+  (check hostsecurity configuration)
+  [255]
+
 - fails when cert doesn't match hostname (port is ignored)
-  $ hg -R copy-pull id https://localhost:$HGPORT1/
+  $ hg -R copy-pull id https://localhost:$HGPORT1/ --config hostfingerprints.localhost=914f1aff87249c09b6859b88b1906d30756491ca
   abort: certificate for localhost has unexpected fingerprint 28:ff:71:bf:65:31:14:23:ad:62:92:b4:0e:31:99:18:fc:83:e3:9b
   (check hostfingerprint configuration)
   [255]
 
 
 - ignores that certificate doesn't match hostname
-  $ hg -R copy-pull id https://127.0.0.1:$HGPORT/
+  $ hg -R copy-pull id https://127.0.0.1:$HGPORT/ --config hostfingerprints.127.0.0.1=914f1aff87249c09b6859b88b1906d30756491ca
   5fed3813f7f5
 
 HGPORT1 is reused below for tinyproxy tests. Kill that server.
@@ -334,7 +347,7 @@ Test unvalidated https through proxy
 
   $ http_proxy=http://localhost:$HGPORT1/ hg -R copy-pull pull --insecure --traceback
   pulling from https://localhost:$HGPORT/
-  warning: localhost certificate with fingerprint 91:4f:1a:ff:87:24:9c:09:b6:85:9b:88:b1:90:6d:30:75:64:91:ca not verified (check hostfingerprints or web.cacerts config setting)
+  warning: connection security to localhost is disabled per current settings; communication is susceptible to eavesdropping and tampering
   searching for changes
   no changes found
 
@@ -344,7 +357,7 @@ Test https with cacert and fingerprint through proxy
   pulling from https://localhost:$HGPORT/
   searching for changes
   no changes found
-  $ http_proxy=http://localhost:$HGPORT1/ hg -R copy-pull pull https://127.0.0.1:$HGPORT/
+  $ http_proxy=http://localhost:$HGPORT1/ hg -R copy-pull pull https://127.0.0.1:$HGPORT/ --config hostfingerprints.127.0.0.1=914f1aff87249c09b6859b88b1906d30756491ca
   pulling from https://127.0.0.1:$HGPORT/
   searching for changes
   no changes found

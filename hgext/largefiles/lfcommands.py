@@ -7,20 +7,38 @@
 # GNU General Public License version 2 or any later version.
 
 '''High-level command function for lfconvert, plus the cmdtable.'''
+from __future__ import absolute_import
 
-import os, errno
+import errno
+import os
 import shutil
 
-from mercurial import util, match as match_, hg, node, context, error, \
-    cmdutil, scmutil, commands
 from mercurial.i18n import _
-from mercurial.lock import release
 
-from hgext.convert import convcmd
-from hgext.convert import filemap
+from mercurial import (
+    cmdutil,
+    commands,
+    context,
+    error,
+    hg,
+    lock,
+    match as matchmod,
+    node,
+    scmutil,
+    util,
+)
 
-import lfutil
-import basestore
+from ..convert import (
+    convcmd,
+    filemap,
+)
+
+from . import (
+    lfutil,
+    storefactory
+)
+
+release = lock.release
 
 # -- Commands ----------------------------------------------------------
 
@@ -92,7 +110,7 @@ def lfconvert(ui, src, dest, *pats, **opts):
             if not pats:
                 pats = ui.configlist(lfutil.longname, 'patterns', default=[])
             if pats:
-                matcher = match_.match(rsrc.root, '', list(pats))
+                matcher = matchmod.match(rsrc.root, '', list(pats))
             else:
                 matcher = None
 
@@ -337,7 +355,7 @@ def uploadlfiles(ui, rsrc, rdst, files):
     if not files:
         return
 
-    store = basestore._openstore(rsrc, rdst, put=True)
+    store = storefactory._openstore(rsrc, rdst, put=True)
 
     at = 0
     ui.debug("sending statlfile command for %d largefiles\n" % len(files))
@@ -368,7 +386,7 @@ def verifylfiles(ui, repo, all=False, contents=False):
     else:
         revs = ['.']
 
-    store = basestore._openstore(repo)
+    store = storefactory._openstore(repo)
     return store.verify(revs, contents=contents)
 
 def cachelfiles(ui, repo, node, filelist=None):
@@ -394,7 +412,7 @@ def cachelfiles(ui, repo, node, filelist=None):
             toget.append((lfile, expectedhash))
 
     if toget:
-        store = basestore._openstore(repo)
+        store = storefactory._openstore(repo)
         ret = store.get(toget)
         return ret
 

@@ -898,6 +898,16 @@ Test working-directory revision
   $ log 'tag(tip)'
   9
 
+Test order of revisions in compound expression
+----------------------------------------------
+
+ 'A & B' should follow the order of 'A':
+
+  $ log '2:0 & 0::2'
+  2
+  1
+  0
+
 test sort revset
 --------------------------------------------
 
@@ -951,6 +961,12 @@ test sorting two sorted collections in different orders backwards
   8
   6
   2
+
+test invalid sort keys
+
+  $ log 'sort(all(), -invalid)'
+  hg: parse error: unknown sort key '-invalid'
+  [255]
 
   $ cd ..
 
@@ -1550,7 +1566,10 @@ we can use patterns when searching for tags
   0
   $ log '4::8 - 8'
   4
-  $ log 'matching(1 or 2 or 3) and (2 or 3 or 1)'
+
+matching() should preserve the order of the input set:
+
+  $ log '(2 or 3 or 1) and matching(1 or 2 or 3)'
   2
   3
   1
@@ -1967,12 +1986,12 @@ test unknown reference:
   (func
     ('symbol', 'unknownref')
     ('symbol', '0'))
-  abort: failed to parse the definition of revset alias "unknownref": '$' not for alias arguments
+  abort: bad definition of revset alias "unknownref": invalid symbol '$2'
   [255]
 
   $ hg debugrevspec --debug --config revsetalias.anotherbadone='branch(' "tip"
   ('symbol', 'tip')
-  warning: failed to parse the definition of revset alias "anotherbadone": at 7: not a prefix: end
+  warning: bad definition of revset alias "anotherbadone": at 7: not a prefix: end
   * set:
   <baseset [9]>
   9
@@ -1985,7 +2004,7 @@ test unknown reference:
 
   $ hg debugrevspec --debug --config revsetalias.'bad name'='tip' "tip"
   ('symbol', 'tip')
-  warning: failed to parse the declaration of revset alias "bad name": at 4: invalid token
+  warning: bad declaration of revset alias "bad name": at 4: invalid token
   * set:
   <baseset [9]>
   9

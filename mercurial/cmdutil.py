@@ -83,7 +83,7 @@ def filterchunks(ui, originalhunks, usecurses, testfile, operation=None):
         else:
             recordfn = crecordmod.chunkselector
 
-        return crecordmod.filterpatch(ui, originalhunks, recordfn, operation)
+        return crecordmod.filterpatch(ui, originalhunks, recordfn)
 
     else:
         return patch.filterpatch(ui, originalhunks, operation)
@@ -91,9 +91,9 @@ def filterchunks(ui, originalhunks, usecurses, testfile, operation=None):
 def recordfilter(ui, originalhunks, operation=None):
     """ Prompts the user to filter the originalhunks and return a list of
     selected hunks.
-    *operation* is used for ui purposes to indicate the user
-    what kind of filtering they are doing: reverting, committing, shelving, etc.
-    *operation* has to be a translated string.
+    *operation* is used for to build ui messages to indicate the user what
+    kind of filtering they are doing: reverting, committing, shelving, etc.
+    (see patch.filterpatch).
     """
     usecurses = crecordmod.checkcurses(ui)
     testfile = ui.config('experimental', 'crecordtest', None)
@@ -1998,7 +1998,7 @@ def _makelogrevset(repo, pats, opts, revs):
         followfirst = 0
     # --follow with FILE behavior depends on revs...
     it = iter(revs)
-    startrev = it.next()
+    startrev = next(it)
     followdescendants = startrev < next(it, startrev)
 
     # branch and only_branch are really aliases and must be handled at
@@ -3071,7 +3071,7 @@ def revert(ui, repo, ctx, parents, *pats, **opts):
 
             # tell newly modified apart.
             dsmodified &= modified
-            dsmodified |= modified & dsadded # dirstate added may needs backup
+            dsmodified |= modified & dsadded # dirstate added may need backup
             modified -= dsmodified
 
             # We need to wait for some post-processing to update this set
@@ -3301,10 +3301,12 @@ def _performrevert(repo, parents, ctx, actions, interactive=False):
         else:
             diff = patch.diff(repo, None, ctx.node(), m, opts=diffopts)
         originalchunks = patch.parsepatch(diff)
+        operation = 'discard' if node == parent else 'revert'
 
         try:
 
-            chunks, opts = recordfilter(repo.ui, originalchunks)
+            chunks, opts = recordfilter(repo.ui, originalchunks,
+                                        operation=operation)
             if reversehunks:
                 chunks = patch.reversehunks(chunks)
 
@@ -3518,7 +3520,7 @@ class dirstateguard(object):
     def __init__(self, repo, name):
         self._repo = repo
         self._suffix = '.backup.%s.%d' % (name, id(self))
-        repo.dirstate._savebackup(repo.currenttransaction(), self._suffix)
+        repo.dirstate.savebackup(repo.currenttransaction(), self._suffix)
         self._active = True
         self._closed = False
 
@@ -3536,13 +3538,13 @@ class dirstateguard(object):
                    % self._suffix)
             raise error.Abort(msg)
 
-        self._repo.dirstate._clearbackup(self._repo.currenttransaction(),
+        self._repo.dirstate.clearbackup(self._repo.currenttransaction(),
                                          self._suffix)
         self._active = False
         self._closed = True
 
     def _abort(self):
-        self._repo.dirstate._restorebackup(self._repo.currenttransaction(),
+        self._repo.dirstate.restorebackup(self._repo.currenttransaction(),
                                            self._suffix)
         self._active = False
 

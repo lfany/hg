@@ -7,15 +7,24 @@
 # GNU General Public License version 2 or any later version.
 
 '''largefiles utility code: must not import other modules in this package.'''
+from __future__ import absolute_import
 
+import copy
 import os
 import platform
 import stat
-import copy
 
-from mercurial import dirstate, httpconnection, match as match_, util, scmutil
 from mercurial.i18n import _
-from mercurial import node, error
+
+from mercurial import (
+    dirstate,
+    error,
+    httpconnection,
+    match as matchmod,
+    node,
+    scmutil,
+    util,
+)
 
 shortname = '.hglf'
 shortnameslash = shortname + '/'
@@ -152,7 +161,7 @@ def openlfdirstate(ui, repo, create=True):
 
 def lfdirstatestatus(lfdirstate, repo):
     wctx = repo['.']
-    match = match_.always(repo.root, repo.getcwd())
+    match = matchmod.always(repo.root, repo.getcwd())
     unsure, s = lfdirstate.status(match, [], False, False, False)
     modified, clean = s.modified, s.clean
     for lfile in unsure:
@@ -533,7 +542,7 @@ def updatestandinsbymatch(repo, match):
         # otherwise to update all standins if the largefiles are
         # large.
         lfdirstate = openlfdirstate(ui, repo)
-        dirtymatch = match_.always(repo.root, repo.getcwd())
+        dirtymatch = matchmod.always(repo.root, repo.getcwd())
         unsure, s = lfdirstate.status(dirtymatch, [], False, False,
                                       False)
         modifiedfiles = unsure + s.modified + s.added + s.removed

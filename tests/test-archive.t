@@ -69,7 +69,12 @@ invalid arch type should give 404
   $ TIP=`hg id -v | cut -f1 -d' '`
   $ QTIP=`hg id -q`
   $ cat > getarchive.py <<EOF
-  > import os, sys, urllib2
+  > from __future__ import absolute_import
+  > import os
+  > import sys
+  > from mercurial import (
+  >     util,
+  > )
   > try:
   >     # Set stdout to binary mode for win32 platforms
   >     import msvcrt
@@ -83,10 +88,14 @@ invalid arch type should give 404
   >     node, archive, file = sys.argv[1:]
   >     requeststr = 'cmd=archive;node=%s;type=%s;file=%s' % (node, archive, file)
   > try:
-  >     f = urllib2.urlopen('http://127.0.0.1:%s/?%s'
+  >     stdout = sys.stdout.buffer
+  > except AttributeError:
+  >     stdout = sys.stdout
+  > try:
+  >     f = util.urlreq.urlopen('http://127.0.0.1:%s/?%s'
   >                     % (os.environ['HGPORT'], requeststr))
-  >     sys.stdout.write(f.read())
-  > except urllib2.HTTPError, e:
+  >     stdout.write(f.read())
+  > except util.urlerr.httperror as e:
   >     sys.stderr.write(str(e) + '\n')
   > EOF
   $ python getarchive.py "$TIP" gz | gunzip | tar tf - 2>/dev/null
@@ -195,15 +204,16 @@ The '-t' should override autodetection
   > done
 
   $ cat > md5comp.py <<EOF
+  > from __future__ import print_function
   > try:
   >     from hashlib import md5
   > except ImportError:
   >     from md5 import md5
   > import sys
   > f1, f2 = sys.argv[1:3]
-  > h1 = md5(file(f1, 'rb').read()).hexdigest()
-  > h2 = md5(file(f2, 'rb').read()).hexdigest()
-  > print h1 == h2 or "md5 differ: " + repr((h1, h2))
+  > h1 = md5(open(f1, 'rb').read()).hexdigest()
+  > h2 = md5(open(f2, 'rb').read()).hexdigest()
+  > print(h1 == h2 or "md5 differ: " + repr((h1, h2)))
   > EOF
 
 archive name is stored in the archive, so create similar archives and
@@ -343,8 +353,9 @@ configured as GMT.
   $ hg -R repo add repo/a
   $ hg -R repo commit -m '#0' -d '456789012 21600'
   $ cat > show_mtime.py <<EOF
+  > from __future__ import print_function
   > import sys, os
-  > print int(os.stat(sys.argv[1]).st_mtime)
+  > print(int(os.stat(sys.argv[1]).st_mtime))
   > EOF
 
   $ hg -R repo archive --prefix tar-extracted archive.tar

@@ -12,6 +12,7 @@ import collections
 import copy
 import email
 import errno
+import hashlib
 import os
 import posixpath
 import re
@@ -978,7 +979,19 @@ class recordhunk(object):
 def filterpatch(ui, headers, operation=None):
     """Interactively filter patch chunks into applied-only chunks"""
     if operation is None:
-        operation = _('record')
+        operation = 'record'
+    messages = {
+        'multiple': {
+            'discard': _("discard change %d/%d to '%s'?"),
+            'record': _("record change %d/%d to '%s'?"),
+            'revert': _("revert change %d/%d to '%s'?"),
+        }[operation],
+        'single': {
+            'discard': _("discard this change to '%s'?"),
+            'record': _("record this change to '%s'?"),
+            'revert': _("revert this change to '%s'?"),
+        }[operation],
+    }
 
     def prompt(skipfile, skipall, query, chunk):
         """prompt query, and process base inputs
@@ -1109,11 +1122,10 @@ the hunk is left unchanged.
             if skipfile is None and skipall is None:
                 chunk.pretty(ui)
             if total == 1:
-                msg = _("record this change to '%s'?") % chunk.filename()
+                msg = messages['single'] % chunk.filename()
             else:
                 idx = pos - len(h.hunks) + i
-                msg = _("record change %d/%d to '%s'?") % (idx, total,
-                                                           chunk.filename())
+                msg = messages['multiple'] % (idx, total, chunk.filename())
             r, skipfile, skipall, newpatches = prompt(skipfile,
                     skipall, msg, chunk)
             if r:
@@ -2401,7 +2413,7 @@ def trydiff(repo, revs, ctx1, ctx2, modified, added, removed,
         if not text:
             text = ""
         l = len(text)
-        s = util.sha1('blob %d\0' % l)
+        s = hashlib.sha1('blob %d\0' % l)
         s.update(text)
         return s.hexdigest()
 

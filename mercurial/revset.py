@@ -330,13 +330,12 @@ def getset(repo, subset, x):
     s = methods[x[0]](repo, subset, *x[1:])
     if util.safehasattr(s, 'isascending'):
         return s
-    if (repo.ui.configbool('devel', 'all-warnings')
-            or repo.ui.configbool('devel', 'old-revset')):
-        # else case should not happen, because all non-func are internal,
-        # ignoring for now.
-        if x[0] == 'func' and x[1][0] == 'symbol' and x[1][1] in symbols:
-            repo.ui.develwarn('revset "%s" use list instead of smartset, '
-                              '(upgrade your code)' % x[1][1])
+    # else case should not happen, because all non-func are internal,
+    # ignoring for now.
+    if x[0] == 'func' and x[1][0] == 'symbol' and x[1][1] in symbols:
+        repo.ui.deprecwarn('revset "%s" uses list instead of smartset'
+                           % x[1][1],
+                           '3.9')
     return baseset(s)
 
 def _getrevsource(repo, r):
@@ -387,9 +386,7 @@ def dagrange(repo, subset, x, y):
     r = fullreposet(repo)
     xs = reachableroots(repo, getset(repo, r, x), getset(repo, r, y),
                          includepath=True)
-    # XXX We should combine with subset first: 'subset & baseset(...)'. This is
-    # necessary to ensure we preserve the order in subset.
-    return xs & subset
+    return subset & xs
 
 def andset(repo, subset, x, y):
     return getset(repo, getset(repo, subset, x), y)
@@ -1837,7 +1834,16 @@ def roots(repo, subset, x):
         return True
     return subset & s.filter(filter, condrepr='<roots>')
 
-@predicate('sort(set[, [-]key...])', safe=True)
+_sortkeyfuncs = {
+    'rev': lambda c: c.rev(),
+    'branch': lambda c: c.branch(),
+    'desc': lambda c: c.description(),
+    'user': lambda c: c.user(),
+    'author': lambda c: c.user(),
+    'date': lambda c: c.date()[0],
+}
+
+@predicate('sort(set[, [-]key... [, ...]])', safe=True)
 def sort(repo, subset, x):
     """Sort set by keys. The default sort order is ascending, specify a key
     as ``-key`` to sort in descending order.
@@ -1849,49 +1855,264 @@ def sort(repo, subset, x):
     - ``desc`` for the commit message (description),
     - ``user`` for user name (``author`` can be used as an alias),
     - ``date`` for the commit date
-    """
-    # i18n: "sort" is a keyword
-    l = getargs(x, 1, 2, _("sort requires one or two arguments"))
-    keys = "rev"
-    if len(l) == 2:
-        # i18n: "sort" is a keyword
-        keys = getstring(l[1], _("sort spec must be a string"))
+    - ``topo`` for a reverse topographical sort
 
-    s = l[0]
+    The ``topo`` sort order cannot be combined with other sort keys. This sort
+    takes one optional argument, ``topo.firstbranch``, which takes a revset that
+    specifies what topographical branches to prioritize in the sort.
+
+    """
+    args = getargsdict(x, 'sort', 'set keys topo.firstbranch')
+    if 'set' not in args:
+        # i18n: "sort" is a keyword
+        raise error.ParseError(_('sort requires one or two arguments'))
+    keys = "rev"
+    if 'keys' in args:
+        # i18n: "sort" is a keyword
+        keys = getstring(args['keys'], _("sort spec must be a string"))
+
+    s = args['set']
     keys = keys.split()
     revs = getset(repo, subset, s)
+
+    if len(keys) > 1 and any(k.lstrip('-') == 'topo' for k in keys):
+        # i18n: "topo" is a keyword
+        raise error.ParseError(_(
+            'topo sort order cannot be combined with other sort keys'))
+
+    firstbranch = ()
+    if 'topo.firstbranch' in args:
+        if any(k.lstrip('-') == 'topo' for k in keys):
+            firstbranch = getset(repo, subset, args['topo.firstbranch'])
+        else:
+            # i18n: "topo" and "topo.firstbranch" are keywords
+            raise error.ParseError(_(
+                'topo.firstbranch can only be used when using the topo sort '
+                'key'))
+
     if keys == ["rev"]:
         revs.sort()
         return revs
     elif keys == ["-rev"]:
         revs.sort(reverse=True)
         return revs
+    elif keys[0] in ("topo", "-topo"):
+        revs = baseset(_toposort(revs, repo.changelog.parentrevs, firstbranch),
+                       istopo=True)
+        if keys[0][0] == '-':
+            revs.reverse()
+        return revs
+
     # sort() is guaranteed to be stable
     ctxs = [repo[r] for r in revs]
     for k in reversed(keys):
-        if k == 'rev':
-            ctxs.sort(key=lambda c: c.rev())
-        elif k == '-rev':
-            ctxs.sort(key=lambda c: c.rev(), reverse=True)
-        elif k == 'branch':
-            ctxs.sort(key=lambda c: c.branch())
-        elif k == '-branch':
-            ctxs.sort(key=lambda c: c.branch(), reverse=True)
-        elif k == 'desc':
-            ctxs.sort(key=lambda c: c.description())
-        elif k == '-desc':
-            ctxs.sort(key=lambda c: c.description(), reverse=True)
-        elif k in 'user author':
-            ctxs.sort(key=lambda c: c.user())
-        elif k in '-user -author':
-            ctxs.sort(key=lambda c: c.user(), reverse=True)
-        elif k == 'date':
-            ctxs.sort(key=lambda c: c.date()[0])
-        elif k == '-date':
-            ctxs.sort(key=lambda c: c.date()[0], reverse=True)
-        else:
-            raise error.ParseError(_("unknown sort key %r") % k)
+        fk = k
+        reverse = (k[0] == '-')
+        if reverse:
+            k = k[1:]
+        try:
+            ctxs.sort(key=_sortkeyfuncs[k], reverse=reverse)
+        except KeyError:
+            raise error.ParseError(_("unknown sort key %r") % fk)
     return baseset([c.rev() for c in ctxs])
+
+def _toposort(revs, parentsfunc, firstbranch=()):
+    """Yield revisions from heads to roots one (topo) branch at a time.
+
+    This function aims to be used by a graph generator that wishes to minimize
+    the number of parallel branches and their interleaving.
+
+    Example iteration order (numbers show the "true" order in a changelog):
+
+      o  4
+      |
+      o  1
+      |
+      | o  3
+      | |
+      | o  2
+      |/
+      o  0
+
+    Note that the ancestors of merges are understood by the current
+    algorithm to be on the same branch. This means no reordering will
+    occur behind a merge.
+    """
+
+    ### Quick summary of the algorithm
+    #
+    # This function is based around a "retention" principle. We keep revisions
+    # in memory until we are ready to emit a whole branch that immediately
+    # "merges" into an existing one. This reduces the number of parallel
+    # branches with interleaved revisions.
+    #
+    # During iteration revs are split into two groups:
+    # A) revision already emitted
+    # B) revision in "retention". They are stored as different subgroups.
+    #
+    # for each REV, we do the following logic:
+    #
+    #   1) if REV is a parent of (A), we will emit it. If there is a
+    #   retention group ((B) above) that is blocked on REV being
+    #   available, we emit all the revisions out of that retention
+    #   group first.
+    #
+    #   2) else, we'll search for a subgroup in (B) awaiting for REV to be
+    #   available, if such subgroup exist, we add REV to it and the subgroup is
+    #   now awaiting for REV.parents() to be available.
+    #
+    #   3) finally if no such group existed in (B), we create a new subgroup.
+    #
+    #
+    # To bootstrap the algorithm, we emit the tipmost revision (which
+    # puts it in group (A) from above).
+
+    revs.sort(reverse=True)
+
+    # Set of parents of revision that have been emitted. They can be considered
+    # unblocked as the graph generator is already aware of them so there is no
+    # need to delay the revisions that reference them.
+    #
+    # If someone wants to prioritize a branch over the others, pre-filling this
+    # set will force all other branches to wait until this branch is ready to be
+    # emitted.
+    unblocked = set(firstbranch)
+
+    # list of groups waiting to be displayed, each group is defined by:
+    #
+    #   (revs:    lists of revs waiting to be displayed,
+    #    blocked: set of that cannot be displayed before those in 'revs')
+    #
+    # The second value ('blocked') correspond to parents of any revision in the
+    # group ('revs') that is not itself contained in the group. The main idea
+    # of this algorithm is to delay as much as possible the emission of any
+    # revision.  This means waiting for the moment we are about to display
+    # these parents to display the revs in a group.
+    #
+    # This first implementation is smart until it encounters a merge: it will
+    # emit revs as soon as any parent is about to be emitted and can grow an
+    # arbitrary number of revs in 'blocked'. In practice this mean we properly
+    # retains new branches but gives up on any special ordering for ancestors
+    # of merges. The implementation can be improved to handle this better.
+    #
+    # The first subgroup is special. It corresponds to all the revision that
+    # were already emitted. The 'revs' lists is expected to be empty and the
+    # 'blocked' set contains the parents revisions of already emitted revision.
+    #
+    # You could pre-seed the <parents> set of groups[0] to a specific
+    # changesets to select what the first emitted branch should be.
+    groups = [([], unblocked)]
+    pendingheap = []
+    pendingset = set()
+
+    heapq.heapify(pendingheap)
+    heappop = heapq.heappop
+    heappush = heapq.heappush
+    for currentrev in revs:
+        # Heap works with smallest element, we want highest so we invert
+        if currentrev not in pendingset:
+            heappush(pendingheap, -currentrev)
+            pendingset.add(currentrev)
+        # iterates on pending rev until after the current rev have been
+        # processed.
+        rev = None
+        while rev != currentrev:
+            rev = -heappop(pendingheap)
+            pendingset.remove(rev)
+
+            # Seek for a subgroup blocked, waiting for the current revision.
+            matching = [i for i, g in enumerate(groups) if rev in g[1]]
+
+            if matching:
+                # The main idea is to gather together all sets that are blocked
+                # on the same revision.
+                #
+                # Groups are merged when a common blocking ancestor is
+                # observed. For example, given two groups:
+                #
+                # revs [5, 4] waiting for 1
+                # revs [3, 2] waiting for 1
+                #
+                # These two groups will be merged when we process
+                # 1. In theory, we could have merged the groups when
+                # we added 2 to the group it is now in (we could have
+                # noticed the groups were both blocked on 1 then), but
+                # the way it works now makes the algorithm simpler.
+                #
+                # We also always keep the oldest subgroup first. We can
+                # probably improve the behavior by having the longest set
+                # first. That way, graph algorithms could minimise the length
+                # of parallel lines their drawing. This is currently not done.
+                targetidx = matching.pop(0)
+                trevs, tparents = groups[targetidx]
+                for i in matching:
+                    gr = groups[i]
+                    trevs.extend(gr[0])
+                    tparents |= gr[1]
+                # delete all merged subgroups (except the one we kept)
+                # (starting from the last subgroup for performance and
+                # sanity reasons)
+                for i in reversed(matching):
+                    del groups[i]
+            else:
+                # This is a new head. We create a new subgroup for it.
+                targetidx = len(groups)
+                groups.append(([], set([rev])))
+
+            gr = groups[targetidx]
+
+            # We now add the current nodes to this subgroups. This is done
+            # after the subgroup merging because all elements from a subgroup
+            # that relied on this rev must precede it.
+            #
+            # we also update the <parents> set to include the parents of the
+            # new nodes.
+            if rev == currentrev: # only display stuff in rev
+                gr[0].append(rev)
+            gr[1].remove(rev)
+            parents = [p for p in parentsfunc(rev) if p > node.nullrev]
+            gr[1].update(parents)
+            for p in parents:
+                if p not in pendingset:
+                    pendingset.add(p)
+                    heappush(pendingheap, -p)
+
+            # Look for a subgroup to display
+            #
+            # When unblocked is empty (if clause), we were not waiting for any
+            # revisions during the first iteration (if no priority was given) or
+            # if we emitted a whole disconnected set of the graph (reached a
+            # root).  In that case we arbitrarily take the oldest known
+            # subgroup. The heuristic could probably be better.
+            #
+            # Otherwise (elif clause) if the subgroup is blocked on
+            # a revision we just emitted, we can safely emit it as
+            # well.
+            if not unblocked:
+                if len(groups) > 1:  # display other subset
+                    targetidx = 1
+                    gr = groups[1]
+            elif not gr[1] & unblocked:
+                gr = None
+
+            if gr is not None:
+                # update the set of awaited revisions with the one from the
+                # subgroup
+                unblocked |= gr[1]
+                # output all revisions in the subgroup
+                for r in gr[0]:
+                    yield r
+                # delete the subgroup that you just output
+                # unless it is groups[0] in which case you just empty it.
+                if targetidx:
+                    del groups[targetidx]
+                else:
+                    gr[0][:] = []
+    # Check if we have some subgroup waiting for revisions we are not going to
+    # iterate over
+    for g in groups:
+        for r in g[0]:
+            yield r
 
 @predicate('subrepo([pattern])')
 def subrepo(repo, subset, x):
@@ -2073,7 +2294,22 @@ methods = {
     "parentpost": p1,
 }
 
-def optimize(x, small):
+def _matchonly(revs, bases):
+    """
+    >>> f = lambda *args: _matchonly(*map(parse, args))
+    >>> f('ancestors(A)', 'not ancestors(B)')
+    ('list', ('symbol', 'A'), ('symbol', 'B'))
+    """
+    if (revs is not None
+        and revs[0] == 'func'
+        and getstring(revs[1], _('not a symbol')) == 'ancestors'
+        and bases is not None
+        and bases[0] == 'not'
+        and bases[1][0] == 'func'
+        and getstring(bases[1][1], _('not a symbol')) == 'ancestors'):
+        return ('list', revs[2], bases[1][2])
+
+def _optimize(x, small):
     if x is None:
         return 0, x
 
@@ -2083,47 +2319,36 @@ def optimize(x, small):
 
     op = x[0]
     if op == 'minus':
-        return optimize(('and', x[1], ('not', x[2])), small)
+        return _optimize(('and', x[1], ('not', x[2])), small)
     elif op == 'only':
-        return optimize(('func', ('symbol', 'only'),
-                         ('list', x[1], x[2])), small)
+        t = ('func', ('symbol', 'only'), ('list', x[1], x[2]))
+        return _optimize(t, small)
     elif op == 'onlypost':
-        return optimize(('func', ('symbol', 'only'), x[1]), small)
+        return _optimize(('func', ('symbol', 'only'), x[1]), small)
     elif op == 'dagrangepre':
-        return optimize(('func', ('symbol', 'ancestors'), x[1]), small)
+        return _optimize(('func', ('symbol', 'ancestors'), x[1]), small)
     elif op == 'dagrangepost':
-        return optimize(('func', ('symbol', 'descendants'), x[1]), small)
+        return _optimize(('func', ('symbol', 'descendants'), x[1]), small)
     elif op == 'rangeall':
-        return optimize(('range', ('string', '0'), ('string', 'tip')), small)
+        return _optimize(('range', ('string', '0'), ('string', 'tip')), small)
     elif op == 'rangepre':
-        return optimize(('range', ('string', '0'), x[1]), small)
+        return _optimize(('range', ('string', '0'), x[1]), small)
     elif op == 'rangepost':
-        return optimize(('range', x[1], ('string', 'tip')), small)
+        return _optimize(('range', x[1], ('string', 'tip')), small)
     elif op == 'negate':
-        return optimize(('string',
-                         '-' + getstring(x[1], _("can't negate that"))), small)
+        s = getstring(x[1], _("can't negate that"))
+        return _optimize(('string', '-' + s), small)
     elif op in 'string symbol negate':
         return smallbonus, x # single revisions are small
     elif op == 'and':
-        wa, ta = optimize(x[1], True)
-        wb, tb = optimize(x[2], True)
+        wa, ta = _optimize(x[1], True)
+        wb, tb = _optimize(x[2], True)
+        w = min(wa, wb)
 
         # (::x and not ::y)/(not ::y and ::x) have a fast path
-        def isonly(revs, bases):
-            return (
-                revs is not None
-                and revs[0] == 'func'
-                and getstring(revs[1], _('not a symbol')) == 'ancestors'
-                and bases is not None
-                and bases[0] == 'not'
-                and bases[1][0] == 'func'
-                and getstring(bases[1][1], _('not a symbol')) == 'ancestors')
-
-        w = min(wa, wb)
-        if isonly(ta, tb):
-            return w, ('func', ('symbol', 'only'), ('list', ta[2], tb[1][2]))
-        if isonly(tb, ta):
-            return w, ('func', ('symbol', 'only'), ('list', tb[2], ta[1][2]))
+        tm = _matchonly(ta, tb) or _matchonly(tb, ta)
+        if tm:
+            return w, ('func', ('symbol', 'only'), tm)
 
         if tb is not None and tb[0] == 'not':
             return wa, ('difference', ta, tb[1])
@@ -2143,12 +2368,12 @@ def optimize(x, small):
             else:
                 s = '\0'.join(t[1] for w, t in ss)
                 y = ('func', ('symbol', '_list'), ('string', s))
-                w, t = optimize(y, False)
+                w, t = _optimize(y, False)
             ws.append(w)
             ts.append(t)
             del ss[:]
         for y in x[1:]:
-            w, t = optimize(y, False)
+            w, t = _optimize(y, False)
             if t is not None and (t[0] == 'string' or t[0] == 'symbol'):
                 ss.append((w, t))
                 continue
@@ -2166,34 +2391,34 @@ def optimize(x, small):
         # Optimize not public() to _notpublic() because we have a fast version
         if x[1] == ('func', ('symbol', 'public'), None):
             newsym = ('func', ('symbol', '_notpublic'), None)
-            o = optimize(newsym, not small)
+            o = _optimize(newsym, not small)
             return o[0], o[1]
         else:
-            o = optimize(x[1], not small)
+            o = _optimize(x[1], not small)
             return o[0], (op, o[1])
     elif op == 'parentpost':
-        o = optimize(x[1], small)
+        o = _optimize(x[1], small)
         return o[0], (op, o[1])
     elif op == 'group':
-        return optimize(x[1], small)
+        return _optimize(x[1], small)
     elif op in 'dagrange range parent ancestorspec':
         if op == 'parent':
             # x^:y means (x^) : y, not x ^ (:y)
             post = ('parentpost', x[1])
             if x[2][0] == 'dagrangepre':
-                return optimize(('dagrange', post, x[2][1]), small)
+                return _optimize(('dagrange', post, x[2][1]), small)
             elif x[2][0] == 'rangepre':
-                return optimize(('range', post, x[2][1]), small)
+                return _optimize(('range', post, x[2][1]), small)
 
-        wa, ta = optimize(x[1], small)
-        wb, tb = optimize(x[2], small)
+        wa, ta = _optimize(x[1], small)
+        wb, tb = _optimize(x[2], small)
         return wa + wb, (op, ta, tb)
     elif op == 'list':
-        ws, ts = zip(*(optimize(y, small) for y in x[1:]))
+        ws, ts = zip(*(_optimize(y, small) for y in x[1:]))
         return sum(ws), (op,) + ts
     elif op == 'func':
         f = getstring(x[1], _("not a symbol"))
-        wa, ta = optimize(x[2], small)
+        wa, ta = _optimize(x[2], small)
         if f in ("author branch closed date desc file grep keyword "
                  "outgoing user"):
             w = 10 # slow
@@ -2212,33 +2437,32 @@ def optimize(x, small):
         return w + wa, (op, x[1], ta)
     return 1, x
 
+def optimize(tree):
+    _weight, newtree = _optimize(tree, small=True)
+    return newtree
+
 # the set of valid characters for the initial letter of symbols in
 # alias declarations and definitions
 _aliassyminitletters = set(c for c in [chr(i) for i in xrange(256)]
                            if c.isalnum() or c in '._@$' or ord(c) > 127)
 
-def _tokenizealias(program, lookup=None):
-    """Parse alias declaration/definition into a stream of tokens
+def _parsewith(spec, lookup=None, syminitletters=None):
+    """Generate a parse tree of given spec with given tokenizing options
 
-    This allows symbol names to use also ``$`` as an initial letter
-    (for backward compatibility), and callers of this function should
-    examine whether ``$`` is used also for unexpected symbols or not.
-    """
-    return tokenize(program, lookup=lookup,
-                    syminitletters=_aliassyminitletters)
-
-def _parsealias(spec):
-    """Parse alias declaration/definition ``spec``
-
-    >>> _parsealias('foo($1)')
+    >>> _parsewith('foo($1)', syminitletters=_aliassyminitletters)
     ('func', ('symbol', 'foo'), ('symbol', '$1'))
-    >>> _parsealias('foo bar')
+    >>> _parsewith('$1')
+    Traceback (most recent call last):
+      ...
+    ParseError: ("syntax error in revset '$1'", 0)
+    >>> _parsewith('foo bar')
     Traceback (most recent call last):
       ...
     ParseError: ('invalid token', 4)
     """
     p = parser.parser(elements)
-    tree, pos = p.parse(_tokenizealias(spec))
+    tree, pos = p.parse(tokenize(spec, lookup=lookup,
+                                 syminitletters=syminitletters))
     if pos != len(spec):
         raise error.ParseError(_('invalid token'), pos)
     return parser.simplifyinfixops(tree, ('list', 'or'))
@@ -2246,7 +2470,16 @@ def _parsealias(spec):
 class _aliasrules(parser.basealiasrules):
     """Parsing and expansion rule set of revset aliases"""
     _section = _('revset alias')
-    _parse = staticmethod(_parsealias)
+
+    @staticmethod
+    def _parse(spec):
+        """Parse alias declaration/definition ``spec``
+
+        This allows symbol names to use also ``$`` as an initial letter
+        (for backward compatibility), and callers of this function should
+        examine whether ``$`` is used also for unexpected symbols or not.
+        """
+        return _parsewith(spec, syminitletters=_aliassyminitletters)
 
     @staticmethod
     def _trygetfunc(tree):
@@ -2286,11 +2519,7 @@ def foldconcat(tree):
         return tuple(foldconcat(t) for t in tree)
 
 def parse(spec, lookup=None):
-    p = parser.parser(elements)
-    tree, pos = p.parse(tokenize(spec, lookup=lookup))
-    if pos != len(spec):
-        raise error.ParseError(_("invalid token"), pos)
-    return parser.simplifyinfixops(tree, ('list', 'or'))
+    return _parsewith(spec, lookup=lookup)
 
 def posttreebuilthook(tree, repo):
     # hook for extensions to execute code on the optimized tree
@@ -2327,7 +2556,7 @@ def _makematcher(ui, tree, repo):
     if ui:
         tree = expandaliases(ui, tree, showwarning=ui.warn)
     tree = foldconcat(tree)
-    weight, tree = optimize(tree, True)
+    tree = optimize(tree)
     posttreebuilthook(tree, repo)
     def mfunc(repo, subset=None):
         if subset is None:
@@ -2506,6 +2735,10 @@ class abstractsmartset(object):
         """True if the set will iterate in descending order"""
         raise NotImplementedError()
 
+    def istopo(self):
+        """True if the set will iterate in topographical order"""
+        raise NotImplementedError()
+
     @util.cachefunc
     def min(self):
         """return the minimum element in the set"""
@@ -2591,12 +2824,13 @@ class baseset(abstractsmartset):
 
     Every method in this class should be implemented by any smartset class.
     """
-    def __init__(self, data=(), datarepr=None):
+    def __init__(self, data=(), datarepr=None, istopo=False):
         """
         datarepr: a tuple of (format, obj, ...), a function or an object that
                   provides a printable representation of the given data.
         """
         self._ascending = None
+        self._istopo = istopo
         if not isinstance(data, list):
             if isinstance(data, set):
                 self._set = data
@@ -2639,12 +2873,14 @@ class baseset(abstractsmartset):
 
     def sort(self, reverse=False):
         self._ascending = not bool(reverse)
+        self._istopo = False
 
     def reverse(self):
         if self._ascending is None:
             self._list.reverse()
         else:
             self._ascending = not self._ascending
+        self._istopo = False
 
     def __len__(self):
         return len(self._list)
@@ -2664,6 +2900,14 @@ class baseset(abstractsmartset):
         if len(self) <= 1:
             return True
         return self._ascending is not None and not self._ascending
+
+    def istopo(self):
+        """Is the collection is in topographical order or not.
+
+        This is part of the mandatory API for smartset."""
+        if len(self) <= 1:
+            return True
+        return self._istopo
 
     def first(self):
         if self:
@@ -2741,9 +2985,16 @@ class filteredset(abstractsmartset):
         return lambda: self._iterfilter(it())
 
     def __nonzero__(self):
-        fast = self.fastasc
-        if fast is None:
-            fast = self.fastdesc
+        fast = None
+        candidates = [self.fastasc if self.isascending() else None,
+                      self.fastdesc if self.isdescending() else None,
+                      self.fastasc,
+                      self.fastdesc]
+        for candidate in candidates:
+            if candidate is not None:
+                fast = candidate
+                break
+
         if fast is not None:
             it = fast()
         else:
@@ -2772,6 +3023,9 @@ class filteredset(abstractsmartset):
 
     def isdescending(self):
         return self._subset.isdescending()
+
+    def istopo(self):
+        return self._subset.istopo()
 
     def first(self):
         for x in self:
@@ -2816,14 +3070,14 @@ def _iterordered(ascending, iter1, iter2):
         # Consume both iterators in an ordered way until one is empty
         while True:
             if val1 is None:
-                val1 = iter1.next()
+                val1 = next(iter1)
             if val2 is None:
-                val2 = iter2.next()
-            next = choice(val1, val2)
-            yield next
-            if val1 == next:
+                val2 = next(iter2)
+            n = choice(val1, val2)
+            yield n
+            if val1 == n:
                 val1 = None
-            if val2 == next:
+            if val2 == n:
                 val2 = None
     except StopIteration:
         # Flush any remaining values and consume the other one
@@ -3019,6 +3273,12 @@ class addset(abstractsmartset):
     def isdescending(self):
         return self._ascending is not None and not self._ascending
 
+    def istopo(self):
+        # not worth the trouble asserting if the two sets combined are still
+        # in topographical order. Use the sort() predicate to explicitly sort
+        # again instead.
+        return False
+
     def reverse(self):
         if self._ascending is None:
             self._list.reverse()
@@ -3186,6 +3446,12 @@ class generatorset(abstractsmartset):
     def isdescending(self):
         return not self._ascending
 
+    def istopo(self):
+        # not worth the trouble asserting if the two sets combined are still
+        # in topographical order. Use the sort() predicate to explicitly sort
+        # again instead.
+        return False
+
     def first(self):
         if self._ascending:
             it = self.fastasc
@@ -3247,6 +3513,12 @@ class spanset(abstractsmartset):
 
     def reverse(self):
         self._ascending = not self._ascending
+
+    def istopo(self):
+        # not worth the trouble asserting if the two sets combined are still
+        # in topographical order. Use the sort() predicate to explicitly sort
+        # again instead.
+        return False
 
     def _iterfilter(self, iterrange):
         s = self._hiddenrevs

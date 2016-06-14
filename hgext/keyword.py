@@ -89,8 +89,8 @@ import os
 import re
 import tempfile
 
-from mercurial.hgweb import webcommands
 from mercurial.i18n import _
+from mercurial.hgweb import webcommands
 
 from mercurial import (
     cmdutil,
@@ -735,7 +735,7 @@ def reposetup(ui, repo):
     def kwfilectx_cmp(orig, self, fctx):
         # keyword affects data size, comparing wdir and filelog size does
         # not make sense
-        if (fctx._filerev is None and
+        if (fctx._filenode is None and
             (self._repo._encodefilterpats or
              kwt.match(fctx.path()) and 'l' not in fctx.flags() or
              self.size() - 4 == fctx.size()) or

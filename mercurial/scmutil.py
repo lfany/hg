@@ -10,6 +10,7 @@ from __future__ import absolute_import
 import contextlib
 import errno
 import glob
+import hashlib
 import os
 import re
 import shutil
@@ -224,7 +225,7 @@ def filteredhash(repo, maxrev):
     key = None
     revs = sorted(r for r in cl.filteredrevs if r <= maxrev)
     if revs:
-        s = util.sha1()
+        s = hashlib.sha1()
         for rev in revs:
             s.update('%s;' % rev)
         key = s.digest()
@@ -377,8 +378,18 @@ class abstractvfs(object):
     def readlock(self, path):
         return util.readlock(self.join(path))
 
-    def rename(self, src, dst):
-        return util.rename(self.join(src), self.join(dst))
+    def rename(self, src, dst, checkambig=False):
+        dstpath = self.join(dst)
+        oldstat = checkambig and util.filestat(dstpath)
+        if oldstat and oldstat.stat:
+            ret = util.rename(self.join(src), dstpath)
+            newstat = util.filestat(dstpath)
+            if newstat.isambig(oldstat):
+                # stat of renamed file is ambiguous to original one
+                advanced = (oldstat.stat.st_mtime + 1) & 0x7fffffff
+                os.utime(dstpath, (advanced, advanced))
+            return ret
+        return util.rename(self.join(src), dstpath)
 
     def readlink(self, path):
         return os.readlink(self.join(path))
@@ -502,7 +513,7 @@ class vfs(abstractvfs):
         os.chmod(name, self.createmode & 0o666)
 
     def __call__(self, path, mode="r", text=False, atomictemp=False,
-                 notindexed=False, backgroundclose=False):
+                 notindexed=False, backgroundclose=False, checkambig=False):
         '''Open ``path`` file, which is relative to vfs root.
 
         Newly created directories are marked as "not to be indexed by
@@ -521,6 +532,8 @@ class vfs(abstractvfs):
            closing a file on a background thread and reopening it. (If the
            file were opened multiple times, there could be unflushed data
            because the original file handle hasn't been flushed/closed yet.)
+
+        ``checkambig`` is passed to atomictempfile (valid only for writing).
         '''
         if self._audit:
             r = util.checkosfilename(path)
@@ -540,7 +553,8 @@ class vfs(abstractvfs):
             if basename:
                 if atomictemp:
                     util.makedirs(dirname, self.createmode, notindexed)
-                    return util.atomictempfile(f, mode, self.createmode)
+                    return util.atomictempfile(f, mode, self.createmode,
+                                               checkambig=checkambig)
                 try:
                     if 'w' in mode:
                         util.unlink(f)
@@ -751,7 +765,7 @@ def revsingle(repo, revspec, default='.'):
 
 def _pairspec(revspec):
     tree = revset.parse(revspec)
-    tree = revset.optimize(tree, True)[1]  # fix up "x^:y" -> "(x^):y"
+    tree = revset.optimize(tree)  # fix up "x^:y" -> "(x^):y"
     return tree and tree[0] in ('range', 'rangepre', 'rangepost', 'rangeall')
 
 def revpair(repo, revs):
@@ -1375,4 +1389,3 @@ class backgroundfilecloser(object):
             return
 
         self._queue.put(fh, block=True, timeout=None)
-

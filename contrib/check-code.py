@@ -26,6 +26,15 @@ import optparse
 import os
 import re
 import sys
+if sys.version_info[0] < 3:
+    opentext = open
+else:
+    def opentext(f):
+        return open(f, encoding='ascii')
+try:
+    xrange
+except NameError:
+    xrange = range
 try:
     import re2
 except ImportError:
@@ -42,22 +51,21 @@ def compilere(pat, multiline=False):
     return re.compile(pat)
 
 def repquote(m):
-    fromc = '.:'
-    tochr = 'pq'
+    # check "rules depending on implementation of repquote()" in each
+    # patterns (especially pypats), before changing this function
+    fixedmap = {' ': ' ', '\n': '\n', '.': 'p', ':': 'q',
+                '%': '%', '\\': 'b', '*': 'A', '+': 'P', '-': 'M'}
     def encodechr(i):
         if i > 255:
             return 'u'
         c = chr(i)
-        if c in ' \n':
-            return c
+        if c in fixedmap:
+            return fixedmap[c]
         if c.isalpha():
             return 'x'
         if c.isdigit():
             return 'n'
-        try:
-            return tochr[fromc.find(c)]
-        except (ValueError, IndexError):
-            return 'o'
+        return 'o'
     t = m.group('text')
     tt = ''.join(encodechr(i) for i in xrange(256))
     t = t.translate(tt)
@@ -103,7 +111,7 @@ testpats = [
     (r'tail -n', "don't use the '-n' option to tail, just use '-<num>'"),
     (r'sha1sum', "don't use sha1sum, use $TESTDIR/md5sum.py"),
     (r'ls.*-\w*R', "don't use 'ls -R', use 'find'"),
-    (r'printf.*[^\\]\\([1-9]|0\d)', "don't use 'printf \NNN', use Python"),
+    (r'printf.*[^\\]\\([1-9]|0\d)', r"don't use 'printf \NNN', use Python"),
     (r'printf.*[^\\]\\x', "don't use printf \\x, use Python"),
     (r'\$\(.*\)', "don't use $(expr), use `expr`"),
     (r'rm -rf \*', "don't use naked rm -rf, target a directory"),
@@ -114,7 +122,7 @@ testpats = [
     (r'export .*=', "don't export and assign at once"),
     (r'^source\b', "don't use 'source', use '.'"),
     (r'touch -d', "don't use 'touch -d', use 'touch -t' instead"),
-    (r'ls +[^|\n-]+ +-', "options to 'ls' must come before filenames"),
+    (r'\bls +[^|\n-]+ +-', "options to 'ls' must come before filenames"),
     (r'[^>\n]>\s*\$HGRCPATH', "don't overwrite $HGRCPATH, append to it"),
     (r'^stop\(\)', "don't use 'stop' as a shell function name"),
     (r'(\[|\btest\b).*-e ', "don't use 'test -e', use 'test -f'"),
@@ -133,6 +141,7 @@ testpats = [
     (r'\|&', "don't use |&, use 2>&1"),
     (r'\w =  +\w', "only one space after = allowed"),
     (r'\bsed\b.*[^\\]\\n', "don't use 'sed ... \\n', use a \\ and a newline"),
+    (r'env.*-u', "don't use 'env -u VAR', use 'unset VAR'")
   ],
   # warnings
   [
@@ -238,7 +247,6 @@ pypats = [
     (r'^\s+(\w|\.)+=\w[^,()\n]*$', "missing whitespace in assignment"),
     (r'\w\s=\s\s+\w', "gratuitous whitespace after ="),
     (r'.{81}', "line too long"),
-    (r' x+[xo][\'"]\n\s+[\'"]x', 'string join across lines with no space'),
     (r'[^\n]\Z', "no trailing newline"),
     (r'(\S[ \t]+|^[ \t]+)\n', "trailing whitespace"),
 #    (r'^\s+[^_ \n][^_. \n]+_[^_\n]+\s*=',
@@ -305,8 +313,6 @@ pypats = [
     (r'^\s*except\s([^\(,]+|\([^\)]+\))\s*,',
      'legacy exception syntax; use "as" instead of ","'),
     (r':\n(    )*( ){1,3}[^ ]', "must indent 4 spaces"),
-    (r'ui\.(status|progress|write|note|warn)\([\'\"]x',
-     "missing _() in ui message (use () to hide false-positives)"),
     (r'release\(.*wlock, .*lock\)', "wrong lock release order"),
     (r'\b__bool__\b', "__bool__ should be __nonzero__ in Python 2"),
     (r'os\.path\.join\(.*, *(""|\'\')\)',
@@ -318,9 +324,17 @@ pypats = [
     (r'^import Queue', "don't use Queue, use util.queue + util.empty"),
     (r'^import cStringIO', "don't use cStringIO.StringIO, use util.stringio"),
     (r'^import urllib', "don't use urllib, use util.urlreq/util.urlerr"),
+    (r'\.next\(\)', "don't use .next(), use next(...)"),
+
+    # rules depending on implementation of repquote()
+    (r' x+[xpqo%APM][\'"]\n\s+[\'"]x',
+     'string join across lines with no space'),
+    (r'ui\.(status|progress|write|note|warn)\([\'\"]x',
+     "missing _() in ui message (use () to hide false-positives)"),
   ],
   # warnings
   [
+    # rules depending on implementation of repquote()
     (r'(^| )pp +xxxxqq[ \n][^\n]', "add two newlines after '.. note::'"),
   ]
 ]
@@ -365,9 +379,13 @@ cpats = [
     (r'^\s*#import\b', "use only #include in standard C code"),
     (r'strcpy\(', "don't use strcpy, use strlcpy or memcpy"),
     (r'strcat\(', "don't use strcat"),
+
+    # rules depending on implementation of repquote()
   ],
   # warnings
-  []
+  [
+    # rules depending on implementation of repquote()
+  ]
 ]
 
 cfilters = [
@@ -486,12 +504,15 @@ def checkfile(f, logfunc=_defaultlogger.log, maxerr=None, warnings=False,
     result = True
 
     try:
-        fp = open(f)
+        with opentext(f) as fp:
+            try:
+                pre = post = fp.read()
+            except UnicodeDecodeError as e:
+                print("%s while reading %s" % (e, f))
+                return result
     except IOError as e:
         print("Skipping %s, %s" % (f, str(e).split(':', 1)[0]))
         return result
-    pre = post = fp.read()
-    fp.close()
 
     for name, match, magic, filters, pats in checks:
         if debug:

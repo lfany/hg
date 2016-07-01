@@ -14,14 +14,42 @@ For more information:
 https://mercurial-scm.org/wiki/RebaseExtension
 '''
 
-from mercurial import hg, util, repair, merge, cmdutil, commands, bookmarks
-from mercurial import extensions, patch, scmutil, phases, obsolete, error
-from mercurial import copies, destutil, repoview, registrar, revset
-from mercurial.commands import templateopts
-from mercurial.node import nullrev, nullid, hex, short
-from mercurial.lock import release
+from __future__ import absolute_import
+
+import errno
+import os
+
 from mercurial.i18n import _
-import os, errno
+from mercurial.node import (
+    hex,
+    nullid,
+    nullrev,
+    short,
+)
+from mercurial import (
+    bookmarks,
+    cmdutil,
+    commands,
+    copies,
+    destutil,
+    error,
+    extensions,
+    hg,
+    lock,
+    merge,
+    obsolete,
+    patch,
+    phases,
+    registrar,
+    repair,
+    repoview,
+    revset,
+    scmutil,
+    util,
+)
+
+release = lock.release
+templateopts = commands.templateopts
 
 # The following constants are used throughout the rebase module. The ordering of
 # their values must be maintained.
@@ -90,6 +118,114 @@ def _revsetdestrebase(repo, subset, x):
     if x is not None:
         sourceset = revset.getset(repo, revset.fullreposet(repo), x)
     return subset & revset.baseset([_destrebase(repo, sourceset)])
+
+class rebaseruntime(object):
+    """This class is a container for rebase runtime state"""
+    def __init__(self, repo, ui, opts=None):
+        if opts is None:
+            opts = {}
+
+        self.repo = repo
+        self.ui = ui
+        self.opts = opts
+        self.originalwd = None
+        self.external = nullrev
+        # Mapping between the old revision id and either what is the new rebased
+        # revision or what needs to be done with the old revision. The state
+        # dict will be what contains most of the rebase progress state.
+        self.state = {}
+        self.activebookmark = None
+        self.target = None
+        self.skipped = set()
+        self.targetancestors = set()
+
+        self.collapsef = opts.get('collapse', False)
+        self.collapsemsg = cmdutil.logmessage(ui, opts)
+        self.date = opts.get('date', None)
+
+        e = opts.get('extrafn') # internal, used by e.g. hgsubversion
+        self.extrafns = [_savegraft]
+        if e:
+            self.extrafns = [e]
+
+        self.keepf = opts.get('keep', False)
+        self.keepbranchesf = opts.get('keepbranches', False)
+        # keepopen is not meant for use on the command line, but by
+        # other extensions
+        self.keepopen = opts.get('keepopen', False)
+        self.obsoletenotrebased = {}
+
+    def restorestatus(self):
+        """Restore a previously stored status"""
+        repo = self.repo
+        keepbranches = None
+        target = None
+        collapse = False
+        external = nullrev
+        activebookmark = None
+        state = {}
+
+        try:
+            f = repo.vfs("rebasestate")
+            for i, l in enumerate(f.read().splitlines()):
+                if i == 0:
+                    originalwd = repo[l].rev()
+                elif i == 1:
+                    target = repo[l].rev()
+                elif i == 2:
+                    external = repo[l].rev()
+                elif i == 3:
+                    collapse = bool(int(l))
+                elif i == 4:
+                    keep = bool(int(l))
+                elif i == 5:
+                    keepbranches = bool(int(l))
+                elif i == 6 and not (len(l) == 81 and ':' in l):
+                    # line 6 is a recent addition, so for backwards
+                    # compatibility check that the line doesn't look like the
+                    # oldrev:newrev lines
+                    activebookmark = l
+                else:
+                    oldrev, newrev = l.split(':')
+                    if newrev in (str(nullmerge), str(revignored),
+                                  str(revprecursor), str(revpruned)):
+                        state[repo[oldrev].rev()] = int(newrev)
+                    elif newrev == nullid:
+                        state[repo[oldrev].rev()] = revtodo
+                        # Legacy compat special case
+                    else:
+                        state[repo[oldrev].rev()] = repo[newrev].rev()
+
+        except IOError as err:
+            if err.errno != errno.ENOENT:
+                raise
+            cmdutil.wrongtooltocontinue(repo, _('rebase'))
+
+        if keepbranches is None:
+            raise error.Abort(_('.hg/rebasestate is incomplete'))
+
+        skipped = set()
+        # recompute the set of skipped revs
+        if not collapse:
+            seen = set([target])
+            for old, new in sorted(state.items()):
+                if new != revtodo and new in seen:
+                    skipped.add(old)
+                seen.add(new)
+        repo.ui.debug('computed skipped revs: %s\n' %
+                        (' '.join(str(r) for r in sorted(skipped)) or None))
+        repo.ui.debug('rebase status resumed\n')
+        _setrebasesetvisibility(repo, state.keys())
+
+        self.originalwd = originalwd
+        self.target = target
+        self.state = state
+        self.skipped = skipped
+        self.collapsef = collapse
+        self.keepf = keep
+        self.keepbranchesf = keepbranches
+        self.external = external
+        self.activebookmark = activebookmark
 
 @command('rebase',
     [('s', 'source', '',
@@ -201,16 +337,7 @@ def rebase(ui, repo, **opts):
     unresolved conflicts.
 
     """
-    originalwd = target = None
-    activebookmark = None
-    external = nullrev
-    # Mapping between the old revision id and either what is the new rebased
-    # revision or what needs to be done with the old revision. The state dict
-    # will be what contains most of the rebase progress state.
-    state = {}
-    skipped = set()
-    targetancestors = set()
-
+    rbsrt = rebaseruntime(repo, ui, opts)
 
     lock = wlock = None
     try:
@@ -227,19 +354,6 @@ def rebase(ui, repo, **opts):
         destspace = opts.get('_destspace')
         contf = opts.get('continue')
         abortf = opts.get('abort')
-        collapsef = opts.get('collapse', False)
-        collapsemsg = cmdutil.logmessage(ui, opts)
-        date = opts.get('date', None)
-        e = opts.get('extrafn') # internal, used by e.g. hgsubversion
-        extrafns = [_savegraft]
-        if e:
-            extrafns = [e]
-        keepf = opts.get('keep', False)
-        keepbranchesf = opts.get('keepbranches', False)
-        # keepopen is not meant for use on the command line, but by
-        # other extensions
-        keepopen = opts.get('keepopen', False)
-
         if opts.get('interactive'):
             try:
                 if extensions.find('histedit'):
@@ -251,14 +365,14 @@ def rebase(ui, repo, **opts):
                     "'histedit' extension (see \"%s\")") % help
             raise error.Abort(msg)
 
-        if collapsemsg and not collapsef:
+        if rbsrt.collapsemsg and not rbsrt.collapsef:
             raise error.Abort(
                 _('message can only be specified with collapse'))
 
         if contf or abortf:
             if contf and abortf:
                 raise error.Abort(_('cannot use both abort and continue'))
-            if collapsef:
+            if rbsrt.collapsef:
                 raise error.Abort(
                     _('cannot use collapse with continue or abort'))
             if srcf or basef or destf:
@@ -268,9 +382,8 @@ def rebase(ui, repo, **opts):
                 ui.warn(_('tool option will be ignored\n'))
 
             try:
-                (originalwd, target, state, skipped, collapsef, keepf,
-                 keepbranchesf, external, activebookmark) = restorestatus(repo)
-                collapsemsg = restorecollapsemsg(repo)
+                rbsrt.restorestatus()
+                rbsrt.collapsemsg = restorecollapsemsg(repo)
             except error.RepoLookupError:
                 if abortf:
                     clearstatus(repo)
@@ -283,19 +396,19 @@ def rebase(ui, repo, **opts):
                     hint = _('use "hg rebase --abort" to clear broken state')
                     raise error.Abort(msg, hint=hint)
             if abortf:
-                return abort(repo, originalwd, target, state,
-                             activebookmark=activebookmark)
+                return abort(repo, rbsrt.originalwd, rbsrt.target,
+                             rbsrt.state,
+                             activebookmark=rbsrt.activebookmark)
 
-            obsoletenotrebased = {}
+            rbsrt.obsoletenotrebased = {}
             if ui.configbool('experimental', 'rebaseskipobsolete',
                              default=True):
-                rebaseobsrevs = set([r for r, status in state.items()
-                                     if status == revprecursor])
-                rebasesetrevs = set(state.keys())
-                obsoletenotrebased = _computeobsoletenotrebased(repo,
-                                                                rebaseobsrevs,
-                                                                target)
-                rebaseobsskipped = set(obsoletenotrebased)
+                rebaseobsrevs = set([r for r, st in rbsrt.state.items()
+                                     if st == revprecursor])
+                rebasesetrevs = set(rbsrt.state.keys())
+                rbsrt.obsoletenotrebased = _computeobsoletenotrebased(repo,
+                                                rebaseobsrevs, rbsrt.target)
+                rebaseobsskipped = set(rbsrt.obsoletenotrebased)
                 _checkobsrebase(repo, ui, rebaseobsrevs, rebasesetrevs,
                                 rebaseobsskipped)
         else:
@@ -305,7 +418,7 @@ def rebase(ui, repo, **opts):
                 return _nothingtorebase()
 
             allowunstable = obsolete.isenabled(repo, obsolete.allowunstableopt)
-            if (not (keepf or allowunstable)
+            if (not (rbsrt.keepf or allowunstable)
                   and repo.revs('first(children(%ld) - %ld)',
                                 rebaseset, rebaseset)):
                 raise error.Abort(
@@ -313,21 +426,21 @@ def rebase(ui, repo, **opts):
                       " unrebased descendants"),
                     hint=_('use --keep to keep original changesets'))
 
-            obsoletenotrebased = {}
+            rbsrt.obsoletenotrebased = {}
             if ui.configbool('experimental', 'rebaseskipobsolete',
                              default=True):
                 rebasesetrevs = set(rebaseset)
                 rebaseobsrevs = _filterobsoleterevs(repo, rebasesetrevs)
-                obsoletenotrebased = _computeobsoletenotrebased(repo,
+                rbsrt.obsoletenotrebased = _computeobsoletenotrebased(repo,
                                                                 rebaseobsrevs,
                                                                 dest)
-                rebaseobsskipped = set(obsoletenotrebased)
+                rebaseobsskipped = set(rbsrt.obsoletenotrebased)
                 _checkobsrebase(repo, ui, rebaseobsrevs,
                                               rebasesetrevs,
                                               rebaseobsskipped)
 
-            result = buildstate(repo, dest, rebaseset, collapsef,
-                                obsoletenotrebased)
+            result = buildstate(repo, dest, rebaseset, rbsrt.collapsef,
+                                rbsrt.obsoletenotrebased)
 
             if not result:
                 # Empty state built, nothing to rebase
@@ -335,46 +448,48 @@ def rebase(ui, repo, **opts):
                 return _nothingtorebase()
 
             root = min(rebaseset)
-            if not keepf and not repo[root].mutable():
+            if not rbsrt.keepf and not repo[root].mutable():
                 raise error.Abort(_("can't rebase public changeset %s")
                                  % repo[root],
                                  hint=_('see "hg help phases" for details'))
 
-            originalwd, target, state = result
-            if collapsef:
-                targetancestors = repo.changelog.ancestors([target],
-                                                           inclusive=True)
-                external = externalparent(repo, state, targetancestors)
+            (rbsrt.originalwd, rbsrt.target, rbsrt.state) = result
+            if rbsrt.collapsef:
+                rbsrt.targetancestors = repo.changelog.ancestors([rbsrt.target],
+                                                                 inclusive=True)
+                rbsrt.external = externalparent(repo, rbsrt.state,
+                                                rbsrt.targetancestors)
 
-            if dest.closesbranch() and not keepbranchesf:
+            if dest.closesbranch() and not rbsrt.keepbranchesf:
                 ui.status(_('reopening closed branch head %s\n') % dest)
 
-        if keepbranchesf:
+        if rbsrt.keepbranchesf:
             # insert _savebranch at the start of extrafns so if
             # there's a user-provided extrafn it can clobber branch if
             # desired
-            extrafns.insert(0, _savebranch)
-            if collapsef:
+            rbsrt.extrafns.insert(0, _savebranch)
+            if rbsrt.collapsef:
                 branches = set()
-                for rev in state:
+                for rev in rbsrt.state:
                     branches.add(repo[rev].branch())
                     if len(branches) > 1:
                         raise error.Abort(_('cannot collapse multiple named '
                             'branches'))
 
         # Rebase
-        if not targetancestors:
-            targetancestors = repo.changelog.ancestors([target], inclusive=True)
+        if not rbsrt.targetancestors:
+            rbsrt.targetancestors = repo.changelog.ancestors([rbsrt.target],
+                                                             inclusive=True)
 
         # Keep track of the current bookmarks in order to reset them later
         currentbookmarks = repo._bookmarks.copy()
-        activebookmark = activebookmark or repo._activebookmark
-        if activebookmark:
+        rbsrt.activebookmark = rbsrt.activebookmark or repo._activebookmark
+        if rbsrt.activebookmark:
             bookmarks.deactivate(repo)
 
-        extrafn = _makeextrafn(extrafns)
+        extrafn = _makeextrafn(rbsrt.extrafns)
 
-        sortedstate = sorted(state)
+        sortedstate = sorted(rbsrt.state)
         total = len(sortedstate)
         pos = 0
         for rev in sortedstate:
@@ -385,37 +500,41 @@ def rebase(ui, repo, **opts):
             if names:
                 desc += ' (%s)' % ' '.join(names)
             pos += 1
-            if state[rev] == revtodo:
+            if rbsrt.state[rev] == revtodo:
                 ui.status(_('rebasing %s\n') % desc)
                 ui.progress(_("rebasing"), pos, ("%d:%s" % (rev, ctx)),
                             _('changesets'), total)
-                p1, p2, base = defineparents(repo, rev, target, state,
-                                             targetancestors)
-                storestatus(repo, originalwd, target, state, collapsef, keepf,
-                            keepbranchesf, external, activebookmark)
-                storecollapsemsg(repo, collapsemsg)
+                p1, p2, base = defineparents(repo, rev, rbsrt.target,
+                                             rbsrt.state,
+                                             rbsrt.targetancestors,
+                                             rbsrt.obsoletenotrebased)
+                storestatus(repo, rbsrt.originalwd, rbsrt.target,
+                            rbsrt.state, rbsrt.collapsef, rbsrt.keepf,
+                            rbsrt.keepbranchesf, rbsrt.external,
+                            rbsrt.activebookmark)
+                storecollapsemsg(repo, rbsrt.collapsemsg)
                 if len(repo[None].parents()) == 2:
                     repo.ui.debug('resuming interrupted rebase\n')
                 else:
                     try:
                         ui.setconfig('ui', 'forcemerge', opts.get('tool', ''),
                                      'rebase')
-                        stats = rebasenode(repo, rev, p1, base, state,
-                                           collapsef, target)
+                        stats = rebasenode(repo, rev, p1, base, rbsrt.state,
+                                           rbsrt.collapsef, rbsrt.target)
                         if stats and stats[3] > 0:
                             raise error.InterventionRequired(
                                 _('unresolved conflicts (see hg '
                                   'resolve, then hg rebase --continue)'))
                     finally:
                         ui.setconfig('ui', 'forcemerge', '', 'rebase')
-                if not collapsef:
+                if not rbsrt.collapsef:
                     merging = p2 != nullrev
                     editform = cmdutil.mergeeditform(merging, 'rebase')
                     editor = cmdutil.getcommiteditor(editform=editform, **opts)
                     newnode = concludenode(repo, rev, p1, p2, extrafn=extrafn,
                                            editor=editor,
-                                           keepbranches=keepbranchesf,
-                                           date=date)
+                                           keepbranches=rbsrt.keepbranchesf,
+                                           date=rbsrt.date)
                 else:
                     # Skip commit if we are collapsing
                     repo.dirstate.beginparentchange()
@@ -424,107 +543,117 @@ def rebase(ui, repo, **opts):
                     newnode = None
                 # Update the state
                 if newnode is not None:
-                    state[rev] = repo[newnode].rev()
+                    rbsrt.state[rev] = repo[newnode].rev()
                     ui.debug('rebased as %s\n' % short(newnode))
                 else:
-                    if not collapsef:
+                    if not rbsrt.collapsef:
                         ui.warn(_('note: rebase of %d:%s created no changes '
                                   'to commit\n') % (rev, ctx))
-                        skipped.add(rev)
-                    state[rev] = p1
+                        rbsrt.skipped.add(rev)
+                    rbsrt.state[rev] = p1
                     ui.debug('next revision set to %s\n' % p1)
-            elif state[rev] == nullmerge:
+            elif rbsrt.state[rev] == nullmerge:
                 ui.debug('ignoring null merge rebase of %s\n' % rev)
-            elif state[rev] == revignored:
+            elif rbsrt.state[rev] == revignored:
                 ui.status(_('not rebasing ignored %s\n') % desc)
-            elif state[rev] == revprecursor:
-                targetctx = repo[obsoletenotrebased[rev]]
+            elif rbsrt.state[rev] == revprecursor:
+                targetctx = repo[rbsrt.obsoletenotrebased[rev]]
                 desctarget = '%d:%s "%s"' % (targetctx.rev(), targetctx,
                              targetctx.description().split('\n', 1)[0])
                 msg = _('note: not rebasing %s, already in destination as %s\n')
                 ui.status(msg % (desc, desctarget))
-            elif state[rev] == revpruned:
+            elif rbsrt.state[rev] == revpruned:
                 msg = _('note: not rebasing %s, it has no successor\n')
                 ui.status(msg % desc)
             else:
                 ui.status(_('already rebased %s as %s\n') %
-                          (desc, repo[state[rev]]))
+                          (desc, repo[rbsrt.state[rev]]))
 
         ui.progress(_('rebasing'), None)
         ui.note(_('rebase merging completed\n'))
 
-        if collapsef and not keepopen:
-            p1, p2, _base = defineparents(repo, min(state), target,
-                                          state, targetancestors)
+        if rbsrt.collapsef and not rbsrt.keepopen:
+            p1, p2, _base = defineparents(repo, min(rbsrt.state),
+                                          rbsrt.target, rbsrt.state,
+                                          rbsrt.targetancestors,
+                                          rbsrt.obsoletenotrebased)
             editopt = opts.get('edit')
             editform = 'rebase.collapse'
-            if collapsemsg:
-                commitmsg = collapsemsg
+            if rbsrt.collapsemsg:
+                commitmsg = rbsrt.collapsemsg
             else:
                 commitmsg = 'Collapsed revision'
-                for rebased in state:
-                    if rebased not in skipped and state[rebased] > nullmerge:
+                for rebased in rbsrt.state:
+                    if rebased not in rbsrt.skipped and\
+                       rbsrt.state[rebased] > nullmerge:
                         commitmsg += '\n* %s' % repo[rebased].description()
                 editopt = True
             editor = cmdutil.getcommiteditor(edit=editopt, editform=editform)
-            newnode = concludenode(repo, rev, p1, external, commitmsg=commitmsg,
+            newnode = concludenode(repo, rev, p1, rbsrt.external,
+                                   commitmsg=commitmsg,
                                    extrafn=extrafn, editor=editor,
-                                   keepbranches=keepbranchesf,
-                                   date=date)
+                                   keepbranches=rbsrt.keepbranchesf,
+                                   date=rbsrt.date)
             if newnode is None:
-                newrev = target
+                newrev = rbsrt.target
             else:
                 newrev = repo[newnode].rev()
-            for oldrev in state.iterkeys():
-                if state[oldrev] > nullmerge:
-                    state[oldrev] = newrev
+            for oldrev in rbsrt.state.iterkeys():
+                if rbsrt.state[oldrev] > nullmerge:
+                    rbsrt.state[oldrev] = newrev
 
         if 'qtip' in repo.tags():
-            updatemq(repo, state, skipped, **opts)
+            updatemq(repo, rbsrt.state, rbsrt.skipped, **opts)
 
         if currentbookmarks:
             # Nodeids are needed to reset bookmarks
             nstate = {}
-            for k, v in state.iteritems():
+            for k, v in rbsrt.state.iteritems():
                 if v > nullmerge:
                     nstate[repo[k].node()] = repo[v].node()
+                elif v == revprecursor:
+                    succ = rbsrt.obsoletenotrebased[k]
+                    nstate[repo[k].node()] = repo[succ].node()
             # XXX this is the same as dest.node() for the non-continue path --
             # this should probably be cleaned up
-            targetnode = repo[target].node()
+            targetnode = repo[rbsrt.target].node()
 
         # restore original working directory
         # (we do this before stripping)
-        newwd = state.get(originalwd, originalwd)
-        if newwd < 0:
+        newwd = rbsrt.state.get(rbsrt.originalwd, rbsrt.originalwd)
+        if newwd == revprecursor:
+            newwd = rbsrt.obsoletenotrebased[rbsrt.originalwd]
+        elif newwd < 0:
             # original directory is a parent of rebase set root or ignored
-            newwd = originalwd
+            newwd = rbsrt.originalwd
         if newwd not in [c.rev() for c in repo[None].parents()]:
             ui.note(_("update back to initial working directory parent\n"))
             hg.updaterepo(repo, newwd, False)
 
-        if not keepf:
+        if not rbsrt.keepf:
             collapsedas = None
-            if collapsef:
+            if rbsrt.collapsef:
                 collapsedas = newnode
-            clearrebased(ui, repo, state, skipped, collapsedas)
+            clearrebased(ui, repo, rbsrt.state, rbsrt.skipped, collapsedas)
 
         with repo.transaction('bookmark') as tr:
             if currentbookmarks:
                 updatebookmarks(repo, targetnode, nstate, currentbookmarks, tr)
-                if activebookmark not in repo._bookmarks:
+                if rbsrt.activebookmark not in repo._bookmarks:
                     # active bookmark was divergent one and has been deleted
-                    activebookmark = None
+                    rbsrt.activebookmark = None
         clearstatus(repo)
         clearcollapsemsg(repo)
 
         ui.note(_("rebase completed\n"))
         util.unlinkpath(repo.sjoin('undo'), ignoremissing=True)
-        if skipped:
-            ui.note(_("%d revisions have been skipped\n") % len(skipped))
+        if rbsrt.skipped:
+            skippedlen = len(rbsrt.skipped)
+            ui.note(_("%d revisions have been skipped\n") % skippedlen)
 
-        if (activebookmark and
-            repo['.'].node() == repo._bookmarks[activebookmark]):
-                bookmarks.activate(repo, activebookmark)
+        if (rbsrt.activebookmark and
+            repo['.'].node() == repo._bookmarks[rbsrt.activebookmark]):
+                bookmarks.activate(repo, rbsrt.activebookmark)
 
     finally:
         release(lock, wlock)
@@ -733,21 +862,12 @@ def _checkobsrebase(repo, ui,
               "experimental.allowdivergence=True")
         raise error.Abort(msg % (",".join(divhashes),), hint=h)
 
-    # - plain prune (no successor) changesets are rebased
-    # - split changesets are not rebased if at least one of the
-    # changeset resulting from the split is an ancestor of dest
-    rebaseset = rebasesetrevs - rebaseobsskipped
-    if rebasesetrevs and not rebaseset:
-        msg = _('all requested changesets have equivalents '
-                'or were marked as obsolete')
-        hint = _('to force the rebase, set the config '
-                 'experimental.rebaseskipobsolete to False')
-        raise error.Abort(msg, hint=hint)
-
-def defineparents(repo, rev, target, state, targetancestors):
+def defineparents(repo, rev, target, state, targetancestors,
+                  obsoletenotrebased):
     'Return the new parent relationship of the revision that will be rebased'
     parents = repo[rev].parents()
     p1 = p2 = nullrev
+    rp1 = None
 
     p1n = parents[0].rev()
     if p1n in targetancestors:
@@ -771,6 +891,8 @@ def defineparents(repo, rev, target, state, targetancestors):
         if p2n in state:
             if p1 == target: # p1n in targetancestors or external
                 p1 = state[p2n]
+                if p1 == revprecursor:
+                    rp1 = obsoletenotrebased[p2n]
             elif state[p2n] in revskipped:
                 p2 = nearestrebased(repo, p2n, state)
                 if p2 is None:
@@ -784,7 +906,7 @@ def defineparents(repo, rev, target, state, targetancestors):
                         'would have 3 parents') % rev)
             p2 = p2n
     repo.ui.debug(" future parents are %d and %d\n" %
-                            (repo[p1].rev(), repo[p2].rev()))
+                            (repo[rp1 or p1].rev(), repo[p2].rev()))
 
     if not any(p.rev() in state for p in parents):
         # Case (1) root changeset of a non-detaching rebase set.
@@ -828,6 +950,8 @@ def defineparents(repo, rev, target, state, targetancestors):
         # make it feasible to consider different cases separately. In these
         # other cases we currently just leave it to the user to correctly
         # resolve an impossible merge using a wrong ancestor.
+        #
+        # xx, p1 could be -4, and both parents could probably be -4...
         for p in repo[rev].parents():
             if state.get(p.rev()) == p1:
                 base = p.rev()
@@ -838,7 +962,7 @@ def defineparents(repo, rev, target, state, targetancestors):
             # Raise because this function is called wrong (see issue 4106)
             raise AssertionError('no base found to rebase on '
                                  '(defineparents called wrong)')
-    return p1, p2, base
+    return rp1 or p1, p2, base
 
 def isagitpatch(repo, patchname):
     'Return true if the given patch is in git format'
@@ -951,68 +1075,6 @@ def clearstatus(repo):
     'Remove the status files'
     _clearrebasesetvisibiliy(repo)
     util.unlinkpath(repo.join("rebasestate"), ignoremissing=True)
-
-def restorestatus(repo):
-    'Restore a previously stored status'
-    keepbranches = None
-    target = None
-    collapse = False
-    external = nullrev
-    activebookmark = None
-    state = {}
-
-    try:
-        f = repo.vfs("rebasestate")
-        for i, l in enumerate(f.read().splitlines()):
-            if i == 0:
-                originalwd = repo[l].rev()
-            elif i == 1:
-                target = repo[l].rev()
-            elif i == 2:
-                external = repo[l].rev()
-            elif i == 3:
-                collapse = bool(int(l))
-            elif i == 4:
-                keep = bool(int(l))
-            elif i == 5:
-                keepbranches = bool(int(l))
-            elif i == 6 and not (len(l) == 81 and ':' in l):
-                # line 6 is a recent addition, so for backwards compatibility
-                # check that the line doesn't look like the oldrev:newrev lines
-                activebookmark = l
-            else:
-                oldrev, newrev = l.split(':')
-                if newrev in (str(nullmerge), str(revignored),
-                              str(revprecursor), str(revpruned)):
-                    state[repo[oldrev].rev()] = int(newrev)
-                elif newrev == nullid:
-                    state[repo[oldrev].rev()] = revtodo
-                    # Legacy compat special case
-                else:
-                    state[repo[oldrev].rev()] = repo[newrev].rev()
-
-    except IOError as err:
-        if err.errno != errno.ENOENT:
-            raise
-        cmdutil.wrongtooltocontinue(repo, _('rebase'))
-
-    if keepbranches is None:
-        raise error.Abort(_('.hg/rebasestate is incomplete'))
-
-    skipped = set()
-    # recompute the set of skipped revs
-    if not collapse:
-        seen = set([target])
-        for old, new in sorted(state.items()):
-            if new != revtodo and new in seen:
-                skipped.add(old)
-            seen.add(new)
-    repo.ui.debug('computed skipped revs: %s\n' %
-                    (' '.join(str(r) for r in sorted(skipped)) or None))
-    repo.ui.debug('rebase status resumed\n')
-    _setrebasesetvisibility(repo, state.keys())
-    return (originalwd, target, state, skipped,
-            collapse, keep, keepbranches, external, activebookmark)
 
 def needupdate(repo, state):
     '''check whether we should `update --clean` away from a merge, or if
@@ -1336,7 +1398,9 @@ def summaryhook(ui, repo):
     if not os.path.exists(repo.join('rebasestate')):
         return
     try:
-        state = restorestatus(repo)[2]
+        rbsrt = rebaseruntime(repo, ui, {})
+        rbsrt.restorestatus()
+        state = rbsrt.state
     except error.RepoLookupError:
         # i18n: column positioning for "hg summary"
         msg = _('rebase: (use "hg rebase --abort" to clear broken state)\n')

@@ -69,6 +69,13 @@ except ImportError:
 from xml.dom import minidom
 import unittest
 
+if os.environ.get('RTUNICODEPEDANTRY', False):
+    try:
+        reload(sys)
+        sys.setdefaultencoding("undefined")
+    except NameError:
+        pass
+
 osenvironb = getattr(os, 'environb', os.environ)
 processlock = threading.Lock()
 
@@ -1836,7 +1843,8 @@ class TextTestRunner(unittest.TextTestRunner):
                                 tres = {'result': res}
 
                             outcome[tc.name] = tres
-                    jsonout = json.dumps(outcome, sort_keys=True, indent=4)
+                    jsonout = json.dumps(outcome, sort_keys=True, indent=4,
+                                         separators=(',', ': '))
                     fp.writelines(("testreport =", jsonout))
 
             self._runner._checkhglib('Tested')

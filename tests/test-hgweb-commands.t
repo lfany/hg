@@ -81,36 +81,36 @@ Logs and changes
     <updated>1970-01-01T00:00:00+00:00</updated>
     <published>1970-01-01T00:00:00+00:00</published>
     <content type="xhtml">
-  	<table xmlns="http://www.w3.org/1999/xhtml">
-  	<tr>
-  		<th style="text-align:left;">changeset</th>
-  		<td>cad8025a2e87</td>
-                </tr>
-                <tr>
-                                <th style="text-align:left;">branch</th>
-                                <td>unstable</td>
-                </tr>
-                <tr>
-                                <th style="text-align:left;">bookmark</th>
-  		<td>something</td>
-  	</tr>
-  	<tr>
-  		<th style="text-align:left;">tag</th>
-  		<td>tip</td>
-  	</tr>
-  	<tr>
-  		<th style="text-align:left;">user</th>
-  		<td>&#116;&#101;&#115;&#116;</td>
-  	</tr>
-  	<tr>
-  		<th style="text-align:left;vertical-align:top;">description</th>
-  		<td>branch commit with null character: (websub)</td>
-  	</tr>
-  	<tr>
-  		<th style="text-align:left;vertical-align:top;">files</th>
-  		<td></td>
-  	</tr>
-  	</table>
+     <table xmlns="http://www.w3.org/1999/xhtml">
+      <tr>
+       <th style="text-align:left;">changeset</th>
+       <td>cad8025a2e87</td>
+      </tr>
+      <tr>
+       <th style="text-align:left;">branch</th>
+       <td>unstable</td>
+      </tr>
+      <tr>
+       <th style="text-align:left;">bookmark</th>
+       <td>something</td>
+      </tr>
+      <tr>
+       <th style="text-align:left;">tag</th>
+       <td>tip</td>
+      </tr>
+      <tr>
+       <th style="text-align:left;">user</th>
+       <td>&#116;&#101;&#115;&#116;</td>
+      </tr>
+      <tr>
+       <th style="text-align:left;vertical-align:top;">description</th>
+       <td>branch commit with null character: (websub)</td>
+      </tr>
+      <tr>
+       <th style="text-align:left;vertical-align:top;">files</th>
+       <td></td>
+      </tr>
+     </table>
     </content>
    </entry>
    <entry>
@@ -124,36 +124,36 @@ Logs and changes
     <updated>1970-01-01T00:00:00+00:00</updated>
     <published>1970-01-01T00:00:00+00:00</published>
     <content type="xhtml">
-  	<table xmlns="http://www.w3.org/1999/xhtml">
-  	<tr>
-  		<th style="text-align:left;">changeset</th>
-  		<td>1d22e65f027e</td>
-                </tr>
-                <tr>
-                                <th style="text-align:left;">branch</th>
-                                <td>stable</td>
-                </tr>
-                <tr>
-                                <th style="text-align:left;">bookmark</th>
-  		<td></td>
-  	</tr>
-  	<tr>
-  		<th style="text-align:left;">tag</th>
-  		<td></td>
-  	</tr>
-  	<tr>
-  		<th style="text-align:left;">user</th>
-  		<td>&#116;&#101;&#115;&#116;</td>
-  	</tr>
-  	<tr>
-  		<th style="text-align:left;vertical-align:top;">description</th>
-  		<td>branch(websub)</td>
-  	</tr>
-  	<tr>
-  		<th style="text-align:left;vertical-align:top;">files</th>
-  		<td>foo<br /></td>
-  	</tr>
-  	</table>
+     <table xmlns="http://www.w3.org/1999/xhtml">
+      <tr>
+       <th style="text-align:left;">changeset</th>
+       <td>1d22e65f027e</td>
+      </tr>
+      <tr>
+       <th style="text-align:left;">branch</th>
+       <td>stable</td>
+      </tr>
+      <tr>
+       <th style="text-align:left;">bookmark</th>
+       <td></td>
+      </tr>
+      <tr>
+       <th style="text-align:left;">tag</th>
+       <td></td>
+      </tr>
+      <tr>
+       <th style="text-align:left;">user</th>
+       <td>&#116;&#101;&#115;&#116;</td>
+      </tr>
+      <tr>
+       <th style="text-align:left;vertical-align:top;">description</th>
+       <td>branch(websub)</td>
+      </tr>
+      <tr>
+       <th style="text-align:left;vertical-align:top;">files</th>
+       <td>foo<br /></td>
+      </tr>
+     </table>
     </content>
    </entry>
    <entry>
@@ -167,36 +167,36 @@ Logs and changes
     <updated>1970-01-01T00:00:00+00:00</updated>
     <published>1970-01-01T00:00:00+00:00</published>
     <content type="xhtml">
-  	<table xmlns="http://www.w3.org/1999/xhtml">
-  	<tr>
-  		<th style="text-align:left;">changeset</th>
-  		<td>a4f92ed23982</td>
-                </tr>
-                <tr>
-                                <th style="text-align:left;">branch</th>
-                                <td>default</td>
-                </tr>
-                <tr>
-                                <th style="text-align:left;">bookmark</th>
-  		<td></td>
-  	</tr>
-  	<tr>
-  		<th style="text-align:left;">tag</th>
-  		<td></td>
-  	</tr>
-  	<tr>
-  		<th style="text-align:left;">user</th>
-  		<td>&#116;&#101;&#115;&#116;</td>
-  	</tr>
-  	<tr>
-  		<th style="text-align:left;vertical-align:top;">description</th>
-  		<td>Added tag 1.0 for changeset 2ef0ac749a14(websub)</td>
-  	</tr>
-  	<tr>
-  		<th style="text-align:left;vertical-align:top;">files</th>
-  		<td>.hgtags<br /></td>
-  	</tr>
-  	</table>
+     <table xmlns="http://www.w3.org/1999/xhtml">
+      <tr>
+       <th style="text-align:left;">changeset</th>
+       <td>a4f92ed23982</td>
+      </tr>
+      <tr>
+       <th style="text-align:left;">branch</th>
+       <td>default</td>
+      </tr>
+      <tr>
+       <th style="text-align:left;">bookmark</th>
+       <td></td>
+      </tr>
+      <tr>
+       <th style="text-align:left;">tag</th>
+       <td></td>
+      </tr>
+      <tr>
+       <th style="text-align:left;">user</th>
+       <td>&#116;&#101;&#115;&#116;</td>
+      </tr>
+      <tr>
+       <th style="text-align:left;vertical-align:top;">description</th>
+       <td>Added tag 1.0 for changeset 2ef0ac749a14(websub)</td>
+      </tr>
+      <tr>
+       <th style="text-align:left;vertical-align:top;">files</th>
+       <td>.hgtags<br /></td>
+      </tr>
+     </table>
     </content>
    </entry>
    <entry>
@@ -210,36 +210,36 @@ Logs and changes
     <updated>1970-01-01T00:00:00+00:00</updated>
     <published>1970-01-01T00:00:00+00:00</published>
     <content type="xhtml">
-  	<table xmlns="http://www.w3.org/1999/xhtml">
-  	<tr>
-  		<th style="text-align:left;">changeset</th>
-  		<td>2ef0ac749a14</td>
-                </tr>
-                <tr>
-                                <th style="text-align:left;">branch</th>
-                                <td></td>
-                </tr>
-                <tr>
-                                <th style="text-align:left;">bookmark</th>
-  		<td>anotherthing</td>
-  	</tr>
-  	<tr>
-  		<th style="text-align:left;">tag</th>
-  		<td>1.0</td>
-  	</tr>
-  	<tr>
-  		<th style="text-align:left;">user</th>
-  		<td>&#116;&#101;&#115;&#116;</td>
-  	</tr>
-  	<tr>
-  		<th style="text-align:left;vertical-align:top;">description</th>
-  		<td>base(websub)</td>
-  	</tr>
-  	<tr>
-  		<th style="text-align:left;vertical-align:top;">files</th>
-  		<td>da/foo<br />foo<br /></td>
-  	</tr>
-  	</table>
+     <table xmlns="http://www.w3.org/1999/xhtml">
+      <tr>
+       <th style="text-align:left;">changeset</th>
+       <td>2ef0ac749a14</td>
+      </tr>
+      <tr>
+       <th style="text-align:left;">branch</th>
+       <td></td>
+      </tr>
+      <tr>
+       <th style="text-align:left;">bookmark</th>
+       <td>anotherthing</td>
+      </tr>
+      <tr>
+       <th style="text-align:left;">tag</th>
+       <td>1.0</td>
+      </tr>
+      <tr>
+       <th style="text-align:left;">user</th>
+       <td>&#116;&#101;&#115;&#116;</td>
+      </tr>
+      <tr>
+       <th style="text-align:left;vertical-align:top;">description</th>
+       <td>base(websub)</td>
+      </tr>
+      <tr>
+       <th style="text-align:left;vertical-align:top;">files</th>
+       <td>da/foo<br />foo<br /></td>
+      </tr>
+     </table>
     </content>
    </entry>
   
@@ -258,160 +258,164 @@ Logs and changes
       <item>
       <title>[unstable] branch commit with null character: </title>
       <guid isPermaLink="true">http://*:$HGPORT/rev/cad8025a2e87</guid> (glob)
-               <link>http://*:$HGPORT/rev/cad8025a2e87</link> (glob)
+      <link>http://*:$HGPORT/rev/cad8025a2e87</link> (glob)
       <description>
-                <![CDATA[
-  	<table>
-  	<tr>
-  		<th style="text-align:left;">changeset</th>
-  		<td>cad8025a2e87</td>
-                </tr>
-                <tr>
-                                <th style="text-align:left;">branch</th>
-                                <td>unstable</td>
-                </tr>
-                <tr>
-                                <th style="text-align:left;">bookmark</th>
-  		<td>something</td>
-  	</tr>
-  	<tr>
-  		<th style="text-align:left;">tag</th>
-  		<td>tip</td>
-  	</tr>
-  	<tr>
-  		<th style="text-align:left;vertical-align:top;">user</th>
-  		<td>&#116;&#101;&#115;&#116;</td>
-  	</tr>
-  	<tr>
-  		<th style="text-align:left;vertical-align:top;">description</th>
-  		<td>branch commit with null character: (websub)</td>
-  	</tr>
-  	<tr>
-  		<th style="text-align:left;vertical-align:top;">files</th>
-  		<td></td>
-  	</tr>
-  	</table>
-  	]]></description>
+      <![CDATA[
+          <table>
+              <tr>
+                  <th style="text-align:left;">changeset</th>
+                  <td>cad8025a2e87</td>
+              </tr>
+              <tr>
+                  <th style="text-align:left;">branch</th>
+                  <td>unstable</td>
+              </tr>
+              <tr>
+                  <th style="text-align:left;">bookmark</th>
+                  <td>something</td>
+              </tr>
+              <tr>
+                  <th style="text-align:left;">tag</th>
+                  <td>tip</td>
+              </tr>
+              <tr>
+                  <th style="text-align:left;vertical-align:top;">user</th>
+                  <td>&#116;&#101;&#115;&#116;</td>
+              </tr>
+              <tr>
+                  <th style="text-align:left;vertical-align:top;">description</th>
+                  <td>branch commit with null character: (websub)</td>
+              </tr>
+              <tr>
+                  <th style="text-align:left;vertical-align:top;">files</th>
+                  <td></td>
+              </tr>
+          </table>
+      ]]>
+      </description>
       <author>&#116;&#101;&#115;&#116;</author>
       <pubDate>Thu, 01 Jan 1970 00:00:00 +0000</pubDate>
   </item>
   <item>
       <title>[stable] branch</title>
       <guid isPermaLink="true">http://*:$HGPORT/rev/1d22e65f027e</guid> (glob)
-               <link>http://*:$HGPORT/rev/1d22e65f027e</link> (glob)
+      <link>http://*:$HGPORT/rev/1d22e65f027e</link> (glob)
       <description>
-                <![CDATA[
-  	<table>
-  	<tr>
-  		<th style="text-align:left;">changeset</th>
-  		<td>1d22e65f027e</td>
-                </tr>
-                <tr>
-                                <th style="text-align:left;">branch</th>
-                                <td>stable</td>
-                </tr>
-                <tr>
-                                <th style="text-align:left;">bookmark</th>
-  		<td></td>
-  	</tr>
-  	<tr>
-  		<th style="text-align:left;">tag</th>
-  		<td></td>
-  	</tr>
-  	<tr>
-  		<th style="text-align:left;vertical-align:top;">user</th>
-  		<td>&#116;&#101;&#115;&#116;</td>
-  	</tr>
-  	<tr>
-  		<th style="text-align:left;vertical-align:top;">description</th>
-  		<td>branch(websub)</td>
-  	</tr>
-  	<tr>
-  		<th style="text-align:left;vertical-align:top;">files</th>
-  		<td>foo<br /></td>
-  	</tr>
-  	</table>
-  	]]></description>
+      <![CDATA[
+          <table>
+              <tr>
+                  <th style="text-align:left;">changeset</th>
+                  <td>1d22e65f027e</td>
+              </tr>
+              <tr>
+                  <th style="text-align:left;">branch</th>
+                  <td>stable</td>
+              </tr>
+              <tr>
+                  <th style="text-align:left;">bookmark</th>
+                  <td></td>
+              </tr>
+              <tr>
+                  <th style="text-align:left;">tag</th>
+                  <td></td>
+              </tr>
+              <tr>
+                  <th style="text-align:left;vertical-align:top;">user</th>
+                  <td>&#116;&#101;&#115;&#116;</td>
+              </tr>
+              <tr>
+                  <th style="text-align:left;vertical-align:top;">description</th>
+                  <td>branch(websub)</td>
+              </tr>
+              <tr>
+                  <th style="text-align:left;vertical-align:top;">files</th>
+                  <td>foo<br /></td>
+              </tr>
+          </table>
+      ]]>
+      </description>
       <author>&#116;&#101;&#115;&#116;</author>
       <pubDate>Thu, 01 Jan 1970 00:00:00 +0000</pubDate>
   </item>
   <item>
       <title>[default] Added tag 1.0 for changeset 2ef0ac749a14</title>
       <guid isPermaLink="true">http://*:$HGPORT/rev/a4f92ed23982</guid> (glob)
-               <link>http://*:$HGPORT/rev/a4f92ed23982</link> (glob)
+      <link>http://*:$HGPORT/rev/a4f92ed23982</link> (glob)
       <description>
-                <![CDATA[
-  	<table>
-  	<tr>
-  		<th style="text-align:left;">changeset</th>
-  		<td>a4f92ed23982</td>
-                </tr>
-                <tr>
-                                <th style="text-align:left;">branch</th>
-                                <td>default</td>
-                </tr>
-                <tr>
-                                <th style="text-align:left;">bookmark</th>
-  		<td></td>
-  	</tr>
-  	<tr>
-  		<th style="text-align:left;">tag</th>
-  		<td></td>
-  	</tr>
-  	<tr>
-  		<th style="text-align:left;vertical-align:top;">user</th>
-  		<td>&#116;&#101;&#115;&#116;</td>
-  	</tr>
-  	<tr>
-  		<th style="text-align:left;vertical-align:top;">description</th>
-  		<td>Added tag 1.0 for changeset 2ef0ac749a14(websub)</td>
-  	</tr>
-  	<tr>
-  		<th style="text-align:left;vertical-align:top;">files</th>
-  		<td>.hgtags<br /></td>
-  	</tr>
-  	</table>
-  	]]></description>
+      <![CDATA[
+          <table>
+              <tr>
+                  <th style="text-align:left;">changeset</th>
+                  <td>a4f92ed23982</td>
+              </tr>
+              <tr>
+                  <th style="text-align:left;">branch</th>
+                  <td>default</td>
+              </tr>
+              <tr>
+                  <th style="text-align:left;">bookmark</th>
+                  <td></td>
+              </tr>
+              <tr>
+                  <th style="text-align:left;">tag</th>
+                  <td></td>
+              </tr>
+              <tr>
+                  <th style="text-align:left;vertical-align:top;">user</th>
+                  <td>&#116;&#101;&#115;&#116;</td>
+              </tr>
+              <tr>
+                  <th style="text-align:left;vertical-align:top;">description</th>
+                  <td>Added tag 1.0 for changeset 2ef0ac749a14(websub)</td>
+              </tr>
+              <tr>
+                  <th style="text-align:left;vertical-align:top;">files</th>
+                  <td>.hgtags<br /></td>
+              </tr>
+          </table>
+      ]]>
+      </description>
       <author>&#116;&#101;&#115;&#116;</author>
       <pubDate>Thu, 01 Jan 1970 00:00:00 +0000</pubDate>
   </item>
   <item>
       <title>base</title>
       <guid isPermaLink="true">http://*:$HGPORT/rev/2ef0ac749a14</guid> (glob)
-               <link>http://*:$HGPORT/rev/2ef0ac749a14</link> (glob)
+      <link>http://*:$HGPORT/rev/2ef0ac749a14</link> (glob)
       <description>
-                <![CDATA[
-  	<table>
-  	<tr>
-  		<th style="text-align:left;">changeset</th>
-  		<td>2ef0ac749a14</td>
-                </tr>
-                <tr>
-                                <th style="text-align:left;">branch</th>
-                                <td></td>
-                </tr>
-                <tr>
-                                <th style="text-align:left;">bookmark</th>
-  		<td>anotherthing</td>
-  	</tr>
-  	<tr>
-  		<th style="text-align:left;">tag</th>
-  		<td>1.0</td>
-  	</tr>
-  	<tr>
-  		<th style="text-align:left;vertical-align:top;">user</th>
-  		<td>&#116;&#101;&#115;&#116;</td>
-  	</tr>
-  	<tr>
-  		<th style="text-align:left;vertical-align:top;">description</th>
-  		<td>base(websub)</td>
-  	</tr>
-  	<tr>
-  		<th style="text-align:left;vertical-align:top;">files</th>
-  		<td>da/foo<br />foo<br /></td>
-  	</tr>
-  	</table>
-  	]]></description>
+      <![CDATA[
+          <table>
+              <tr>
+                  <th style="text-align:left;">changeset</th>
+                  <td>2ef0ac749a14</td>
+              </tr>
+              <tr>
+                  <th style="text-align:left;">branch</th>
+                  <td></td>
+              </tr>
+              <tr>
+                  <th style="text-align:left;">bookmark</th>
+                  <td>anotherthing</td>
+              </tr>
+              <tr>
+                  <th style="text-align:left;">tag</th>
+                  <td>1.0</td>
+              </tr>
+              <tr>
+                  <th style="text-align:left;vertical-align:top;">user</th>
+                  <td>&#116;&#101;&#115;&#116;</td>
+              </tr>
+              <tr>
+                  <th style="text-align:left;vertical-align:top;">description</th>
+                  <td>base(websub)</td>
+              </tr>
+              <tr>
+                  <th style="text-align:left;vertical-align:top;">files</th>
+                  <td>da/foo<br />foo<br /></td>
+              </tr>
+          </table>
+      ]]>
+      </description>
       <author>&#116;&#101;&#115;&#116;</author>
       <pubDate>Thu, 01 Jan 1970 00:00:00 +0000</pubDate>
   </item>
@@ -441,36 +445,36 @@ Logs and changes
     <updated>1970-01-01T00:00:00+00:00</updated>
     <published>1970-01-01T00:00:00+00:00</published>
     <content type="xhtml">
-  	<table xmlns="http://www.w3.org/1999/xhtml">
-  	<tr>
-  		<th style="text-align:left;">changeset</th>
-  		<td>a4f92ed23982</td>
-                </tr>
-                <tr>
-                                <th style="text-align:left;">branch</th>
-                                <td>default</td>
-                </tr>
-                <tr>
-                                <th style="text-align:left;">bookmark</th>
-  		<td></td>
-  	</tr>
-  	<tr>
-  		<th style="text-align:left;">tag</th>
-  		<td></td>
-  	</tr>
-  	<tr>
-  		<th style="text-align:left;">user</th>
-  		<td>&#116;&#101;&#115;&#116;</td>
-  	</tr>
-  	<tr>
-  		<th style="text-align:left;vertical-align:top;">description</th>
-  		<td>Added tag 1.0 for changeset 2ef0ac749a14(websub)</td>
-  	</tr>
-  	<tr>
-  		<th style="text-align:left;vertical-align:top;">files</th>
-  		<td>.hgtags<br /></td>
-  	</tr>
-  	</table>
+     <table xmlns="http://www.w3.org/1999/xhtml">
+      <tr>
+       <th style="text-align:left;">changeset</th>
+       <td>a4f92ed23982</td>
+      </tr>
+      <tr>
+       <th style="text-align:left;">branch</th>
+       <td>default</td>
+      </tr>
+      <tr>
+       <th style="text-align:left;">bookmark</th>
+       <td></td>
+      </tr>
+      <tr>
+       <th style="text-align:left;">tag</th>
+       <td></td>
+      </tr>
+      <tr>
+       <th style="text-align:left;">user</th>
+       <td>&#116;&#101;&#115;&#116;</td>
+      </tr>
+      <tr>
+       <th style="text-align:left;vertical-align:top;">description</th>
+       <td>Added tag 1.0 for changeset 2ef0ac749a14(websub)</td>
+      </tr>
+      <tr>
+       <th style="text-align:left;vertical-align:top;">files</th>
+       <td>.hgtags<br /></td>
+      </tr>
+     </table>
     </content>
    </entry>
    <entry>
@@ -484,36 +488,36 @@ Logs and changes
     <updated>1970-01-01T00:00:00+00:00</updated>
     <published>1970-01-01T00:00:00+00:00</published>
     <content type="xhtml">
-  	<table xmlns="http://www.w3.org/1999/xhtml">
-  	<tr>
-  		<th style="text-align:left;">changeset</th>
-  		<td>2ef0ac749a14</td>
-                </tr>
-                <tr>
-                                <th style="text-align:left;">branch</th>
-                                <td></td>
-                </tr>
-                <tr>
-                                <th style="text-align:left;">bookmark</th>
-  		<td>anotherthing</td>
-  	</tr>
-  	<tr>
-  		<th style="text-align:left;">tag</th>
-  		<td>1.0</td>
-  	</tr>
-  	<tr>
-  		<th style="text-align:left;">user</th>
-  		<td>&#116;&#101;&#115;&#116;</td>
-  	</tr>
-  	<tr>
-  		<th style="text-align:left;vertical-align:top;">description</th>
-  		<td>base(websub)</td>
-  	</tr>
-  	<tr>
-  		<th style="text-align:left;vertical-align:top;">files</th>
-  		<td>da/foo<br />foo<br /></td>
-  	</tr>
-  	</table>
+     <table xmlns="http://www.w3.org/1999/xhtml">
+      <tr>
+       <th style="text-align:left;">changeset</th>
+       <td>2ef0ac749a14</td>
+      </tr>
+      <tr>
+       <th style="text-align:left;">branch</th>
+       <td></td>
+      </tr>
+      <tr>
+       <th style="text-align:left;">bookmark</th>
+       <td>anotherthing</td>
+      </tr>
+      <tr>
+       <th style="text-align:left;">tag</th>
+       <td>1.0</td>
+      </tr>
+      <tr>
+       <th style="text-align:left;">user</th>
+       <td>&#116;&#101;&#115;&#116;</td>
+      </tr>
+      <tr>
+       <th style="text-align:left;vertical-align:top;">description</th>
+       <td>base(websub)</td>
+      </tr>
+      <tr>
+       <th style="text-align:left;vertical-align:top;">files</th>
+       <td>da/foo<br />foo<br /></td>
+      </tr>
+     </table>
     </content>
    </entry>
   
@@ -532,80 +536,82 @@ Logs and changes
       <item>
       <title>[default] Added tag 1.0 for changeset 2ef0ac749a14</title>
       <guid isPermaLink="true">http://*:$HGPORT/rev/a4f92ed23982</guid> (glob)
-               <link>http://*:$HGPORT/rev/a4f92ed23982</link> (glob)
+      <link>http://*:$HGPORT/rev/a4f92ed23982</link> (glob)
       <description>
-                <![CDATA[
-  	<table>
-  	<tr>
-  		<th style="text-align:left;">changeset</th>
-  		<td>a4f92ed23982</td>
-                </tr>
-                <tr>
-                                <th style="text-align:left;">branch</th>
-                                <td>default</td>
-                </tr>
-                <tr>
-                                <th style="text-align:left;">bookmark</th>
-  		<td></td>
-  	</tr>
-  	<tr>
-  		<th style="text-align:left;">tag</th>
-  		<td></td>
-  	</tr>
-  	<tr>
-  		<th style="text-align:left;vertical-align:top;">user</th>
-  		<td>&#116;&#101;&#115;&#116;</td>
-  	</tr>
-  	<tr>
-  		<th style="text-align:left;vertical-align:top;">description</th>
-  		<td>Added tag 1.0 for changeset 2ef0ac749a14(websub)</td>
-  	</tr>
-  	<tr>
-  		<th style="text-align:left;vertical-align:top;">files</th>
-  		<td>.hgtags<br /></td>
-  	</tr>
-  	</table>
-  	]]></description>
+      <![CDATA[
+          <table>
+              <tr>
+                  <th style="text-align:left;">changeset</th>
+                  <td>a4f92ed23982</td>
+              </tr>
+              <tr>
+                  <th style="text-align:left;">branch</th>
+                  <td>default</td>
+              </tr>
+              <tr>
+                  <th style="text-align:left;">bookmark</th>
+                  <td></td>
+              </tr>
+              <tr>
+                  <th style="text-align:left;">tag</th>
+                  <td></td>
+              </tr>
+              <tr>
+                  <th style="text-align:left;vertical-align:top;">user</th>
+                  <td>&#116;&#101;&#115;&#116;</td>
+              </tr>
+              <tr>
+                  <th style="text-align:left;vertical-align:top;">description</th>
+                  <td>Added tag 1.0 for changeset 2ef0ac749a14(websub)</td>
+              </tr>
+              <tr>
+                  <th style="text-align:left;vertical-align:top;">files</th>
+                  <td>.hgtags<br /></td>
+              </tr>
+          </table>
+      ]]>
+      </description>
       <author>&#116;&#101;&#115;&#116;</author>
       <pubDate>Thu, 01 Jan 1970 00:00:00 +0000</pubDate>
   </item>
   <item>
       <title>base</title>
       <guid isPermaLink="true">http://*:$HGPORT/rev/2ef0ac749a14</guid> (glob)
-               <link>http://*:$HGPORT/rev/2ef0ac749a14</link> (glob)
+      <link>http://*:$HGPORT/rev/2ef0ac749a14</link> (glob)
       <description>
-                <![CDATA[
-  	<table>
-  	<tr>
-  		<th style="text-align:left;">changeset</th>
-  		<td>2ef0ac749a14</td>
-                </tr>
-                <tr>
-                                <th style="text-align:left;">branch</th>
-                                <td></td>
-                </tr>
-                <tr>
-                                <th style="text-align:left;">bookmark</th>
-  		<td>anotherthing</td>
-  	</tr>
-  	<tr>
-  		<th style="text-align:left;">tag</th>
-  		<td>1.0</td>
-  	</tr>
-  	<tr>
-  		<th style="text-align:left;vertical-align:top;">user</th>
-  		<td>&#116;&#101;&#115;&#116;</td>
-  	</tr>
-  	<tr>
-  		<th style="text-align:left;vertical-align:top;">description</th>
-  		<td>base(websub)</td>
-  	</tr>
-  	<tr>
-  		<th style="text-align:left;vertical-align:top;">files</th>
-  		<td>da/foo<br />foo<br /></td>
-  	</tr>
-  	</table>
-  	]]></description>
+      <![CDATA[
+          <table>
+              <tr>
+                  <th style="text-align:left;">changeset</th>
+                  <td>2ef0ac749a14</td>
+              </tr>
+              <tr>
+                  <th style="text-align:left;">branch</th>
+                  <td></td>
+              </tr>
+              <tr>
+                  <th style="text-align:left;">bookmark</th>
+                  <td>anotherthing</td>
+              </tr>
+              <tr>
+                  <th style="text-align:left;">tag</th>
+                  <td>1.0</td>
+              </tr>
+              <tr>
+                  <th style="text-align:left;vertical-align:top;">user</th>
+                  <td>&#116;&#101;&#115;&#116;</td>
+              </tr>
+              <tr>
+                  <th style="text-align:left;vertical-align:top;">description</th>
+                  <td>base(websub)</td>
+              </tr>
+              <tr>
+                  <th style="text-align:left;vertical-align:top;">files</th>
+                  <td>da/foo<br />foo<br /></td>
+              </tr>
+          </table>
+      ]]>
+      </description>
       <author>&#116;&#101;&#115;&#116;</author>
       <pubDate>Thu, 01 Jan 1970 00:00:00 +0000</pubDate>
   </item>
@@ -633,36 +639,36 @@ Logs and changes
     <updated>1970-01-01T00:00:00+00:00</updated>
     <published>1970-01-01T00:00:00+00:00</published>
     <content type="xhtml">
-  	<table xmlns="http://www.w3.org/1999/xhtml">
-  	<tr>
-  		<th style="text-align:left;">changeset</th>
-  		<td>2ef0ac749a14</td>
-                </tr>
-                <tr>
-                                <th style="text-align:left;">branch</th>
-                                <td></td>
-                </tr>
-                <tr>
-                                <th style="text-align:left;">bookmark</th>
-  		<td>anotherthing</td>
-  	</tr>
-  	<tr>
-  		<th style="text-align:left;">tag</th>
-  		<td>1.0</td>
-  	</tr>
-  	<tr>
-  		<th style="text-align:left;">user</th>
-  		<td>&#116;&#101;&#115;&#116;</td>
-  	</tr>
-  	<tr>
-  		<th style="text-align:left;vertical-align:top;">description</th>
-  		<td>base(websub)</td>
-  	</tr>
-  	<tr>
-  		<th style="text-align:left;vertical-align:top;">files</th>
-  		<td></td>
-  	</tr>
-  	</table>
+     <table xmlns="http://www.w3.org/1999/xhtml">
+      <tr>
+       <th style="text-align:left;">changeset</th>
+       <td>2ef0ac749a14</td>
+      </tr>
+      <tr>
+       <th style="text-align:left;">branch</th>
+       <td></td>
+      </tr>
+      <tr>
+       <th style="text-align:left;">bookmark</th>
+       <td>anotherthing</td>
+      </tr>
+      <tr>
+       <th style="text-align:left;">tag</th>
+       <td>1.0</td>
+      </tr>
+      <tr>
+       <th style="text-align:left;">user</th>
+       <td>&#116;&#101;&#115;&#116;</td>
+      </tr>
+      <tr>
+       <th style="text-align:left;vertical-align:top;">description</th>
+       <td>base(websub)</td>
+      </tr>
+      <tr>
+       <th style="text-align:left;vertical-align:top;">files</th>
+       <td></td>
+      </tr>
+     </table>
     </content>
    </entry>
   
@@ -1957,6 +1963,8 @@ Static files
   .minusline { color: red; }
   .atline { color: purple; }
   .annotate { font-size: smaller; text-align: right; padding-right: 1em; }
+  tr.thisrev a { color:#999999; text-decoration: none; }
+  tr.thisrev pre { color:#009900; }
   .buttons a {
     background-color: #666;
     padding: 2pt;

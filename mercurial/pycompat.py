@@ -11,6 +11,41 @@ This contains aliases to hide python version-specific details from the core.
 from __future__ import absolute_import
 
 try:
+    import cPickle as pickle
+    pickle.dumps
+except ImportError:
+    import pickle
+    pickle.dumps # silence pyflakes
+
+try:
+    import httplib
+    httplib.HTTPException
+except ImportError:
+    import http.client as httplib
+    httplib.HTTPException
+
+try:
+    import SocketServer as socketserver
+    socketserver.ThreadingMixIn
+except ImportError:
+    import socketserver
+    socketserver.ThreadingMixIn
+
+try:
+    import xmlrpclib
+    xmlrpclib.Transport
+except ImportError:
+    import xmlrpc.client as xmlrpclib
+    xmlrpclib.Transport
+
+try:
+    import urlparse
+    urlparse.urlparse
+except ImportError:
+    import urllib.parse as urlparse
+    urlparse.urlparse
+
+try:
     import cStringIO as io
     stringio = io.StringIO
 except ImportError:
@@ -99,6 +134,7 @@ except ImportError:
         "pathname2url",
         "HTTPBasicAuthHandler",
         "HTTPDigestAuthHandler",
+        "HTTPPasswordMgrWithDefaultRealm",
         "ProxyHandler",
         "quote",
         "Request",

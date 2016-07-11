@@ -40,13 +40,14 @@ Config
 
 from __future__ import absolute_import
 
-import SocketServer
 import errno
 import gc
+import hashlib
 import inspect
 import os
 import random
 import re
+import signal
 import struct
 import sys
 import threading
@@ -66,6 +67,8 @@ from mercurial import (
     util,
 )
 
+socketserver = util.socketserver
+
 # Note for extension authors: ONLY specify testedwith = 'internal' for
 # extensions which SHIP WITH MERCURIAL. Non-mainline extensions should
 # be specifying the version(s) of Mercurial they are tested with, or
@@ -76,10 +79,11 @@ _log = commandserver.log
 
 def _hashlist(items):
     """return sha1 hexdigest for a list"""
-    return util.sha1(str(items)).hexdigest()
+    return hashlib.sha1(str(items)).hexdigest()
 
 # sensitive config sections affecting confighash
 _configsections = [
+    'alias',  # affects global state commands.table
     'extdiff',  # uisetup will register new commands
     'extensions',
 ]
@@ -150,6 +154,10 @@ def _mtimehash(paths):
 
     for chgserver, it is designed that once mtimehash changes, the server is
     considered outdated immediately and should no longer provide service.
+
+    mtimehash is not included in confighash because we only know the paths of
+    extensions after importing them (there is imp.find_module but that faces
+    race conditions). We need to calculate confighash without importing.
     """
     def trystat(path):
         try:
@@ -212,18 +220,6 @@ def _setuppagercmd(ui, options, cmd):
         ui.setconfig('ui', 'formatted', ui.formatted(), 'pager')
         ui.setconfig('ui', 'interactive', False, 'pager')
         return p
-
-_envvarre = re.compile(r'\$[a-zA-Z_]+')
-
-def _clearenvaliases(cmdtable):
-    """Remove stale command aliases referencing env vars; variable expansion
-    is done at dispatch.addaliases()"""
-    for name, tab in cmdtable.items():
-        cmddef = tab[0]
-        if (isinstance(cmddef, dispatch.cmdalias) and
-            not cmddef.definition.startswith('!') and  # shell alias
-            _envvarre.search(cmddef.definition)):
-            del cmdtable[name]
 
 def _newchgui(srcui, csystem):
     class chgui(srcui.__class__):
@@ -508,6 +504,11 @@ class chgcmdserver(commandserver.server):
 
         pagercmd = _setuppagercmd(self.ui, options, cmd)
         if pagercmd:
+            # Python's SIGPIPE is SIG_IGN by default. change to SIG_DFL so
+            # we can exit if the pipe to the pager is closed
+            if util.safehasattr(signal, 'SIGPIPE') and \
+                    signal.getsignal(signal.SIGPIPE) == signal.SIG_IGN:
+                signal.signal(signal.SIGPIPE, signal.SIG_DFL)
             self.cresult.write(pagercmd)
         else:
             self.cresult.write('\0')
@@ -525,7 +526,6 @@ class chgcmdserver(commandserver.server):
         _log('setenv: %r\n' % sorted(newenv.keys()))
         os.environ.clear()
         os.environ.update(newenv)
-        _clearenvaliases(commands.table)
 
     capabilities = commandserver.server.capabilities.copy()
     capabilities.update({'attachio': attachio,
@@ -535,7 +535,7 @@ class chgcmdserver(commandserver.server):
                          'setumask': setumask})
 
 # copied from mercurial/commandserver.py
-class _requesthandler(SocketServer.StreamRequestHandler):
+class _requesthandler(socketserver.StreamRequestHandler):
     def handle(self):
         # use a different process group from the master process, making this
         # process pass kernel "is_current_pgrp_orphaned" check so signals like
@@ -608,7 +608,7 @@ class AutoExitMixIn:  # use old-style to comply with SocketServer design
 
     def process_request(self, request, address):
         self.lastactive = time.time()
-        return SocketServer.ForkingMixIn.process_request(
+        return socketserver.ForkingMixIn.process_request(
             self, request, address)
 
     def server_bind(self):
@@ -661,8 +661,8 @@ class chgunixservice(commandserver.unixservice):
             self.repo = None
         self._inithashstate()
         self._checkextensions()
-        class cls(AutoExitMixIn, SocketServer.ForkingMixIn,
-                  SocketServer.UnixStreamServer):
+        class cls(AutoExitMixIn, socketserver.ForkingMixIn,
+                  socketserver.UnixStreamServer):
             ui = self.ui
             repo = self.repo
             hashstate = self.hashstate

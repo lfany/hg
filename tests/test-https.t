@@ -2,131 +2,13 @@
 
 Proper https client requires the built-in ssl from Python 2.6.
 
-Certificates created with:
- printf '.\n.\n.\n.\n.\nlocalhost\nhg@localhost\n' | \
- openssl req -newkey rsa:512 -keyout priv.pem -nodes -x509 -days 9000 -out pub.pem
-Can be dumped with:
- openssl x509 -in pub.pem -text
+Make server certificates:
 
-  $ cat << EOT > priv.pem
-  > -----BEGIN PRIVATE KEY-----
-  > MIIBVAIBADANBgkqhkiG9w0BAQEFAASCAT4wggE6AgEAAkEApjCWeYGrIa/Vo7LH
-  > aRF8ou0tbgHKE33Use/whCnKEUm34rDaXQd4lxxX6aDWg06n9tiVStAKTgQAHJY8
-  > j/xgSwIDAQABAkBxHC6+Qlf0VJXGlb6NL16yEVVTQxqDS6hA9zqu6TZjrr0YMfzc
-  > EGNIiZGt7HCBL0zO+cPDg/LeCZc6HQhf0KrhAiEAzlJq4hWWzvguWFIJWSoBeBUG
-  > MF1ACazQO7PYE8M0qfECIQDONHHP0SKZzz/ZwBZcAveC5K61f/v9hONFwbeYulzR
-  > +wIgc9SvbtgB/5Yzpp//4ZAEnR7oh5SClCvyB+KSx52K3nECICbhQphhoXmI10wy
-  > aMTellaq0bpNMHFDziqH9RsqAHhjAiEAgYGxfzkftt5IUUn/iFK89aaIpyrpuaAh
-  > HY8gUVkVRVs=
-  > -----END PRIVATE KEY-----
-  > EOT
-
-  $ cat << EOT > pub.pem
-  > -----BEGIN CERTIFICATE-----
-  > MIIBqzCCAVWgAwIBAgIJANAXFFyWjGnRMA0GCSqGSIb3DQEBBQUAMDExEjAQBgNV
-  > BAMMCWxvY2FsaG9zdDEbMBkGCSqGSIb3DQEJARYMaGdAbG9jYWxob3N0MB4XDTEw
-  > MTAxNDIwMzAxNFoXDTM1MDYwNTIwMzAxNFowMTESMBAGA1UEAwwJbG9jYWxob3N0
-  > MRswGQYJKoZIhvcNAQkBFgxoZ0Bsb2NhbGhvc3QwXDANBgkqhkiG9w0BAQEFAANL
-  > ADBIAkEApjCWeYGrIa/Vo7LHaRF8ou0tbgHKE33Use/whCnKEUm34rDaXQd4lxxX
-  > 6aDWg06n9tiVStAKTgQAHJY8j/xgSwIDAQABo1AwTjAdBgNVHQ4EFgQUE6sA+amm
-  > r24dGX0kpjxOgO45hzQwHwYDVR0jBBgwFoAUE6sA+ammr24dGX0kpjxOgO45hzQw
-  > DAYDVR0TBAUwAwEB/zANBgkqhkiG9w0BAQUFAANBAFArvQFiAZJgQczRsbYlG1xl
-  > t+truk37w5B3m3Ick1ntRcQrqs+hf0CO1q6Squ144geYaQ8CDirSR92fICELI1c=
-  > -----END CERTIFICATE-----
-  > EOT
-  $ cat priv.pem pub.pem >> server.pem
+  $ CERTSDIR="$TESTDIR/sslcerts"
+  $ cat "$CERTSDIR/priv.pem" "$CERTSDIR/pub.pem" >> server.pem
   $ PRIV=`pwd`/server.pem
-
-  $ cat << EOT > pub-other.pem
-  > -----BEGIN CERTIFICATE-----
-  > MIIBqzCCAVWgAwIBAgIJALwZS731c/ORMA0GCSqGSIb3DQEBBQUAMDExEjAQBgNV
-  > BAMMCWxvY2FsaG9zdDEbMBkGCSqGSIb3DQEJARYMaGdAbG9jYWxob3N0MB4XDTEw
-  > MTAxNDIwNDUxNloXDTM1MDYwNTIwNDUxNlowMTESMBAGA1UEAwwJbG9jYWxob3N0
-  > MRswGQYJKoZIhvcNAQkBFgxoZ0Bsb2NhbGhvc3QwXDANBgkqhkiG9w0BAQEFAANL
-  > ADBIAkEAsxsapLbHrqqUKuQBxdpK4G3m2LjtyrTSdpzzzFlecxd5yhNP6AyWrufo
-  > K4VMGo2xlu9xOo88nDSUNSKPuD09MwIDAQABo1AwTjAdBgNVHQ4EFgQUoIB1iMhN
-  > y868rpQ2qk9dHnU6ebswHwYDVR0jBBgwFoAUoIB1iMhNy868rpQ2qk9dHnU6ebsw
-  > DAYDVR0TBAUwAwEB/zANBgkqhkiG9w0BAQUFAANBAJ544f125CsE7J2t55PdFaF6
-  > bBlNBb91FCywBgSjhBjf+GG3TNPwrPdc3yqeq+hzJiuInqbOBv9abmMyq8Wsoig=
-  > -----END CERTIFICATE-----
-  > EOT
-
-pub.pem patched with other notBefore / notAfter:
-
-  $ cat << EOT > pub-not-yet.pem
-  > -----BEGIN CERTIFICATE-----
-  > MIIBqzCCAVWgAwIBAgIJANAXFFyWjGnRMA0GCSqGSIb3DQEBBQUAMDExEjAQBgNVBAMMCWxvY2Fs
-  > aG9zdDEbMBkGCSqGSIb3DQEJARYMaGdAbG9jYWxob3N0MB4XDTM1MDYwNTIwMzAxNFoXDTM1MDYw
-  > NTIwMzAxNFowMTESMBAGA1UEAwwJbG9jYWxob3N0MRswGQYJKoZIhvcNAQkBFgxoZ0Bsb2NhbGhv
-  > c3QwXDANBgkqhkiG9w0BAQEFAANLADBIAkEApjCWeYGrIa/Vo7LHaRF8ou0tbgHKE33Use/whCnK
-  > EUm34rDaXQd4lxxX6aDWg06n9tiVStAKTgQAHJY8j/xgSwIDAQABo1AwTjAdBgNVHQ4EFgQUE6sA
-  > +ammr24dGX0kpjxOgO45hzQwHwYDVR0jBBgwFoAUE6sA+ammr24dGX0kpjxOgO45hzQwDAYDVR0T
-  > BAUwAwEB/zANBgkqhkiG9w0BAQUFAANBAJXV41gWnkgC7jcpPpFRSUSZaxyzrXmD1CIqQf0WgVDb
-  > /12E0vR2DuZitgzUYtBaofM81aTtc0a2/YsrmqePGm0=
-  > -----END CERTIFICATE-----
-  > EOT
-  $ cat priv.pem pub-not-yet.pem > server-not-yet.pem
-
-  $ cat << EOT > pub-expired.pem
-  > -----BEGIN CERTIFICATE-----
-  > MIIBqzCCAVWgAwIBAgIJANAXFFyWjGnRMA0GCSqGSIb3DQEBBQUAMDExEjAQBgNVBAMMCWxvY2Fs
-  > aG9zdDEbMBkGCSqGSIb3DQEJARYMaGdAbG9jYWxob3N0MB4XDTEwMTAxNDIwMzAxNFoXDTEwMTAx
-  > NDIwMzAxNFowMTESMBAGA1UEAwwJbG9jYWxob3N0MRswGQYJKoZIhvcNAQkBFgxoZ0Bsb2NhbGhv
-  > c3QwXDANBgkqhkiG9w0BAQEFAANLADBIAkEApjCWeYGrIa/Vo7LHaRF8ou0tbgHKE33Use/whCnK
-  > EUm34rDaXQd4lxxX6aDWg06n9tiVStAKTgQAHJY8j/xgSwIDAQABo1AwTjAdBgNVHQ4EFgQUE6sA
-  > +ammr24dGX0kpjxOgO45hzQwHwYDVR0jBBgwFoAUE6sA+ammr24dGX0kpjxOgO45hzQwDAYDVR0T
-  > BAUwAwEB/zANBgkqhkiG9w0BAQUFAANBAJfk57DTRf2nUbYaMSlVAARxMNbFGOjQhAUtY400GhKt
-  > 2uiKCNGKXVXD3AHWe13yHc5KttzbHQStE5Nm/DlWBWQ=
-  > -----END CERTIFICATE-----
-  > EOT
-  $ cat priv.pem pub-expired.pem > server-expired.pem
-
-Client certificates created with:
- openssl genrsa -aes128 -passout pass:1234 -out client-key.pem 512
- openssl rsa -in client-key.pem -passin pass:1234 -out client-key-decrypted.pem
- printf '.\n.\n.\n.\n.\n.\nhg-client@localhost\n.\n.\n' | \
- openssl req -new -key client-key.pem -passin pass:1234 -out client-csr.pem
- openssl x509 -req -days 9000 -in client-csr.pem -CA pub.pem -CAkey priv.pem \
- -set_serial 01 -out client-cert.pem
-
-  $ cat << EOT > client-key.pem
-  > -----BEGIN RSA PRIVATE KEY-----
-  > Proc-Type: 4,ENCRYPTED
-  > DEK-Info: AES-128-CBC,C8B8F103A61A336FB0716D1C0F8BB2E8
-  > 
-  > JolMlCFjEW3q3JJjO9z99NJWeJbFgF5DpUOkfSCxH56hxxtZb9x++rBvBZkxX1bF
-  > BAIe+iI90+jdCLwxbILWuFcrJUaLC5WmO14XDKYVmr2eW9e4MiCYOlO0Q6a9rDFS
-  > jctRCfvubOXFHbBGLH8uKEMpXEkP7Lc60FiIukqjuQEivJjrQirVtZCGwyk3qUi7
-  > Eyh4Lo63IKGu8T1Bkmn2kaMvFhu7nC/CQLBjSq0YYI1tmCOkVb/3tPrz8oqgDJp2
-  > u7bLS3q0xDNZ52nVrKIoZC/UlRXGlPyzPpa70/jPIdfCbkwDaBpRVXc+62Pj2n5/
-  > CnO2xaKwfOG6pDvanBhFD72vuBOkAYlFZPiEku4sc2WlNggsSWCPCIFwzmiHjKIl
-  > bWmdoTq3nb7sNfnBbV0OCa7fS1dFwCm4R1NC7ELENu0=
-  > -----END RSA PRIVATE KEY-----
-  > EOT
-
-  $ cat << EOT > client-key-decrypted.pem
-  > -----BEGIN RSA PRIVATE KEY-----
-  > MIIBOgIBAAJBAJs4LS3glAYU92bg5kPgRPNW84ewB0fWJfAKccCp1ACHAdZPeaKb
-  > FCinVMYKAVbVqBkyrZ/Tyr8aSfMz4xO4+KsCAwEAAQJAeKDr25+Q6jkZHEbkLRP6
-  > AfMtR+Ixhk6TJT24sbZKIC2V8KuJTDEvUhLU0CAr1nH79bDqiSsecOiVCr2HHyfT
-  > AQIhAM2C5rHbTs9R3PkywFEqq1gU3ztCnpiWglO7/cIkuGBhAiEAwVpMSAf77kop
-  > 4h/1kWsgMALQTJNsXd4CEUK4BOxvJIsCIQCbarVAKBQvoT81jfX27AfscsxnKnh5
-  > +MjSvkanvdFZwQIgbbcTefwt1LV4trtz2SR0i0nNcOZmo40Kl0jIquKO3qkCIH01
-  > mJHzZr3+jQqeIFtr5P+Xqi30DJxgrnEobbJ0KFjY
-  > -----END RSA PRIVATE KEY-----
-  > EOT
-
-  $ cat << EOT > client-cert.pem
-  > -----BEGIN CERTIFICATE-----
-  > MIIBPjCB6QIBATANBgkqhkiG9w0BAQsFADAxMRIwEAYDVQQDDAlsb2NhbGhvc3Qx
-  > GzAZBgkqhkiG9w0BCQEWDGhnQGxvY2FsaG9zdDAeFw0xNTA1MDcwNjI5NDVaFw0z
-  > OTEyMjcwNjI5NDVaMCQxIjAgBgkqhkiG9w0BCQEWE2hnLWNsaWVudEBsb2NhbGhv
-  > c3QwXDANBgkqhkiG9w0BAQEFAANLADBIAkEAmzgtLeCUBhT3ZuDmQ+BE81bzh7AH
-  > R9Yl8ApxwKnUAIcB1k95opsUKKdUxgoBVtWoGTKtn9PKvxpJ8zPjE7j4qwIDAQAB
-  > MA0GCSqGSIb3DQEBCwUAA0EAfBTqBG5pYhuGk+ZnyUufgS+d7Nk/sZAZjNdCAEj/
-  > NFPo5fR1jM6jlEWoWbeg298+SkjV7tfO+2nt0otUFkdM6A==
-  > -----END CERTIFICATE-----
-  > EOT
+  $ cat "$CERTSDIR/priv.pem" "$CERTSDIR/pub-not-yet.pem" > server-not-yet.pem
+  $ cat "$CERTSDIR/priv.pem" "$CERTSDIR/pub-expired.pem" > server-expired.pem
 
   $ hg init test
   $ cd test
@@ -162,22 +44,127 @@ Test server address cannot be reused
 #endif
   $ cd ..
 
-OS X has a dummy CA cert that enables use of the system CA store when using
-Apple's OpenSSL. This trick do not work with plain OpenSSL.
+Our test cert is not signed by a trusted CA. It should fail to verify if
+we are able to load CA certs.
 
-  $ DISABLEOSXDUMMYCERT=
-#if defaultcacerts
+#if sslcontext defaultcacerts no-defaultcacertsloaded
   $ hg clone https://localhost:$HGPORT/ copy-pull
+  (an attempt was made to load CA certificates but none were loaded; see https://mercurial-scm.org/wiki/SecureConnections for how to configure Mercurial to avoid this error)
   abort: error: *certificate verify failed* (glob)
   [255]
-
-  $ DISABLEOSXDUMMYCERT="--insecure"
 #endif
 
-clone via pull
+#if no-sslcontext defaultcacerts
+  $ hg clone https://localhost:$HGPORT/ copy-pull
+  (using CA certificates from *; if you see this message, your Mercurial install is not properly configured; see https://mercurial-scm.org/wiki/SecureConnections for how to configure Mercurial to avoid this message) (glob) (?)
+  abort: error: *certificate verify failed* (glob)
+  [255]
+#endif
 
-  $ hg clone https://localhost:$HGPORT/ copy-pull $DISABLEOSXDUMMYCERT
-  warning: localhost certificate with fingerprint 91:4f:1a:ff:87:24:9c:09:b6:85:9b:88:b1:90:6d:30:75:64:91:ca not verified (check hostfingerprints or web.cacerts config setting)
+#if no-sslcontext windows
+  $ hg clone https://localhost:$HGPORT/ copy-pull
+  (unable to load Windows CA certificates; see https://mercurial-scm.org/wiki/SecureConnections for how to configure Mercurial to avoid this message)
+  abort: error: *certificate verify failed* (glob)
+  [255]
+#endif
+
+#if no-sslcontext osx
+  $ hg clone https://localhost:$HGPORT/ copy-pull
+  (unable to load CA certificates; see https://mercurial-scm.org/wiki/SecureConnections for how to configure Mercurial to avoid this message)
+  abort: localhost certificate error: no certificate received
+  (set hostsecurity.localhost:certfingerprints=sha256:62:09:97:2f:97:60:e3:65:8f:12:5d:78:9e:35:a1:36:7a:65:4b:0e:9f:ac:db:c3:bc:6e:b6:a3:c0:16:e0:30 config setting or use --insecure to connect insecurely)
+  [255]
+#endif
+
+#if defaultcacertsloaded
+  $ hg clone https://localhost:$HGPORT/ copy-pull
+  (using CA certificates from *; if you see this message, your Mercurial install is not properly configured; see https://mercurial-scm.org/wiki/SecureConnections for how to configure Mercurial to avoid this message) (glob) (?)
+  abort: error: *certificate verify failed* (glob)
+  [255]
+#endif
+
+#if no-defaultcacerts
+  $ hg clone https://localhost:$HGPORT/ copy-pull
+  (unable to load * certificates; see https://mercurial-scm.org/wiki/SecureConnections for how to configure Mercurial to avoid this message) (glob) (?)
+  abort: localhost certificate error: no certificate received
+  (set hostsecurity.localhost:certfingerprints=sha256:62:09:97:2f:97:60:e3:65:8f:12:5d:78:9e:35:a1:36:7a:65:4b:0e:9f:ac:db:c3:bc:6e:b6:a3:c0:16:e0:30 config setting or use --insecure to connect insecurely)
+  [255]
+#endif
+
+Specifying a per-host certificate file that doesn't exist will abort
+
+  $ hg --config hostsecurity.localhost:verifycertsfile=/does/not/exist clone https://localhost:$HGPORT/
+  abort: path specified by hostsecurity.localhost:verifycertsfile does not exist: /does/not/exist
+  [255]
+
+A malformed per-host certificate file will raise an error
+
+  $ echo baddata > badca.pem
+#if sslcontext
+  $ hg --config hostsecurity.localhost:verifycertsfile=badca.pem clone https://localhost:$HGPORT/
+  abort: error loading CA file badca.pem: * (glob)
+  (file is empty or malformed?)
+  [255]
+#else
+  $ hg --config hostsecurity.localhost:verifycertsfile=badca.pem clone https://localhost:$HGPORT/
+  abort: error: * (glob)
+  [255]
+#endif
+
+A per-host certificate mismatching the server will fail verification
+
+(modern ssl is able to discern whether the loaded cert is a CA cert)
+#if sslcontext
+  $ hg --config hostsecurity.localhost:verifycertsfile="$CERTSDIR/client-cert.pem" clone https://localhost:$HGPORT/
+  (an attempt was made to load CA certificates but none were loaded; see https://mercurial-scm.org/wiki/SecureConnections for how to configure Mercurial to avoid this error)
+  abort: error: *certificate verify failed* (glob)
+  [255]
+#else
+  $ hg --config hostsecurity.localhost:verifycertsfile="$CERTSDIR/client-cert.pem" clone https://localhost:$HGPORT/
+  abort: error: *certificate verify failed* (glob)
+  [255]
+#endif
+
+A per-host certificate matching the server's cert will be accepted
+
+  $ hg --config hostsecurity.localhost:verifycertsfile="$CERTSDIR/pub.pem" clone -U https://localhost:$HGPORT/ perhostgood1
+  requesting all changes
+  adding changesets
+  adding manifests
+  adding file changes
+  added 1 changesets with 4 changes to 4 files
+
+A per-host certificate with multiple certs and one matching will be accepted
+
+  $ cat "$CERTSDIR/client-cert.pem" "$CERTSDIR/pub.pem" > perhost.pem
+  $ hg --config hostsecurity.localhost:verifycertsfile=perhost.pem clone -U https://localhost:$HGPORT/ perhostgood2
+  requesting all changes
+  adding changesets
+  adding manifests
+  adding file changes
+  added 1 changesets with 4 changes to 4 files
+
+Defining both per-host certificate and a fingerprint will print a warning
+
+  $ hg --config hostsecurity.localhost:verifycertsfile="$CERTSDIR/pub.pem" --config hostsecurity.localhost:fingerprints=sha1:914f1aff87249c09b6859b88b1906d30756491ca clone -U https://localhost:$HGPORT/ caandfingerwarning
+  (hostsecurity.localhost:verifycertsfile ignored when host fingerprints defined; using host fingerprints for verification)
+  requesting all changes
+  adding changesets
+  adding manifests
+  adding file changes
+  added 1 changesets with 4 changes to 4 files
+
+  $ DISABLECACERTS="--config devel.disableloaddefaultcerts=true"
+
+Inability to verify peer certificate will result in abort
+
+  $ hg clone https://localhost:$HGPORT/ copy-pull $DISABLECACERTS
+  abort: unable to verify security of localhost (no loaded CA certificates); refusing to connect
+  (see https://mercurial-scm.org/wiki/SecureConnections for how to configure Mercurial to avoid this error or set hostsecurity.localhost:fingerprints=sha256:62:09:97:2f:97:60:e3:65:8f:12:5d:78:9e:35:a1:36:7a:65:4b:0e:9f:ac:db:c3:bc:6e:b6:a3:c0:16:e0:30 to trust this server)
+  [255]
+
+  $ hg clone --insecure https://localhost:$HGPORT/ copy-pull
+  warning: connection security to localhost is disabled per current settings; communication is susceptible to eavesdropping and tampering
   requesting all changes
   adding changesets
   adding manifests
@@ -202,9 +189,15 @@ pull without cacert
   $ cd copy-pull
   $ echo '[hooks]' >> .hg/hgrc
   $ echo "changegroup = printenv.py changegroup" >> .hg/hgrc
-  $ hg pull $DISABLEOSXDUMMYCERT
+  $ hg pull $DISABLECACERTS
   pulling from https://localhost:$HGPORT/
-  warning: localhost certificate with fingerprint 91:4f:1a:ff:87:24:9c:09:b6:85:9b:88:b1:90:6d:30:75:64:91:ca not verified (check hostfingerprints or web.cacerts config setting)
+  abort: unable to verify security of localhost (no loaded CA certificates); refusing to connect
+  (see https://mercurial-scm.org/wiki/SecureConnections for how to configure Mercurial to avoid this error or set hostsecurity.localhost:fingerprints=sha256:62:09:97:2f:97:60:e3:65:8f:12:5d:78:9e:35:a1:36:7a:65:4b:0e:9f:ac:db:c3:bc:6e:b6:a3:c0:16:e0:30 to trust this server)
+  [255]
+
+  $ hg pull --insecure
+  pulling from https://localhost:$HGPORT/
+  warning: connection security to localhost is disabled per current settings; communication is susceptible to eavesdropping and tampering
   searching for changes
   adding changesets
   adding manifests
@@ -218,7 +211,7 @@ cacert configured in local repo
 
   $ cp copy-pull/.hg/hgrc copy-pull/.hg/hgrc.bu
   $ echo "[web]" >> copy-pull/.hg/hgrc
-  $ echo "cacerts=`pwd`/pub.pem" >> copy-pull/.hg/hgrc
+  $ echo "cacerts=$CERTSDIR/pub.pem" >> copy-pull/.hg/hgrc
   $ hg -R copy-pull pull --traceback
   pulling from https://localhost:$HGPORT/
   searching for changes
@@ -230,35 +223,55 @@ variables in the filename
 
   $ echo "[web]" >> $HGRCPATH
   $ echo 'cacerts=$P/pub.pem' >> $HGRCPATH
-  $ P=`pwd` hg -R copy-pull pull
+  $ P="$CERTSDIR" hg -R copy-pull pull
   pulling from https://localhost:$HGPORT/
   searching for changes
   no changes found
-  $ P=`pwd` hg -R copy-pull pull --insecure
+  $ P="$CERTSDIR" hg -R copy-pull pull --insecure
   pulling from https://localhost:$HGPORT/
-  warning: localhost certificate with fingerprint 91:4f:1a:ff:87:24:9c:09:b6:85:9b:88:b1:90:6d:30:75:64:91:ca not verified (check hostfingerprints or web.cacerts config setting)
+  warning: connection security to localhost is disabled per current settings; communication is susceptible to eavesdropping and tampering
   searching for changes
   no changes found
+
+empty cacert file
+
+  $ touch emptycafile
+
+#if sslcontext
+  $ hg --config web.cacerts=emptycafile -R copy-pull pull
+  pulling from https://localhost:$HGPORT/
+  abort: error loading CA file emptycafile: * (glob)
+  (file is empty or malformed?)
+  [255]
+#else
+  $ hg --config web.cacerts=emptycafile -R copy-pull pull
+  pulling from https://localhost:$HGPORT/
+  abort: error: * (glob)
+  [255]
+#endif
 
 cacert mismatch
 
-  $ hg -R copy-pull pull --config web.cacerts=pub.pem https://127.0.0.1:$HGPORT/
+  $ hg -R copy-pull pull --config web.cacerts="$CERTSDIR/pub.pem" \
+  > https://127.0.0.1:$HGPORT/
   pulling from https://127.0.0.1:$HGPORT/
   abort: 127.0.0.1 certificate error: certificate is for localhost
-  (configure hostfingerprint 91:4f:1a:ff:87:24:9c:09:b6:85:9b:88:b1:90:6d:30:75:64:91:ca or use --insecure to connect insecurely)
+  (set hostsecurity.127.0.0.1:certfingerprints=sha256:62:09:97:2f:97:60:e3:65:8f:12:5d:78:9e:35:a1:36:7a:65:4b:0e:9f:ac:db:c3:bc:6e:b6:a3:c0:16:e0:30 config setting or use --insecure to connect insecurely)
   [255]
-  $ hg -R copy-pull pull --config web.cacerts=pub.pem https://127.0.0.1:$HGPORT/ --insecure
+  $ hg -R copy-pull pull --config web.cacerts="$CERTSDIR/pub.pem" \
+  > https://127.0.0.1:$HGPORT/ --insecure
   pulling from https://127.0.0.1:$HGPORT/
-  warning: 127.0.0.1 certificate with fingerprint 91:4f:1a:ff:87:24:9c:09:b6:85:9b:88:b1:90:6d:30:75:64:91:ca not verified (check hostfingerprints or web.cacerts config setting)
+  warning: connection security to 127.0.0.1 is disabled per current settings; communication is susceptible to eavesdropping and tampering
   searching for changes
   no changes found
-  $ hg -R copy-pull pull --config web.cacerts=pub-other.pem
+  $ hg -R copy-pull pull --config web.cacerts="$CERTSDIR/pub-other.pem"
   pulling from https://localhost:$HGPORT/
   abort: error: *certificate verify failed* (glob)
   [255]
-  $ hg -R copy-pull pull --config web.cacerts=pub-other.pem --insecure
+  $ hg -R copy-pull pull --config web.cacerts="$CERTSDIR/pub-other.pem" \
+  > --insecure
   pulling from https://localhost:$HGPORT/
-  warning: localhost certificate with fingerprint 91:4f:1a:ff:87:24:9c:09:b6:85:9b:88:b1:90:6d:30:75:64:91:ca not verified (check hostfingerprints or web.cacerts config setting)
+  warning: connection security to localhost is disabled per current settings; communication is susceptible to eavesdropping and tampering
   searching for changes
   no changes found
 
@@ -266,7 +279,8 @@ Test server cert which isn't valid yet
 
   $ hg serve -R test -p $HGPORT1 -d --pid-file=hg1.pid --certificate=server-not-yet.pem
   $ cat hg1.pid >> $DAEMON_PIDS
-  $ hg -R copy-pull pull --config web.cacerts=pub-not-yet.pem https://localhost:$HGPORT1/
+  $ hg -R copy-pull pull --config web.cacerts="$CERTSDIR/pub-not-yet.pem" \
+  > https://localhost:$HGPORT1/
   pulling from https://localhost:$HGPORT1/
   abort: error: *certificate verify failed* (glob)
   [255]
@@ -275,27 +289,37 @@ Test server cert which no longer is valid
 
   $ hg serve -R test -p $HGPORT2 -d --pid-file=hg2.pid --certificate=server-expired.pem
   $ cat hg2.pid >> $DAEMON_PIDS
-  $ hg -R copy-pull pull --config web.cacerts=pub-expired.pem https://localhost:$HGPORT2/
+  $ hg -R copy-pull pull --config web.cacerts="$CERTSDIR/pub-expired.pem" \
+  > https://localhost:$HGPORT2/
   pulling from https://localhost:$HGPORT2/
   abort: error: *certificate verify failed* (glob)
   [255]
 
 Fingerprints
 
-  $ echo "[hostfingerprints]" >> copy-pull/.hg/hgrc
-  $ echo "localhost = 91:4f:1a:ff:87:24:9c:09:b6:85:9b:88:b1:90:6d:30:75:64:91:ca" >> copy-pull/.hg/hgrc
-  $ echo "127.0.0.1 = 914f1aff87249c09b6859b88b1906d30756491ca" >> copy-pull/.hg/hgrc
+- works without cacerts (hostkeyfingerprints)
+  $ hg -R copy-pull id https://localhost:$HGPORT/ --insecure --config hostfingerprints.localhost=91:4f:1a:ff:87:24:9c:09:b6:85:9b:88:b1:90:6d:30:75:64:91:ca
+  5fed3813f7f5
 
-- works without cacerts
-  $ hg -R copy-pull id https://localhost:$HGPORT/ --insecure
+- works without cacerts (hostsecurity)
+  $ hg -R copy-pull id https://localhost:$HGPORT/ --config hostsecurity.localhost:fingerprints=sha1:914f1aff87249c09b6859b88b1906d30756491ca
+  5fed3813f7f5
+
+  $ hg -R copy-pull id https://localhost:$HGPORT/ --config hostsecurity.localhost:fingerprints=sha256:62:09:97:2f:97:60:e3:65:8f:12:5d:78:9e:35:a1:36:7a:65:4b:0e:9f:ac:db:c3:bc:6e:b6:a3:c0:16:e0:30
   5fed3813f7f5
 
 - multiple fingerprints specified and first matches
   $ hg --config 'hostfingerprints.localhost=914f1aff87249c09b6859b88b1906d30756491ca, deadbeefdeadbeefdeadbeefdeadbeefdeadbeef' -R copy-pull id https://localhost:$HGPORT/ --insecure
   5fed3813f7f5
 
+  $ hg --config 'hostsecurity.localhost:fingerprints=sha1:914f1aff87249c09b6859b88b1906d30756491ca, sha1:deadbeefdeadbeefdeadbeefdeadbeefdeadbeef' -R copy-pull id https://localhost:$HGPORT/
+  5fed3813f7f5
+
 - multiple fingerprints specified and last matches
   $ hg --config 'hostfingerprints.localhost=deadbeefdeadbeefdeadbeefdeadbeefdeadbeef, 914f1aff87249c09b6859b88b1906d30756491ca' -R copy-pull id https://localhost:$HGPORT/ --insecure
+  5fed3813f7f5
+
+  $ hg --config 'hostsecurity.localhost:fingerprints=sha1:deadbeefdeadbeefdeadbeefdeadbeefdeadbeef, sha1:914f1aff87249c09b6859b88b1906d30756491ca' -R copy-pull id https://localhost:$HGPORT/
   5fed3813f7f5
 
 - multiple fingerprints specified and none match
@@ -305,15 +329,20 @@ Fingerprints
   (check hostfingerprint configuration)
   [255]
 
+  $ hg --config 'hostsecurity.localhost:fingerprints=sha1:deadbeefdeadbeefdeadbeefdeadbeefdeadbeef, sha1:aeadbeefdeadbeefdeadbeefdeadbeefdeadbeef' -R copy-pull id https://localhost:$HGPORT/
+  abort: certificate for localhost has unexpected fingerprint sha1:91:4f:1a:ff:87:24:9c:09:b6:85:9b:88:b1:90:6d:30:75:64:91:ca
+  (check hostsecurity configuration)
+  [255]
+
 - fails when cert doesn't match hostname (port is ignored)
-  $ hg -R copy-pull id https://localhost:$HGPORT1/
+  $ hg -R copy-pull id https://localhost:$HGPORT1/ --config hostfingerprints.localhost=914f1aff87249c09b6859b88b1906d30756491ca
   abort: certificate for localhost has unexpected fingerprint 28:ff:71:bf:65:31:14:23:ad:62:92:b4:0e:31:99:18:fc:83:e3:9b
   (check hostfingerprint configuration)
   [255]
 
 
 - ignores that certificate doesn't match hostname
-  $ hg -R copy-pull id https://127.0.0.1:$HGPORT/
+  $ hg -R copy-pull id https://127.0.0.1:$HGPORT/ --config hostfingerprints.127.0.0.1=914f1aff87249c09b6859b88b1906d30756491ca
   5fed3813f7f5
 
 HGPORT1 is reused below for tinyproxy tests. Kill that server.
@@ -334,28 +363,31 @@ Test unvalidated https through proxy
 
   $ http_proxy=http://localhost:$HGPORT1/ hg -R copy-pull pull --insecure --traceback
   pulling from https://localhost:$HGPORT/
-  warning: localhost certificate with fingerprint 91:4f:1a:ff:87:24:9c:09:b6:85:9b:88:b1:90:6d:30:75:64:91:ca not verified (check hostfingerprints or web.cacerts config setting)
+  warning: connection security to localhost is disabled per current settings; communication is susceptible to eavesdropping and tampering
   searching for changes
   no changes found
 
 Test https with cacert and fingerprint through proxy
 
-  $ http_proxy=http://localhost:$HGPORT1/ hg -R copy-pull pull --config web.cacerts=pub.pem
+  $ http_proxy=http://localhost:$HGPORT1/ hg -R copy-pull pull \
+  > --config web.cacerts="$CERTSDIR/pub.pem"
   pulling from https://localhost:$HGPORT/
   searching for changes
   no changes found
-  $ http_proxy=http://localhost:$HGPORT1/ hg -R copy-pull pull https://127.0.0.1:$HGPORT/
+  $ http_proxy=http://localhost:$HGPORT1/ hg -R copy-pull pull https://127.0.0.1:$HGPORT/ --config hostfingerprints.127.0.0.1=914f1aff87249c09b6859b88b1906d30756491ca
   pulling from https://127.0.0.1:$HGPORT/
   searching for changes
   no changes found
 
 Test https with cert problems through proxy
 
-  $ http_proxy=http://localhost:$HGPORT1/ hg -R copy-pull pull --config web.cacerts=pub-other.pem
+  $ http_proxy=http://localhost:$HGPORT1/ hg -R copy-pull pull \
+  > --config web.cacerts="$CERTSDIR/pub-other.pem"
   pulling from https://localhost:$HGPORT/
   abort: error: *certificate verify failed* (glob)
   [255]
-  $ http_proxy=http://localhost:$HGPORT1/ hg -R copy-pull pull --config web.cacerts=pub-expired.pem https://localhost:$HGPORT2/
+  $ http_proxy=http://localhost:$HGPORT1/ hg -R copy-pull pull \
+  > --config web.cacerts="$CERTSDIR/pub-expired.pem" https://localhost:$HGPORT2/
   pulling from https://localhost:$HGPORT2/
   abort: error: *certificate verify failed* (glob)
   [255]
@@ -390,7 +422,7 @@ Start patched hgweb that requires client certificates:
 
 without client certificate:
 
-  $ P=`pwd` hg id https://localhost:$HGPORT/
+  $ P="$CERTSDIR" hg id https://localhost:$HGPORT/
   abort: error: *handshake failure* (glob)
   [255]
 
@@ -399,19 +431,19 @@ with client certificate:
   $ cat << EOT >> $HGRCPATH
   > [auth]
   > l.prefix = localhost
-  > l.cert = client-cert.pem
-  > l.key = client-key.pem
+  > l.cert = $CERTSDIR/client-cert.pem
+  > l.key = $CERTSDIR/client-key.pem
   > EOT
 
-  $ P=`pwd` hg id https://localhost:$HGPORT/ \
-  > --config auth.l.key=client-key-decrypted.pem
+  $ P="$CERTSDIR" hg id https://localhost:$HGPORT/ \
+  > --config auth.l.key="$CERTSDIR/client-key-decrypted.pem"
   5fed3813f7f5
 
-  $ printf '1234\n' | env P=`pwd` hg id https://localhost:$HGPORT/ \
+  $ printf '1234\n' | env P="$CERTSDIR" hg id https://localhost:$HGPORT/ \
   > --config ui.interactive=True --config ui.nontty=True
-  passphrase for client-key.pem: 5fed3813f7f5
+  passphrase for */client-key.pem: 5fed3813f7f5 (glob)
 
-  $ env P=`pwd` hg id https://localhost:$HGPORT/
+  $ env P="$CERTSDIR" hg id https://localhost:$HGPORT/
   abort: error: * (glob)
   [255]
 

@@ -7,7 +7,6 @@
 
 from __future__ import absolute_import
 
-import SocketServer
 import errno
 import os
 import struct
@@ -20,6 +19,8 @@ from . import (
     error,
     util,
 )
+
+socketserver = util.socketserver
 
 logfile = None
 
@@ -229,12 +230,8 @@ class server(object):
             self.repo.ui = self.repo.dirstate._ui = repoui
             self.repo.invalidateall()
 
-        # reset last-print time of progress bar per command
-        # (progbar is singleton, we don't have to do for all uis)
-        if copiedui._progbar:
-            copiedui._progbar.resetstate()
-
         for ui in uis:
+            ui.resetstate()
             # any kind of interaction must use server channels, but chg may
             # replace channels by fully functional tty files. so nontty is
             # enforced only if cin is a channel.
@@ -334,7 +331,7 @@ class pipeservice(object):
         finally:
             _restoreio(ui, fin, fout)
 
-class _requesthandler(SocketServer.StreamRequestHandler):
+class _requesthandler(socketserver.StreamRequestHandler):
     def handle(self):
         ui = self.server.ui
         repo = self.server.repo
@@ -370,13 +367,13 @@ class unixservice(object):
         self.ui = ui
         self.repo = repo
         self.address = opts['address']
-        if not util.safehasattr(SocketServer, 'UnixStreamServer'):
+        if not util.safehasattr(socketserver, 'UnixStreamServer'):
             raise error.Abort(_('unsupported platform'))
         if not self.address:
             raise error.Abort(_('no socket path specified with --address'))
 
     def init(self):
-        class cls(SocketServer.ForkingMixIn, SocketServer.UnixStreamServer):
+        class cls(socketserver.ForkingMixIn, socketserver.UnixStreamServer):
             ui = self.ui
             repo = self.repo
         self.server = cls(self.address, _requesthandler)

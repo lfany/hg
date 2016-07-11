@@ -76,10 +76,12 @@ fileline = '
 filelogentry = filelogentry.tmpl
 
 annotateline = '
-  <tr id="{lineid}">
+  <tr id="{lineid}"{ifeq(node, originalnode, ' class="thisrev"')}>
     <td class="annotate">
-      <a href="{url|urlescape}annotate/{node|short}/{file|urlescape}{sessionvars%urlparameter}#l{targetline}"
-         title="{node|short}: {desc|escape|firstline}">{author|user}@{rev}</a>
+      {if(blockhead,
+          '<a href="{url|urlescape}annotate/{node|short}/{file|urlescape}{sessionvars%urlparameter}#l{targetline}"
+              title="{node|short}: {desc|escape|firstline}">{author|user}@{rev}</a>',
+          '')}
     </td>
     <td class="source"><a href="#{lineid}">{linenumber}</a> {line|escape}</td>
   </tr>'

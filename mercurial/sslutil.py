@@ -9,6 +9,7 @@
 
 from __future__ import absolute_import
 
+import hashlib
 import os
 import re
 import ssl
@@ -76,15 +77,15 @@ except AttributeError:
 
         def load_verify_locations(self, cafile=None, capath=None, cadata=None):
             if capath:
-                raise error.Abort('capath not supported')
+                raise error.Abort(_('capath not supported'))
             if cadata:
-                raise error.Abort('cadata not supported')
+                raise error.Abort(_('cadata not supported'))
 
             self._cacerts = cafile
 
         def set_ciphers(self, ciphers):
             if not self._supportsciphers:
-                raise error.Abort('setting ciphers not supported')
+                raise error.Abort(_('setting ciphers not supported'))
 
             self._ciphers = ciphers
 
@@ -107,8 +108,118 @@ except AttributeError:
 
             return ssl.wrap_socket(socket, **args)
 
-def wrapsocket(sock, keyfile, certfile, ui, cert_reqs=ssl.CERT_NONE,
-               ca_certs=None, serverhostname=None):
+def _hostsettings(ui, hostname):
+    """Obtain security settings for a hostname.
+
+    Returns a dict of settings relevant to that hostname.
+    """
+    s = {
+        # Whether we should attempt to load default/available CA certs
+        # if an explicit ``cafile`` is not defined.
+        'allowloaddefaultcerts': True,
+        # List of 2-tuple of (hash algorithm, hash).
+        'certfingerprints': [],
+        # Path to file containing concatenated CA certs. Used by
+        # SSLContext.load_verify_locations().
+        'cafile': None,
+        # Whether certificate verification should be disabled.
+        'disablecertverification': False,
+        # Whether the legacy [hostfingerprints] section has data for this host.
+        'legacyfingerprint': False,
+        # ssl.CERT_* constant used by SSLContext.verify_mode.
+        'verifymode': None,
+    }
+
+    # Look for fingerprints in [hostsecurity] section. Value is a list
+    # of <alg>:<fingerprint> strings.
+    fingerprints = ui.configlist('hostsecurity', '%s:fingerprints' % hostname,
+                                 [])
+    for fingerprint in fingerprints:
+        if not (fingerprint.startswith(('sha1:', 'sha256:', 'sha512:'))):
+            raise error.Abort(_('invalid fingerprint for %s: %s') % (
+                                hostname, fingerprint),
+                              hint=_('must begin with "sha1:", "sha256:", '
+                                     'or "sha512:"'))
+
+        alg, fingerprint = fingerprint.split(':', 1)
+        fingerprint = fingerprint.replace(':', '').lower()
+        s['certfingerprints'].append((alg, fingerprint))
+
+    # Fingerprints from [hostfingerprints] are always SHA-1.
+    for fingerprint in ui.configlist('hostfingerprints', hostname, []):
+        fingerprint = fingerprint.replace(':', '').lower()
+        s['certfingerprints'].append(('sha1', fingerprint))
+        s['legacyfingerprint'] = True
+
+    # If a host cert fingerprint is defined, it is the only thing that
+    # matters. No need to validate CA certs.
+    if s['certfingerprints']:
+        s['verifymode'] = ssl.CERT_NONE
+        s['allowloaddefaultcerts'] = False
+
+    # If --insecure is used, don't take CAs into consideration.
+    elif ui.insecureconnections:
+        s['disablecertverification'] = True
+        s['verifymode'] = ssl.CERT_NONE
+        s['allowloaddefaultcerts'] = False
+
+    if ui.configbool('devel', 'disableloaddefaultcerts'):
+        s['allowloaddefaultcerts'] = False
+
+    # If both fingerprints and a per-host ca file are specified, issue a warning
+    # because users should not be surprised about what security is or isn't
+    # being performed.
+    cafile = ui.config('hostsecurity', '%s:verifycertsfile' % hostname)
+    if s['certfingerprints'] and cafile:
+        ui.warn(_('(hostsecurity.%s:verifycertsfile ignored when host '
+                  'fingerprints defined; using host fingerprints for '
+                  'verification)\n') % hostname)
+
+    # Try to hook up CA certificate validation unless something above
+    # makes it not necessary.
+    if s['verifymode'] is None:
+        # Look at per-host ca file first.
+        if cafile:
+            cafile = util.expandpath(cafile)
+            if not os.path.exists(cafile):
+                raise error.Abort(_('path specified by %s does not exist: %s') %
+                                  ('hostsecurity.%s:verifycertsfile' % hostname,
+                                   cafile))
+            s['cafile'] = cafile
+        else:
+            # Find global certificates file in config.
+            cafile = ui.config('web', 'cacerts')
+
+            if cafile:
+                cafile = util.expandpath(cafile)
+                if not os.path.exists(cafile):
+                    raise error.Abort(_('could not find web.cacerts: %s') %
+                                      cafile)
+            elif s['allowloaddefaultcerts']:
+                # CAs not defined in config. Try to find system bundles.
+                cafile = _defaultcacerts(ui)
+                if cafile:
+                    ui.debug('using %s for CA file\n' % cafile)
+
+            s['cafile'] = cafile
+
+        # Require certificate validation if CA certs are being loaded and
+        # verification hasn't been disabled above.
+        if cafile or (_canloaddefaultcerts and s['allowloaddefaultcerts']):
+            s['verifymode'] = ssl.CERT_REQUIRED
+        else:
+            # At this point we don't have a fingerprint, aren't being
+            # explicitly insecure, and can't load CA certs. Connecting
+            # is insecure. We allow the connection and abort during
+            # validation (once we have the fingerprint to print to the
+            # user).
+            s['verifymode'] = ssl.CERT_NONE
+
+    assert s['verifymode'] is not None
+
+    return s
+
+def wrapsocket(sock, keyfile, certfile, ui, serverhostname=None):
     """Add SSL/TLS to a socket.
 
     This is a glorified wrapper for ``ssl.wrap_socket()``. It makes sane
@@ -121,6 +232,11 @@ def wrapsocket(sock, keyfile, certfile, ui, cert_reqs=ssl.CERT_NONE,
       server (and client) support SNI, this tells the server which certificate
       to use.
     """
+    if not serverhostname:
+        raise error.Abort(_('serverhostname argument is required'))
+
+    settings = _hostsettings(ui, serverhostname)
+
     # Despite its name, PROTOCOL_SSLv23 selects the highest protocol
     # that both ends support, including TLS protocols. On legacy stacks,
     # the highest it likely goes in TLS 1.0. On modern stacks, it can
@@ -146,7 +262,7 @@ def wrapsocket(sock, keyfile, certfile, ui, cert_reqs=ssl.CERT_NONE,
     sslcontext.options |= OP_NO_SSLv2 | OP_NO_SSLv3
 
     # This still works on our fake SSLContext.
-    sslcontext.verify_mode = cert_reqs
+    sslcontext.verify_mode = settings['verifymode']
 
     if certfile is not None:
         def password():
@@ -154,18 +270,50 @@ def wrapsocket(sock, keyfile, certfile, ui, cert_reqs=ssl.CERT_NONE,
             return ui.getpass(_('passphrase for %s: ') % f, '')
         sslcontext.load_cert_chain(certfile, keyfile, password)
 
-    if ca_certs is not None:
-        sslcontext.load_verify_locations(cafile=ca_certs)
-    else:
+    if settings['cafile'] is not None:
+        try:
+            sslcontext.load_verify_locations(cafile=settings['cafile'])
+        except ssl.SSLError as e:
+            raise error.Abort(_('error loading CA file %s: %s') % (
+                              settings['cafile'], e.args[1]),
+                              hint=_('file is empty or malformed?'))
+        caloaded = True
+    elif settings['allowloaddefaultcerts']:
         # This is a no-op on old Python.
         sslcontext.load_default_certs()
+        caloaded = True
+    else:
+        caloaded = False
 
-    sslsocket = sslcontext.wrap_socket(sock, server_hostname=serverhostname)
+    try:
+        sslsocket = sslcontext.wrap_socket(sock, server_hostname=serverhostname)
+    except ssl.SSLError:
+        # If we're doing certificate verification and no CA certs are loaded,
+        # that is almost certainly the reason why verification failed. Provide
+        # a hint to the user.
+        # Only modern ssl module exposes SSLContext.get_ca_certs() so we can
+        # only show this warning if modern ssl is available.
+        if (caloaded and settings['verifymode'] == ssl.CERT_REQUIRED and
+            modernssl and not sslcontext.get_ca_certs()):
+            ui.warn(_('(an attempt was made to load CA certificates but none '
+                      'were loaded; see '
+                      'https://mercurial-scm.org/wiki/SecureConnections for '
+                      'how to configure Mercurial to avoid this error)\n'))
+        raise
+
     # check if wrap_socket failed silently because socket had been
     # closed
     # - see http://bugs.python.org/issue13721
     if not sslsocket.cipher():
         raise error.Abort(_('ssl connection failed'))
+
+    sslsocket._hgstate = {
+        'caloaded': caloaded,
+        'hostname': serverhostname,
+        'settings': settings,
+        'ui': ui,
+    }
+
     return sslsocket
 
 class wildcarderror(Exception):
@@ -268,10 +416,6 @@ def _verifycert(cert, hostname):
     else:
         return _('no commonName or subjectAltName found in certificate')
 
-
-# CERT_REQUIRED means fetch the cert from the server all the time AND
-# validate it against the CA store provided in web.cacerts.
-
 def _plainapplepython():
     """return true if this seems to be a pure Apple Python that
     * is unfrozen and presumably has the whole mercurial module in the file
@@ -286,97 +430,167 @@ def _plainapplepython():
     return (exe.startswith('/usr/bin/python') or
             exe.startswith('/system/library/frameworks/python.framework/'))
 
-def _defaultcacerts():
-    """return path to CA certificates; None for system's store; ! to disable"""
+_systemcacertpaths = [
+    # RHEL, CentOS, and Fedora
+    '/etc/pki/tls/certs/ca-bundle.trust.crt',
+    # Debian, Ubuntu, Gentoo
+    '/etc/ssl/certs/ca-certificates.crt',
+]
+
+def _defaultcacerts(ui):
+    """return path to default CA certificates or None.
+
+    It is assumed this function is called when the returned certificates
+    file will actually be used to validate connections. Therefore this
+    function may print warnings or debug messages assuming this usage.
+
+    We don't print a message when the Python is able to load default
+    CA certs because this scenario is detected at socket connect time.
+    """
+    # The "certifi" Python package provides certificates. If it is installed,
+    # assume the user intends it to be used and use it.
+    try:
+        import certifi
+        certs = certifi.where()
+        ui.debug('using ca certificates from certifi\n')
+        return certs
+    except ImportError:
+        pass
+
+    # On Windows, only the modern ssl module is capable of loading the system
+    # CA certificates. If we're not capable of doing that, emit a warning
+    # because we'll get a certificate verification error later and the lack
+    # of loaded CA certificates will be the reason why.
+    # Assertion: this code is only called if certificates are being verified.
+    if os.name == 'nt':
+        if not _canloaddefaultcerts:
+            ui.warn(_('(unable to load Windows CA certificates; see '
+                      'https://mercurial-scm.org/wiki/SecureConnections for '
+                      'how to configure Mercurial to avoid this message)\n'))
+
+        return None
+
+    # Apple's OpenSSL has patches that allow a specially constructed certificate
+    # to load the system CA store. If we're running on Apple Python, use this
+    # trick.
     if _plainapplepython():
         dummycert = os.path.join(os.path.dirname(__file__), 'dummycert.pem')
         if os.path.exists(dummycert):
             return dummycert
-    if _canloaddefaultcerts:
+
+    # The Apple OpenSSL trick isn't available to us. If Python isn't able to
+    # load system certs, we're out of luck.
+    if sys.platform == 'darwin':
+        # FUTURE Consider looking for Homebrew or MacPorts installed certs
+        # files. Also consider exporting the keychain certs to a file during
+        # Mercurial install.
+        if not _canloaddefaultcerts:
+            ui.warn(_('(unable to load CA certificates; see '
+                      'https://mercurial-scm.org/wiki/SecureConnections for '
+                      'how to configure Mercurial to avoid this message)\n'))
         return None
-    return '!'
 
-def sslkwargs(ui, host):
-    kws = {'ui': ui}
-    hostfingerprint = ui.config('hostfingerprints', host)
-    if hostfingerprint:
-        return kws
-    cacerts = ui.config('web', 'cacerts')
-    if cacerts == '!':
-        pass
-    elif cacerts:
-        cacerts = util.expandpath(cacerts)
-        if not os.path.exists(cacerts):
-            raise error.Abort(_('could not find web.cacerts: %s') % cacerts)
-    else:
-        cacerts = _defaultcacerts()
-        if cacerts and cacerts != '!':
-            ui.debug('using %s to enable OS X system CA\n' % cacerts)
-        ui.setconfig('web', 'cacerts', cacerts, 'defaultcacerts')
-    if cacerts != '!':
-        kws.update({'ca_certs': cacerts,
-                    'cert_reqs': ssl.CERT_REQUIRED,
-                    })
-    return kws
+    # Try to find CA certificates in well-known locations. We print a warning
+    # when using a found file because we don't want too much silent magic
+    # for security settings. The expectation is that proper Mercurial
+    # installs will have the CA certs path defined at install time and the
+    # installer/packager will make an appropriate decision on the user's
+    # behalf. We only get here and perform this setting as a feature of
+    # last resort.
+    if not _canloaddefaultcerts:
+        for path in _systemcacertpaths:
+            if os.path.isfile(path):
+                ui.warn(_('(using CA certificates from %s; if you see this '
+                          'message, your Mercurial install is not properly '
+                          'configured; see '
+                          'https://mercurial-scm.org/wiki/SecureConnections '
+                          'for how to configure Mercurial to avoid this '
+                          'message)\n') % path)
+                return path
 
-class validator(object):
-    def __init__(self, ui, host):
-        self.ui = ui
-        self.host = host
+        ui.warn(_('(unable to load CA certificates; see '
+                  'https://mercurial-scm.org/wiki/SecureConnections for '
+                  'how to configure Mercurial to avoid this message)\n'))
 
-    def __call__(self, sock, strict=False):
-        host = self.host
+    return None
 
-        if not sock.cipher(): # work around http://bugs.python.org/issue13721
-            raise error.Abort(_('%s ssl connection error') % host)
-        try:
-            peercert = sock.getpeercert(True)
-            peercert2 = sock.getpeercert()
-        except AttributeError:
-            raise error.Abort(_('%s ssl connection error') % host)
+def validatesocket(sock):
+    """Validate a socket meets security requiremnets.
 
-        if not peercert:
-            raise error.Abort(_('%s certificate error: '
-                               'no certificate received') % host)
+    The passed socket must have been created with ``wrapsocket()``.
+    """
+    host = sock._hgstate['hostname']
+    ui = sock._hgstate['ui']
+    settings = sock._hgstate['settings']
 
-        # If a certificate fingerprint is pinned, use it and only it to
-        # validate the remote cert.
-        hostfingerprints = self.ui.configlist('hostfingerprints', host)
-        peerfingerprint = util.sha1(peercert).hexdigest()
-        nicefingerprint = ":".join([peerfingerprint[x:x + 2]
-            for x in xrange(0, len(peerfingerprint), 2)])
-        if hostfingerprints:
-            fingerprintmatch = False
-            for hostfingerprint in hostfingerprints:
-                if peerfingerprint.lower() == \
-                        hostfingerprint.replace(':', '').lower():
-                    fingerprintmatch = True
-                    break
-            if not fingerprintmatch:
-                raise error.Abort(_('certificate for %s has unexpected '
-                                   'fingerprint %s') % (host, nicefingerprint),
-                                 hint=_('check hostfingerprint configuration'))
-            self.ui.debug('%s certificate matched fingerprint %s\n' %
-                          (host, nicefingerprint))
-            return
+    try:
+        peercert = sock.getpeercert(True)
+        peercert2 = sock.getpeercert()
+    except AttributeError:
+        raise error.Abort(_('%s ssl connection error') % host)
 
-        # No pinned fingerprint. Establish trust by looking at the CAs.
-        cacerts = self.ui.config('web', 'cacerts')
-        if cacerts != '!':
-            msg = _verifycert(peercert2, host)
-            if msg:
-                raise error.Abort(_('%s certificate error: %s') % (host, msg),
-                                 hint=_('configure hostfingerprint %s or use '
-                                        '--insecure to connect insecurely') %
-                                      nicefingerprint)
-            self.ui.debug('%s certificate successfully verified\n' % host)
-        elif strict:
-            raise error.Abort(_('%s certificate with fingerprint %s not '
-                               'verified') % (host, nicefingerprint),
-                             hint=_('check hostfingerprints or web.cacerts '
-                                     'config setting'))
+    if not peercert:
+        raise error.Abort(_('%s certificate error: '
+                           'no certificate received') % host)
+
+    if settings['disablecertverification']:
+        # We don't print the certificate fingerprint because it shouldn't
+        # be necessary: if the user requested certificate verification be
+        # disabled, they presumably already saw a message about the inability
+        # to verify the certificate and this message would have printed the
+        # fingerprint. So printing the fingerprint here adds little to no
+        # value.
+        ui.warn(_('warning: connection security to %s is disabled per current '
+                  'settings; communication is susceptible to eavesdropping '
+                  'and tampering\n') % host)
+        return
+
+    # If a certificate fingerprint is pinned, use it and only it to
+    # validate the remote cert.
+    peerfingerprints = {
+        'sha1': hashlib.sha1(peercert).hexdigest(),
+        'sha256': hashlib.sha256(peercert).hexdigest(),
+        'sha512': hashlib.sha512(peercert).hexdigest(),
+    }
+
+    def fmtfingerprint(s):
+        return ':'.join([s[x:x + 2] for x in range(0, len(s), 2)])
+
+    nicefingerprint = 'sha256:%s' % fmtfingerprint(peerfingerprints['sha256'])
+
+    if settings['certfingerprints']:
+        for hash, fingerprint in settings['certfingerprints']:
+            if peerfingerprints[hash].lower() == fingerprint:
+                ui.debug('%s certificate matched fingerprint %s:%s\n' %
+                         (host, hash, fmtfingerprint(fingerprint)))
+                return
+
+        # Pinned fingerprint didn't match. This is a fatal error.
+        if settings['legacyfingerprint']:
+            section = 'hostfingerprint'
+            nice = fmtfingerprint(peerfingerprints['sha1'])
         else:
-            self.ui.warn(_('warning: %s certificate with fingerprint %s not '
-                           'verified (check hostfingerprints or web.cacerts '
-                           'config setting)\n') %
-                         (host, nicefingerprint))
+            section = 'hostsecurity'
+            nice = '%s:%s' % (hash, fmtfingerprint(peerfingerprints[hash]))
+        raise error.Abort(_('certificate for %s has unexpected '
+                            'fingerprint %s') % (host, nice),
+                          hint=_('check %s configuration') % section)
+
+    # Security is enabled but no CAs are loaded. We can't establish trust
+    # for the cert so abort.
+    if not sock._hgstate['caloaded']:
+        raise error.Abort(
+            _('unable to verify security of %s (no loaded CA certificates); '
+              'refusing to connect') % host,
+            hint=_('see https://mercurial-scm.org/wiki/SecureConnections for '
+                   'how to configure Mercurial to avoid this error or set '
+                   'hostsecurity.%s:fingerprints=%s to trust this server') %
+                   (host, nicefingerprint))
+
+    msg = _verifycert(peercert2, host)
+    if msg:
+        raise error.Abort(_('%s certificate error: %s') % (host, msg),
+                         hint=_('set hostsecurity.%s:certfingerprints=%s '
+                                'config setting or use --insecure to connect '
+                                'insecurely') %
+                              (host, nicefingerprint))

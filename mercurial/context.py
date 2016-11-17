@@ -14,8 +14,11 @@ import stat
 
 from .i18n import _
 from .node import (
+    addednodeid,
     bin,
     hex,
+    modifiednodeid,
+    newnodeid,
     nullid,
     nullrev,
     short,
@@ -38,11 +41,6 @@ from . import (
 )
 
 propertycache = util.propertycache
-
-# Phony node value to stand-in for new files in some uses of
-# manifests. Manifests support 21-byte hashes for nodes which are
-# dirty in the working copy.
-_newnode = '!' * 21
 
 nonascii = re.compile(r'[^\x21-\x7f]').search
 
@@ -142,7 +140,7 @@ class basectx(object):
                 removed.append(fn)
             elif flag1 != flag2:
                 modified.append(fn)
-            elif node2 != _newnode:
+            elif node2 != newnodeid:
                 # When comparing files between two commits, we save time by
                 # not comparing the file contents when the nodeids differ.
                 # Note that this means we incorrectly report a reverted change
@@ -178,6 +176,8 @@ class basectx(object):
         return hex(self.node())
     def manifest(self):
         return self._manifest
+    def manifestctx(self):
+        return self._manifestctx
     def repo(self):
         return self._repo
     def phasestr(self):
@@ -259,8 +259,10 @@ class basectx(object):
             if path in self._manifestdelta:
                 return (self._manifestdelta[path],
                         self._manifestdelta.flags(path))
-        node, flag = self._repo.manifest.find(self._changeset.manifest, path)
-        if not node:
+        mfl = self._repo.manifestlog
+        try:
+            node, flag = mfl[self._changeset.manifest].find(path)
+        except KeyError:
             raise error.ManifestLookupError(self._node, path,
                                             _('not found in manifest'))
 
@@ -528,12 +530,15 @@ class changectx(basectx):
 
     @propertycache
     def _manifest(self):
-        return self._repo.manifestlog[self._changeset.manifest].read()
+        return self._manifestctx.read()
+
+    @propertycache
+    def _manifestctx(self):
+        return self._repo.manifestlog[self._changeset.manifest]
 
     @propertycache
     def _manifestdelta(self):
-        mfnode = self._changeset.manifest
-        return self._repo.manifestlog[mfnode].readdelta()
+        return self._manifestctx.readdelta()
 
     @propertycache
     def _parents(self):
@@ -680,8 +685,7 @@ class basefilectx(object):
         elif '_descendantrev' in self.__dict__:
             # this file context was created from a revision with a known
             # descendant, we can (lazily) correct for linkrev aliases
-            return self._adjustlinkrev(self._path, self._filelog,
-                                       self._filenode, self._descendantrev)
+            return self._adjustlinkrev(self._descendantrev)
         else:
             return self._filelog.linkrev(self._filerev)
 
@@ -709,7 +713,10 @@ class basefilectx(object):
             return False
 
     def __str__(self):
-        return "%s@%s" % (self.path(), self._changectx)
+        try:
+            return "%s@%s" % (self.path(), self._changectx)
+        except error.LookupError:
+            return "%s@???" % self.path()
 
     def __repr__(self):
         return "<%s %s>" % (type(self).__name__, str(self))
@@ -808,17 +815,13 @@ class basefilectx(object):
 
         return True
 
-    def _adjustlinkrev(self, path, filelog, fnode, srcrev, inclusive=False):
+    def _adjustlinkrev(self, srcrev, inclusive=False):
         """return the first ancestor of <srcrev> introducing <fnode>
 
         If the linkrev of the file revision does not point to an ancestor of
         srcrev, we'll walk down the ancestors until we find one introducing
         this file revision.
 
-        :repo: a localrepository object (used to access changelog and manifest)
-        :path: the file path
-        :fnode: the nodeid of the file revision
-        :filelog: the filelog of this path
         :srcrev: the changeset revision we search ancestors from
         :inclusive: if true, the src revision will also be checked
         """
@@ -826,8 +829,7 @@ class basefilectx(object):
         cl = repo.unfiltered().changelog
         mfl = repo.manifestlog
         # fetch the linkrev
-        fr = filelog.rev(fnode)
-        lkr = filelog.linkrev(fr)
+        lkr = self.linkrev()
         # hack to reuse ancestor computation when searching for renames
         memberanc = getattr(self, '_ancestrycontext', None)
         iteranc = None
@@ -844,6 +846,8 @@ class basefilectx(object):
         if lkr not in memberanc:
             if iteranc is None:
                 iteranc = cl.ancestors(revs, lkr, inclusive=inclusive)
+            fnode = self._filenode
+            path = self._path
             for a in iteranc:
                 ac = cl.read(a) # get changeset data (we avoid object creation)
                 if path in ac[3]: # checking the 'files' field.
@@ -871,8 +875,7 @@ class basefilectx(object):
         noctx = not ('_changeid' in attrs or '_changectx' in attrs)
         if noctx or self.rev() == lkr:
             return self.linkrev()
-        return self._adjustlinkrev(self._path, self._filelog, self._filenode,
-                                   self.rev(), inclusive=True)
+        return self._adjustlinkrev(self.rev(), inclusive=True)
 
     def _parentfilectx(self, path, fileid, filelog):
         """create parent filectx keeping ancestry info for _adjustlinkrev()"""
@@ -1231,23 +1234,13 @@ class committablectx(basectx):
         """
         parents = self.parents()
 
-        man1 = parents[0].manifest()
-        man = man1.copy()
-        if len(parents) > 1:
-            man2 = self.p2().manifest()
-            def getman(f):
-                if f in man1:
-                    return man1
-                return man2
-        else:
-            getman = lambda f: man1
+        man = parents[0].manifest().copy()
 
-        copied = self._repo.dirstate.copies()
         ff = self._flagfunc
-        for i, l in (("a", self._status.added), ("m", self._status.modified)):
+        for i, l in ((addednodeid, self._status.added),
+                     (modifiednodeid, self._status.modified)):
             for f in l:
-                orig = copied.get(f, f)
-                man[f] = getman(orig).get(orig, nullid) + i
+                man[f] = i
                 try:
                     man.setflag(f, ff(f))
                 except OSError:
@@ -1582,7 +1575,7 @@ class workingctx(committablectx):
         """
         mf = self._repo['.']._manifestmatches(match, s)
         for f in s.modified + s.added:
-            mf[f] = _newnode
+            mf[f] = newnodeid
             mf.setflag(f, self.flags(f))
         for f in s.removed:
             if f in mf:

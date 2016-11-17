@@ -5,6 +5,7 @@ import os
 from . import (
     osutil,
     util,
+    win32,
 )
 
 try:
@@ -51,3 +52,6 @@ def userrcpath():
         path.append(os.path.join(userprofile, 'mercurial.ini'))
         path.append(os.path.join(userprofile, '.hgrc'))
     return path
+
+def termsize(ui):
+    return win32.termsize()

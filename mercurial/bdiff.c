@@ -17,6 +17,10 @@
 #include "bitmanipulation.h"
 #include "bdiff.h"
 
+/* Hash implementation from diffutils */
+#define ROL(v, n) ((v) << (n) | (v) >> (sizeof(v) * CHAR_BIT - (n)))
+#define HASH(h, c) ((c) + ROL(h ,7))
+
 struct pos {
 	int pos, len;
 };
@@ -31,9 +35,11 @@ int bdiff_splitlines(const char *a, ssize_t len, struct bdiff_line **lr)
 
 	/* count the lines */
 	i = 1; /* extra line for sentinel */
-	for (p = a; p < a + len; p++)
-		if (*p == '\n' || p == plast)
+	for (p = a; p < plast; p++)
+		if (*p == '\n')
 			i++;
+	if (p == plast)
+		i++;
 
 	*lr = l = (struct bdiff_line *)malloc(sizeof(struct bdiff_line) * i);
 	if (!l)
@@ -42,8 +48,7 @@ int bdiff_splitlines(const char *a, ssize_t len, struct bdiff_line **lr)
 	/* build the line array and calculate hashes */
 	hash = 0;
 	for (p = a; p < a + len; p++) {
-		/* Leonid Yuriev's hash */
-		hash = (hash * 1664525) + (unsigned char)*p + 1013904223;
+		hash = HASH(hash, *p);
 
 		if (*p == '\n' || p == plast) {
 			l->hash = hash;

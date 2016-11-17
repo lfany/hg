@@ -11,10 +11,12 @@ import errno
 import os
 import signal
 import sys
-import threading
 
 from .i18n import _
-from . import error
+from . import (
+    error,
+    util,
+)
 
 def countcpus():
     '''try to count the number of CPUs on the system'''
@@ -85,11 +87,44 @@ def _posixworker(ui, func, staticargs, args):
     workers = _numworkers(ui)
     oldhandler = signal.getsignal(signal.SIGINT)
     signal.signal(signal.SIGINT, signal.SIG_IGN)
-    pids, problem = [], [0]
+    pids, problem = set(), [0]
+    def killworkers():
+        # if one worker bails, there's no good reason to wait for the rest
+        for p in pids:
+            try:
+                os.kill(p, signal.SIGTERM)
+            except OSError as err:
+                if err.errno != errno.ESRCH:
+                    raise
+    def waitforworkers(blocking=True):
+        for pid in pids.copy():
+            p = st = 0
+            while True:
+                try:
+                    p, st = os.waitpid(pid, (0 if blocking else os.WNOHANG))
+                except OSError as e:
+                    if e.errno == errno.EINTR:
+                        continue
+                    elif e.errno == errno.ECHILD:
+                        break # ignore ECHILD
+                    else:
+                        raise
+            if p:
+                pids.remove(p)
+                st = _exitstatus(st)
+            if st and not problem[0]:
+                problem[0] = st
+                # unregister SIGCHLD handler as all children will be killed
+                signal.signal(signal.SIGCHLD, oldchldhandler)
+                killworkers()
+    def sigchldhandler(signum, frame):
+        waitforworkers(blocking=False)
+    oldchldhandler = signal.signal(signal.SIGCHLD, sigchldhandler)
     for pargs in partition(args, workers):
         pid = os.fork()
         if pid == 0:
             signal.signal(signal.SIGINT, oldhandler)
+            signal.signal(signal.SIGCHLD, oldchldhandler)
             try:
                 os.close(rfd)
                 for i, item in func(*(staticargs + (pargs,))):
@@ -99,36 +134,20 @@ def _posixworker(ui, func, staticargs, args):
                 os._exit(255)
                 # other exceptions are allowed to propagate, we rely
                 # on lock.py's pid checks to avoid release callbacks
-        pids.append(pid)
-    pids.reverse()
+        pids.add(pid)
     os.close(wfd)
     fp = os.fdopen(rfd, 'rb', 0)
-    def killworkers():
-        # if one worker bails, there's no good reason to wait for the rest
-        for p in pids:
-            try:
-                os.kill(p, signal.SIGTERM)
-            except OSError as err:
-                if err.errno != errno.ESRCH:
-                    raise
-    def waitforworkers():
-        for _pid in pids:
-            st = _exitstatus(os.wait()[1])
-            if st and not problem[0]:
-                problem[0] = st
-                killworkers()
-    t = threading.Thread(target=waitforworkers)
-    t.start()
     def cleanup():
         signal.signal(signal.SIGINT, oldhandler)
-        t.join()
+        waitforworkers()
+        signal.signal(signal.SIGCHLD, oldchldhandler)
         status = problem[0]
         if status:
             if status < 0:
                 os.kill(os.getpid(), -status)
             sys.exit(status)
     try:
-        for line in fp:
+        for line in util.iterfile(fp):
             l = line.split(' ', 1)
             yield int(l[0]), l[1][:-1]
     except: # re-raises

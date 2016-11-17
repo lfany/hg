@@ -504,15 +504,11 @@ class localrepository(object):
                 c.readpending('00changelog.i.a')
         return c
 
-    @property
-    def manifest(self):
-        return self.manifestlog._oldmanifest
-
     def _constructmanifest(self):
         # This is a temporary function while we migrate from manifest to
         # manifestlog. It allows bundlerepo and unionrepo to intercept the
         # manifest creation.
-        return manifest.manifest(self.svfs)
+        return manifest.manifestrevlog(self.svfs)
 
     @storecache('00manifest.i')
     def manifestlog(self):
@@ -1502,7 +1498,7 @@ class localrepository(object):
         return fparent1
 
     def checkcommitpatterns(self, wctx, vdirs, match, status, fail):
-        """check for commit arguments that aren't commitable"""
+        """check for commit arguments that aren't committable"""
         if match.isexact() or match.prefix():
             matched = set(status.modified + status.added + status.removed)
 
@@ -1633,13 +1629,7 @@ class localrepository(object):
                 raise error.Abort(_("cannot commit merge with missing files"))
 
             ms = mergemod.mergestate.read(self)
-
-            if list(ms.unresolved()):
-                raise error.Abort(_("unresolved merge conflicts "
-                                    "(see 'hg help resolve')"))
-            if ms.mdstate() != 's' or list(ms.driverresolved()):
-                raise error.Abort(_('driver-resolved merge conflicts'),
-                                  hint=_('run "hg resolve --all" to resolve'))
+            cmdutil.checkunresolved(ms)
 
             if editor:
                 cctx._text = editor(self, cctx, subs)
@@ -1706,9 +1696,13 @@ class localrepository(object):
             trp = weakref.proxy(tr)
 
             if ctx.files():
-                m1 = p1.manifest()
-                m2 = p2.manifest()
-                m = m1.copy()
+                m1ctx = p1.manifestctx()
+                m2ctx = p2.manifestctx()
+                mctx = m1ctx.copy()
+
+                m = mctx.read()
+                m1 = m1ctx.read()
+                m2 = m2ctx.read()
 
                 # check in files
                 added = []
@@ -1742,9 +1736,9 @@ class localrepository(object):
                 drop = [f for f in removed if f in m]
                 for f in drop:
                     del m[f]
-                mn = self.manifestlog.add(m, trp, linkrev,
-                                          p1.manifestnode(), p2.manifestnode(),
-                                          added, drop)
+                mn = mctx.write(trp, linkrev,
+                                p1.manifestnode(), p2.manifestnode(),
+                                added, drop)
                 files = changed + removed
             else:
                 mn = p1.manifestnode()

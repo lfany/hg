@@ -67,7 +67,7 @@ def _collectbrokencsets(repo, files, striprev):
         _, brokenset = revlog.getstrippoint(striprev)
         s.update([revlog.linkrev(r) for r in brokenset])
 
-    collectone(repo.manifest)
+    collectone(repo.manifestlog._revlog)
     for fname in files:
         collectone(repo.file(fname))
 
@@ -153,7 +153,7 @@ def strip(ui, repo, nodelist, backup=True, topic='backup'):
         tmpbundlefile = _bundle(repo, savebases, saveheads, node, 'temp',
                             compress=False)
 
-    mfst = repo.manifest
+    mfst = repo.manifestlog._revlog
 
     curtr = repo.currenttransaction()
     if curtr is not None:
@@ -174,7 +174,7 @@ def strip(ui, repo, nodelist, backup=True, topic='backup'):
                     if (unencoded.startswith('meta/') and
                         unencoded.endswith('00manifest.i')):
                         dir = unencoded[5:-12]
-                        repo.manifest.dirlog(dir).strip(striprev, tr)
+                        repo.manifestlog._revlog.dirlog(dir).strip(striprev, tr)
             for fn in files:
                 repo.file(fn).strip(striprev, tr)
             tr.endgroup()
@@ -244,6 +244,9 @@ def strip(ui, repo, nodelist, backup=True, topic='backup'):
             vfs.unlink(tmpbundlefile)
 
     repo.destroyed()
+    # return the backup file path (or None if 'backup' was False) so
+    # extensions can use it
+    return backupfile
 
 def rebuildfncache(ui, repo):
     """Rebuilds the fncache file from repo history.

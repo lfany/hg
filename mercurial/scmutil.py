@@ -27,6 +27,7 @@ from . import (
     osutil,
     pathutil,
     phases,
+    pycompat,
     revset,
     similar,
     util,
@@ -39,6 +40,7 @@ else:
 
 systemrcpath = scmplatform.systemrcpath
 userrcpath = scmplatform.userrcpath
+termsize = scmplatform.termsize
 
 class status(tuple):
     '''Named tuple with a list of files per status. The 'deleted', 'unknown'
@@ -754,7 +756,7 @@ def rcpath():
     if _rcpath is None:
         if 'HGRCPATH' in encoding.environ:
             _rcpath = []
-            for p in os.environ['HGRCPATH'].split(os.pathsep):
+            for p in encoding.environ['HGRCPATH'].split(pycompat.ospathsep):
                 if not p:
                     continue
                 p = util.expandpath(p)

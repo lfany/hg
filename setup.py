@@ -67,6 +67,7 @@ if 'FORCE_SETUPTOOLS' in os.environ:
     from setuptools import setup
 else:
     from distutils.core import setup
+from distutils.ccompiler import new_compiler
 from distutils.core import Command, Extension
 from distutils.dist import Distribution
 from distutils.command.build import build
@@ -318,14 +319,16 @@ class hgbuildpy(build_py):
         if self.distribution.pure:
             self.distribution.ext_modules = []
         elif self.distribution.cffi:
-            import setup_mpatch_cffi
-            import setup_bdiff_cffi
-            exts = [setup_mpatch_cffi.ffi.distutils_extension(),
-                    setup_bdiff_cffi.ffi.distutils_extension()]
+            from mercurial.cffi import (
+                bdiff,
+                mpatch,
+            )
+            exts = [mpatch.ffi.distutils_extension(),
+                    bdiff.ffi.distutils_extension()]
             # cffi modules go here
             if sys.platform == 'darwin':
-                import setup_osutil_cffi
-                exts.append(setup_osutil_cffi.ffi.distutils_extension())
+                from mercurial.cffi import osutil
+                exts.append(osutil.ffi.distutils_extension())
             self.distribution.ext_modules = exts
         else:
             h = os.path.join(get_python_inc(), 'Python.h')
@@ -551,7 +554,13 @@ common_depends = ['mercurial/bitmanipulation.h',
                   'mercurial/compat.h',
                   'mercurial/util.h']
 
+osutil_cflags = []
 osutil_ldflags = []
+
+# platform specific macros: HAVE_SETPROCTITLE
+for plat, func in [(re.compile('freebsd'), 'setproctitle')]:
+    if plat.search(sys.platform) and hasfunction(new_compiler(), func):
+        osutil_cflags.append('-DHAVE_%s' % func.upper())
 
 if sys.platform == 'darwin':
     osutil_ldflags += ['-framework', 'ApplicationServices']
@@ -573,6 +582,7 @@ extmodules = [
                                     'mercurial/pathencode.c'],
               depends=common_depends),
     Extension('mercurial.osutil', ['mercurial/osutil.c'],
+              extra_compile_args=osutil_cflags,
               extra_link_args=osutil_ldflags,
               depends=common_depends),
     Extension('hgext.fsmonitor.pywatchman.bser',

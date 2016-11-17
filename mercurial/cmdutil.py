@@ -555,11 +555,11 @@ def openrevlog(repo, cmd, file_, opts):
             if 'treemanifest' not in repo.requirements:
                 raise error.Abort(_("--dir can only be used on repos with "
                                    "treemanifest enabled"))
-            dirlog = repo.manifest.dirlog(dir)
+            dirlog = repo.manifestlog._revlog.dirlog(dir)
             if len(dirlog):
                 r = dirlog
         elif mf:
-            r = repo.manifest
+            r = repo.manifestlog._revlog
         elif file_:
             filelog = repo.file(file_)
             if len(filelog):
@@ -1202,8 +1202,7 @@ def diffordiffstat(ui, repo, diffopts, node1, node2, match,
         chunks = patch.diff(repo, node1, node2, match, changes, diffopts,
                             prefix=prefix, relroot=relroot)
         for chunk, label in patch.diffstatui(util.iterlines(chunks),
-                                             width=width,
-                                             git=diffopts.git):
+                                             width=width):
             write(chunk, label=label)
     else:
         for chunk, label in patch.diffui(repo, node1, node2, match,
@@ -1324,7 +1323,8 @@ class changeset_printer(object):
             mnode = ctx.manifestnode()
             # i18n: column positioning for "hg log"
             self.ui.write(_("manifest:    %d:%s\n") %
-                          (self.repo.manifest.rev(mnode), hex(mnode)),
+                          (self.repo.manifestlog._revlog.rev(mnode),
+                           hex(mnode)),
                           label='ui.debug log.manifest')
         # i18n: column positioning for "hg log"
         self.ui.write(_("user:        %s\n") % ctx.user(),
@@ -2566,11 +2566,14 @@ def cat(ui, repo, ctx, matcher, prefix, **opts):
     # for performance to avoid the cost of parsing the manifest.
     if len(matcher.files()) == 1 and not matcher.anypats():
         file = matcher.files()[0]
-        mf = repo.manifest
+        mfl = repo.manifestlog
         mfnode = ctx.manifestnode()
-        if mfnode and mf.find(mfnode, file)[0]:
-            write(file)
-            return 0
+        try:
+            if mfnode and mfl[mfnode].find(file)[0]:
+                write(file)
+                return 0
+        except KeyError:
+            pass
 
     for abs in ctx.walk(matcher):
         write(abs)
@@ -3403,6 +3406,14 @@ def command(table):
 
     return cmd
 
+def checkunresolved(ms):
+    if list(ms.unresolved()):
+        raise error.Abort(_("unresolved merge conflicts "
+                            "(see 'hg help resolve')"))
+    if ms.mdstate() != 's' or list(ms.driverresolved()):
+        raise error.Abort(_('driver-resolved merge conflicts'),
+                          hint=_('run "hg resolve --all" to resolve'))
+
 # a list of (ui, repo, otherpeer, opts, missing) functions called by
 # commands.outgoing.  "missing" is "missing" of the result of
 # "findcommonoutgoing()"
@@ -3463,7 +3474,7 @@ def howtocontinue(repo):
     '''Check for an unfinished operation and return the command to finish
     it.
 
-    afterresolvedstates tupples define a .hg/{file} and the corresponding
+    afterresolvedstates tuples define a .hg/{file} and the corresponding
     command needed to finish it.
 
     Returns a (msg, warning) tuple. 'msg' is a string and 'warning' is

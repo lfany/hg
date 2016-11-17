@@ -25,6 +25,7 @@ import random
 import sys
 import time
 from mercurial import (
+    bdiff,
     changegroup,
     cmdutil,
     commands,
@@ -135,13 +136,14 @@ def gettimer(ui, opts=None):
 
     if opts is None:
         opts = {}
-    # redirect all to stderr
-    ui = ui.copy()
-    uifout = safeattrsetter(ui, 'fout', ignoremissing=True)
-    if uifout:
-        # for "historical portability":
-        # ui.fout/ferr have been available since 1.9 (or 4e1ccd4c2b6d)
-        uifout.set(ui.ferr)
+    # redirect all to stderr unless buffer api is in use
+    if not ui._buffers:
+        ui = ui.copy()
+        uifout = safeattrsetter(ui, 'fout', ignoremissing=True)
+        if uifout:
+            # for "historical portability":
+            # ui.fout/ferr have been available since 1.9 (or 4e1ccd4c2b6d)
+            uifout.set(ui.ferr)
 
     # get a formatter
     uiformatter = getattr(ui, 'formatter', None)
@@ -565,8 +567,8 @@ def perfmanifest(ui, repo, rev, **opts):
     ctx = scmutil.revsingle(repo, rev, rev)
     t = ctx.manifestnode()
     def d():
-        repo.manifest.clearcaches()
-        repo.manifest.read(t)
+        repo.manifestlog.clearcaches()
+        repo.manifestlog[t].read()
     timer(d)
     fm.end()
 
@@ -743,6 +745,64 @@ def perffncacheencode(ui, repo, **opts):
     def d():
         for p in s.fncache.entries:
             s.encode(p)
+    timer(d)
+    fm.end()
+
+@command('perfbdiff', revlogopts + formatteropts + [
+    ('', 'count', 1, 'number of revisions to test (when using --startrev)'),
+    ('', 'alldata', False, 'test bdiffs for all associated revisions')],
+    '-c|-m|FILE REV')
+def perfbdiff(ui, repo, file_, rev=None, count=None, **opts):
+    """benchmark a bdiff between revisions
+
+    By default, benchmark a bdiff between its delta parent and itself.
+
+    With ``--count``, benchmark bdiffs between delta parents and self for N
+    revisions starting at the specified revision.
+
+    With ``--alldata``, assume the requested revision is a changeset and
+    measure bdiffs for all changes related to that changeset (manifest
+    and filelogs).
+    """
+    if opts['alldata']:
+        opts['changelog'] = True
+
+    if opts.get('changelog') or opts.get('manifest'):
+        file_, rev = None, file_
+    elif rev is None:
+        raise error.CommandError('perfbdiff', 'invalid arguments')
+
+    textpairs = []
+
+    r = cmdutil.openrevlog(repo, 'perfbdiff', file_, opts)
+
+    startrev = r.rev(r.lookup(rev))
+    for rev in range(startrev, min(startrev + count, len(r) - 1)):
+        if opts['alldata']:
+            # Load revisions associated with changeset.
+            ctx = repo[rev]
+            mtext = repo.manifest.revision(ctx.manifestnode())
+            for pctx in ctx.parents():
+                pman = repo.manifest.revision(pctx.manifestnode())
+                textpairs.append((pman, mtext))
+
+            # Load filelog revisions by iterating manifest delta.
+            man = ctx.manifest()
+            pman = ctx.p1().manifest()
+            for filename, change in pman.diff(man).items():
+                fctx = repo.file(filename)
+                f1 = fctx.revision(change[0][0] or -1)
+                f2 = fctx.revision(change[1][0] or -1)
+                textpairs.append((f1, f2))
+        else:
+            dp = r.deltaparent(rev)
+            textpairs.append((r.revision(dp), r.revision(rev)))
+
+    def d():
+        for pair in textpairs:
+            bdiff.bdiff(*pair)
+
+    timer, fm = gettimer(ui, opts)
     timer(d)
     fm.end()
 

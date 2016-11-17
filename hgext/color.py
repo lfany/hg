@@ -275,8 +275,8 @@ def _modesetup(ui, coloropt):
 
     def modewarn():
         # only warn if color.mode was explicitly set and we're in
-        # an interactive terminal
-        if mode == realmode and ui.interactive():
+        # a formatted terminal
+        if mode == realmode and ui.formatted():
             ui.warn(_('warning: failed to set color mode to %s\n') % mode)
 
     if realmode == 'win32':
@@ -502,8 +502,8 @@ class colorui(uimod.ui):
                 effects.append(l)
         effects = ' '.join(effects)
         if effects:
-            return '\n'.join([render_effects(s, effects)
-                              for s in msg.split('\n')])
+            return '\n'.join([render_effects(line, effects)
+                              for line in msg.split('\n')])
         return msg
 
 def uisetup(ui):
@@ -536,22 +536,50 @@ def extsetup(ui):
          _("when to colorize (boolean, always, auto, never, or debug)"),
          _('TYPE')))
 
-@command('debugcolor', [], 'hg debugcolor')
+@command('debugcolor',
+        [('', 'style', None, _('show all configured styles'))],
+        'hg debugcolor')
 def debugcolor(ui, repo, **opts):
-    global _styles
-    _styles = {}
-    for effect in _effects.keys():
-        _styles[effect] = effect
-    if _terminfo_params:
-        for k, v in ui.configitems('color'):
-            if k.startswith('color.'):
-                _styles[k] = k[6:]
-            elif k.startswith('terminfo.'):
-                _styles[k] = k[9:]
+    """show available color, effects or style"""
     ui.write(('color mode: %s\n') % ui._colormode)
-    ui.write(_('available colors:\n'))
-    for colorname, label in _styles.items():
-        ui.write(('%s\n') % colorname, label=label)
+    if opts.get('style'):
+        return _debugdisplaystyle(ui)
+    else:
+        return _debugdisplaycolor(ui)
+
+def _debugdisplaycolor(ui):
+    global _styles
+    oldstyle = _styles
+    try:
+        _styles = {}
+        for effect in _effects.keys():
+            _styles[effect] = effect
+        if _terminfo_params:
+            for k, v in ui.configitems('color'):
+                if k.startswith('color.'):
+                    _styles[k] = k[6:]
+                elif k.startswith('terminfo.'):
+                    _styles[k] = k[9:]
+        ui.write(_('available colors:\n'))
+        # sort label with a '_' after the other to group '_background' entry.
+        items = sorted(_styles.items(),
+                       key=lambda i: ('_' in i[0], i[0], i[1]))
+        for colorname, label in items:
+            ui.write(('%s\n') % colorname, label=label)
+    finally:
+        _styles = oldstyle
+
+def _debugdisplaystyle(ui):
+    ui.write(_('available style:\n'))
+    width = max(len(s) for s in _styles)
+    for label, effects in sorted(_styles.items()):
+        ui.write('%s' % label, label=label)
+        if effects:
+            # 50
+            ui.write(': ')
+            ui.write(' ' * (max(0, width - len(label))))
+            ui.write(', '.join(ui.label(e, e) for e in effects.split()))
+        ui.write('\n')
 
 if os.name != 'nt':
     w32effects = None

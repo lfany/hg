@@ -12,7 +12,6 @@ import errno
 import os
 import socket
 import tempfile
-import zlib
 
 from .i18n import _
 from .node import nullid
@@ -30,16 +29,29 @@ httplib = util.httplib
 urlerr = util.urlerr
 urlreq = util.urlreq
 
-def zgenerator(f):
-    zd = zlib.decompressobj()
+# FUTURE: consider refactoring this API to use generators. This will
+# require a compression engine API to emit generators.
+def decompressresponse(response, engine):
     try:
-        for chunk in util.filechunkiter(f):
-            while chunk:
-                yield zd.decompress(chunk, 2**18)
-                chunk = zd.unconsumed_tail
+        reader = engine.decompressorreader(response)
     except httplib.HTTPException:
         raise IOError(None, _('connection ended unexpectedly'))
-    yield zd.flush()
+
+    # We need to wrap reader.read() so HTTPException on subsequent
+    # reads is also converted.
+    # Ideally we'd use super() here. However, if ``reader`` isn't a new-style
+    # class, this can raise:
+    # TypeError: super() argument 1 must be type, not classobj
+    origread = reader.read
+    class readerproxy(reader.__class__):
+        def read(self, *args, **kwargs):
+            try:
+                return origread(*args, **kwargs)
+            except httplib.HTTPException:
+                raise IOError(None, _('connection ended unexpectedly'))
+
+    reader.__class__ = readerproxy
+    return reader
 
 class httppeer(wireproto.wirepeer):
     def __init__(self, ui, path):
@@ -90,7 +102,7 @@ class httppeer(wireproto.wirepeer):
     def lock(self):
         raise error.Abort(_('operation not supported over http'))
 
-    def _callstream(self, cmd, **args):
+    def _callstream(self, cmd, _compressible=False, **args):
         if cmd == 'pushkey':
             args['data'] = ''
         data = args.pop('data', None)
@@ -160,9 +172,6 @@ class httppeer(wireproto.wirepeer):
             self.ui.debug('http error while sending %s command\n' % cmd)
             self.ui.traceback()
             raise IOError(None, inst)
-        except IndexError:
-            # this only happens with Python 2.3, later versions raise URLError
-            raise error.Abort(_('http error, possibly caused by proxy setting'))
         # record the url we got redirected to
         resp_url = resp.geturl()
         if resp_url.endswith(qs):
@@ -200,6 +209,9 @@ class httppeer(wireproto.wirepeer):
             if version_info > (0, 1):
                 raise error.RepoError(_("'%s' uses newer protocol %s") %
                                       (safeurl, version))
+
+        if _compressible:
+            return decompressresponse(resp, util.compengines['zlib'])
 
         return resp
 
@@ -271,8 +283,7 @@ class httppeer(wireproto.wirepeer):
                 os.unlink(filename)
 
     def _callcompressable(self, cmd, **args):
-        stream = self._callstream(cmd, **args)
-        return util.chunkbuffer(zgenerator(stream))
+        return self._callstream(cmd, _compressible=True, **args)
 
     def _abort(self, exception):
         raise exception

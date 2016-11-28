@@ -37,12 +37,6 @@ from . import (
 urlerr = util.urlerr
 urlreq = util.urlreq
 
-# Maps bundle compression human names to internal representation.
-_bundlespeccompressions = {'none': None,
-                           'bzip2': 'BZ',
-                           'gzip': 'GZ',
-                          }
-
 # Maps bundle version human names to changegroup versions.
 _bundlespeccgversions = {'v1': '01',
                          'v2': '02',
@@ -64,7 +58,7 @@ def parsebundlespec(repo, spec, strict=True, externalnames=False):
 
     Where <compression> is one of the supported compression formats
     and <type> is (currently) a version string. A ";" can follow the type and
-    all text afterwards is interpretted as URI encoded, ";" delimited key=value
+    all text afterwards is interpreted as URI encoded, ";" delimited key=value
     pairs.
 
     If ``strict`` is True (the default) <compression> is required. Otherwise,
@@ -114,7 +108,7 @@ def parsebundlespec(repo, spec, strict=True, externalnames=False):
     if '-' in spec:
         compression, version = spec.split('-', 1)
 
-        if compression not in _bundlespeccompressions:
+        if compression not in util.compengines.supportedbundlenames:
             raise error.UnsupportedBundleSpecification(
                     _('%s compression is not supported') % compression)
 
@@ -130,7 +124,7 @@ def parsebundlespec(repo, spec, strict=True, externalnames=False):
 
         spec, params = parseparams(spec)
 
-        if spec in _bundlespeccompressions:
+        if spec in util.compengines.supportedbundlenames:
             compression = spec
             version = 'v1'
             if 'generaldelta' in repo.requirements:
@@ -157,7 +151,8 @@ def parsebundlespec(repo, spec, strict=True, externalnames=False):
                       ', '.join(sorted(missingreqs)))
 
     if not externalnames:
-        compression = _bundlespeccompressions[compression]
+        engine = util.compengines.forbundlename(compression)
+        compression = engine.bundletype()[1]
         version = _bundlespeccgversions[version]
     return compression, version, params
 
@@ -196,10 +191,10 @@ def getbundlespec(ui, fh):
     restored.
     """
     def speccompression(alg):
-        for k, v in _bundlespeccompressions.items():
-            if v == alg:
-                return k
-        return None
+        try:
+            return util.compengines.forbundletype(alg).bundletype()[0]
+        except KeyError:
+            return None
 
     b = readbundle(ui, fh, None)
     if isinstance(b, changegroup.cg1unpacker):
@@ -282,7 +277,7 @@ def _forcebundle1(op):
     This function is used to allow testing of the older bundle version"""
     ui = op.repo.ui
     forcebundle1 = False
-    # The goal is this config is to allow developper to choose the bundle
+    # The goal is this config is to allow developer to choose the bundle
     # version used during exchanged. This is especially handy during test.
     # Value is a list of bundle version to be picked from, highest version
     # should be used.
@@ -1425,7 +1420,7 @@ def _pullapplyphases(pullop, remotephases):
     pullop.stepsdone.add('phases')
     publishing = bool(remotephases.get('publishing', False))
     if remotephases and not publishing:
-        # remote is new and unpublishing
+        # remote is new and non-publishing
         pheads, _dr = phases.analyzeremotephases(pullop.repo,
                                                  pullop.pulledsubset,
                                                  remotephases)
@@ -1665,6 +1660,17 @@ def _getbundletagsfnodes(bundler, repo, source, bundlecaps=None,
 
     if chunks:
         bundler.newpart('hgtagsfnodes', data=''.join(chunks))
+
+def _getbookmarks(repo, **kwargs):
+    """Returns bookmark to node mapping.
+
+    This function is primarily used to generate `bookmarks` bundle2 part.
+    It is a separate function in order to make it easy to wrap it
+    in extensions. Passing `kwargs` to the function makes it easy to
+    add new parameters in extensions.
+    """
+
+    return dict(bookmod.listbinbookmarks(repo))
 
 def check_heads(repo, their_heads, context):
     """check if the heads of a repo have been modified

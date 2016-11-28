@@ -5,7 +5,7 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2 or any later version.
 
-"""command server extension for cHg (EXPERIMENTAL)
+"""command server extension for cHg
 
 'S' channel (read/write)
     propagate ui.system() request to client
@@ -50,24 +50,16 @@ import struct
 import sys
 import time
 
-from mercurial.i18n import _
+from .i18n import _
 
-from mercurial import (
+from . import (
     cmdutil,
-    commands,
     commandserver,
-    dispatch,
     error,
     extensions,
     osutil,
     util,
 )
-
-# Note for extension authors: ONLY specify testedwith = 'ships-with-hg-core' for
-# extensions which SHIP WITH MERCURIAL. Non-mainline extensions should
-# be specifying the version(s) of Mercurial they are tested with, or
-# leave the attribute unspecified.
-testedwith = 'ships-with-hg-core'
 
 _log = commandserver.log
 
@@ -124,7 +116,7 @@ def _getmtimepaths(ui):
     """
     modules = [m for n, m in extensions.extensions(ui)]
     try:
-        from mercurial import __version__
+        from . import __version__
         modules.append(__version__)
     except ImportError:
         pass
@@ -180,6 +172,8 @@ class hashstate(object):
 
 # copied from hgext/pager.py:uisetup()
 def _setuppagercmd(ui, options, cmd):
+    from . import commands  # avoid cycle
+
     if not ui.formatted():
         return
 
@@ -232,7 +226,7 @@ def _newchgui(srcui, csystem):
             # these situations and will behave differently (write to stdout).
             if (any(s[1] for s in self._bufferstates)
                 or not util.safehasattr(self.fout, 'fileno')
-                or self.fout.fileno() != sys.stdout.fileno()):
+                or self.fout.fileno() != util.stdout.fileno()):
                 return super(chgui, self).system(cmd, environ, cwd, onerr,
                                                  errprefix)
             # copied from mercurial/util.py:system()
@@ -259,15 +253,13 @@ def _newchgui(srcui, csystem):
     return chgui(srcui)
 
 def _loadnewui(srcui, args):
+    from . import dispatch  # avoid cycle
+
     newui = srcui.__class__()
     for a in ['fin', 'fout', 'ferr', 'environ']:
         setattr(newui, a, getattr(srcui, a))
     if util.safehasattr(srcui, '_csystem'):
         newui._csystem = srcui._csystem
-
-    # internal config: extensions.chgserver
-    newui.setconfig('extensions', 'chgserver',
-                    srcui.config('extensions', 'chgserver'), '--config')
 
     # command line args
     args = args[:]
@@ -438,6 +430,8 @@ class chgcmdserver(commandserver.server):
         list, the client can continue with this server after completing all
         the instructions.
         """
+        from . import dispatch  # avoid cycle
+
         args = self._readlist()
         try:
             self.ui, lui = _loadnewui(self.ui, args)
@@ -485,6 +479,8 @@ class chgcmdserver(commandserver.server):
         If pager isn't enabled, this writes '\0' because channeledoutput
         does not allow to write empty data.
         """
+        from . import dispatch  # avoid cycle
+
         args = self._readlist()
         try:
             cmd, _func, args, options, _cmdoptions = dispatch._parse(self.ui,
@@ -628,16 +624,13 @@ class chgunixservicehandler(object):
                             self._hashstate, self._baseaddress)
 
 def chgunixservice(ui, repo, opts):
-    if repo:
-        # one chgserver can serve multiple repos. drop repo infomation
-        ui.setconfig('bundle', 'mainreporoot', '', 'repo')
-    h = chgunixservicehandler(ui)
-    return commandserver.unixforkingservice(ui, repo=None, opts=opts, handler=h)
-
-def uisetup(ui):
-    commandserver._servicemap['chgunix'] = chgunixservice
-
     # CHGINTERNALMARK is temporarily set by chg client to detect if chg will
     # start another chg. drop it to avoid possible side effects.
     if 'CHGINTERNALMARK' in os.environ:
         del os.environ['CHGINTERNALMARK']
+
+    if repo:
+        # one chgserver can serve multiple repos. drop repo information
+        ui.setconfig('bundle', 'mainreporoot', '', 'repo')
+    h = chgunixservicehandler(ui)
+    return commandserver.unixforkingservice(ui, repo=None, opts=opts, handler=h)

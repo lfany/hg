@@ -437,10 +437,10 @@ def keyvaluepair(repo, subset, k, v):
 def func(repo, subset, a, b, order):
     f = getsymbol(a)
     if f in symbols:
-        fn = symbols[f]
-        if getattr(fn, '_takeorder', False):
-            return fn(repo, subset, b, order)
-        return fn(repo, subset, b)
+        func = symbols[f]
+        if getattr(func, '_takeorder', False):
+            return func(repo, subset, b, order)
+        return func(repo, subset, b)
 
     keep = lambda fn: getattr(fn, '__doc__', None) is not None
 
@@ -1443,7 +1443,7 @@ def only(repo, subset, x):
 
     results = set(cl.findmissingrevs(common=exclude, heads=include))
     # XXX we should turn this into a baseset instead of a set, smartset may do
-    # some optimisations from the fact this is a baseset.
+    # some optimizations from the fact this is a baseset.
     return subset & results
 
 @predicate('origin([set])', safe=True)
@@ -1475,7 +1475,7 @@ def origin(repo, subset, x):
     o = set([_firstsrc(r) for r in dests])
     o -= set([None])
     # XXX we should turn this into a baseset instead of a set, smartset may do
-    # some optimisations from the fact this is a baseset.
+    # some optimizations from the fact this is a baseset.
     return subset & o
 
 @predicate('outgoing([path])', safe=True)
@@ -1521,7 +1521,7 @@ def p1(repo, subset, x):
         ps.add(cl.parentrevs(r)[0])
     ps -= set([node.nullrev])
     # XXX we should turn this into a baseset instead of a set, smartset may do
-    # some optimisations from the fact this is a baseset.
+    # some optimizations from the fact this is a baseset.
     return subset & ps
 
 @predicate('p2([set])', safe=True)
@@ -1544,7 +1544,7 @@ def p2(repo, subset, x):
         ps.add(cl.parentrevs(r)[1])
     ps -= set([node.nullrev])
     # XXX we should turn this into a baseset instead of a set, smartset may do
-    # some optimisations from the fact this is a baseset.
+    # some optimizations from the fact this is a baseset.
     return subset & ps
 
 def parentpost(repo, subset, x, order):
@@ -3198,7 +3198,7 @@ class filteredset(abstractsmartset):
     def __len__(self):
         # Basic implementation to be changed in future patches.
         # until this gets improved, we use generator expression
-        # here, since list compr is free to call __len__ again
+        # here, since list comprehensions are free to call __len__ again
         # causing infinite recursion
         l = baseset(r for r in self)
         return len(l)

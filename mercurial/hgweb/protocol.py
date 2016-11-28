@@ -8,7 +8,6 @@
 from __future__ import absolute_import
 
 import cgi
-import zlib
 
 from .common import (
     HTTP_OK,
@@ -74,28 +73,12 @@ class webproto(wireproto.abstractserverproto):
         self.ui.ferr, self.ui.fout = self.oldio
         return val
 
-    def groupchunks(self, fh):
-        def getchunks():
-            while True:
-                chunk = fh.read(32768)
-                if not chunk:
-                    break
-                yield chunk
-
-        return self.compresschunks(getchunks())
-
     def compresschunks(self, chunks):
         # Don't allow untrusted settings because disabling compression or
         # setting a very high compression level could lead to flooding
         # the server's network or CPU.
-        z = zlib.compressobj(self.ui.configint('server', 'zliblevel', -1))
-        for chunk in chunks:
-            data = z.compress(chunk)
-            # Not all calls to compress() emit data. It is cheaper to inspect
-            # that here than to send it via the generator.
-            if data:
-                yield data
-        yield z.flush()
+        opts = {'level': self.ui.configint('server', 'zliblevel', -1)}
+        return util.compengines['zlib'].compressstream(chunks, opts)
 
     def _client(self):
         return 'remote:%s:%s:%s' % (
@@ -113,8 +96,16 @@ def call(repo, req, cmd):
         req.respond(HTTP_OK, HGTYPE, body=rsp)
         return []
     elif isinstance(rsp, wireproto.streamres):
+        if rsp.reader:
+            gen = iter(lambda: rsp.reader.read(32768), '')
+        else:
+            gen = rsp.gen
+
+        if rsp.v1compressible:
+            gen = p.compresschunks(gen)
+
         req.respond(HTTP_OK, HGTYPE)
-        return rsp.gen
+        return gen
     elif isinstance(rsp, wireproto.pushres):
         val = p.restore()
         rsp = '%d\n%s' % (rsp.res, val)

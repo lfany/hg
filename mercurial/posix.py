@@ -160,31 +160,88 @@ def checkexec(path):
 
     try:
         EXECFLAGS = stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
-        fh, fn = tempfile.mkstemp(dir=path, prefix='hg-checkexec-')
+        cachedir = os.path.join(path, '.hg', 'cache')
+        if os.path.isdir(cachedir):
+            checkisexec = os.path.join(cachedir, 'checkisexec')
+            checknoexec = os.path.join(cachedir, 'checknoexec')
+
+            try:
+                m = os.stat(checkisexec).st_mode
+            except OSError as e:
+                if e.errno != errno.ENOENT:
+                    raise
+                # checkisexec does not exist - fall through ...
+            else:
+                # checkisexec exists, check if it actually is exec
+                if m & EXECFLAGS != 0:
+                    # ensure checkisexec exists, check it isn't exec
+                    try:
+                        m = os.stat(checknoexec).st_mode
+                    except OSError as e:
+                        if e.errno != errno.ENOENT:
+                            raise
+                        file(checknoexec, 'w').close() # might fail
+                        m = os.stat(checknoexec).st_mode
+                    if m & EXECFLAGS == 0:
+                        # check-exec is exec and check-no-exec is not exec
+                        return True
+                    # checknoexec exists but is exec - delete it
+                    os.unlink(checknoexec)
+                # checkisexec exists but is not exec - delete it
+                os.unlink(checkisexec)
+
+            # check using one file, leave it as checkisexec
+            checkdir = cachedir
+        else:
+            # check directly in path and don't leave checkisexec behind
+            checkdir = path
+            checkisexec = None
+        fh, fn = tempfile.mkstemp(dir=checkdir, prefix='hg-checkexec-')
         try:
             os.close(fh)
-            m = os.stat(fn).st_mode & 0o777
-            new_file_has_exec = m & EXECFLAGS
-            os.chmod(fn, m ^ EXECFLAGS)
-            exec_flags_cannot_flip = ((os.stat(fn).st_mode & 0o777) == m)
+            m = os.stat(fn).st_mode
+            if m & EXECFLAGS == 0:
+                os.chmod(fn, m & 0o777 | EXECFLAGS)
+                if os.stat(fn).st_mode & EXECFLAGS != 0:
+                    if checkisexec is not None:
+                        os.rename(fn, checkisexec)
+                        fn = None
+                    return True
         finally:
-            os.unlink(fn)
+            if fn is not None:
+                os.unlink(fn)
     except (IOError, OSError):
         # we don't care, the user probably won't be able to commit anyway
         return False
-    return not (new_file_has_exec or exec_flags_cannot_flip)
 
 def checklink(path):
     """check whether the given path is on a symlink-capable filesystem"""
     # mktemp is not racy because symlink creation will fail if the
     # file already exists
     while True:
-        name = tempfile.mktemp(dir=path, prefix='hg-checklink-')
+        cachedir = os.path.join(path, '.hg', 'cache')
+        checklink = os.path.join(cachedir, 'checklink')
+        # try fast path, read only
+        if os.path.islink(checklink):
+            return True
+        if os.path.isdir(cachedir):
+            checkdir = cachedir
+        else:
+            checkdir = path
+            cachedir = None
+        name = tempfile.mktemp(dir=checkdir, prefix='checklink-')
         try:
-            fd = tempfile.NamedTemporaryFile(dir=path, prefix='hg-checklink-')
+            fd = tempfile.NamedTemporaryFile(dir=checkdir,
+                                             prefix='hg-checklink-')
             try:
                 os.symlink(os.path.basename(fd.name), name)
-                os.unlink(name)
+                if cachedir is None:
+                    os.unlink(name)
+                else:
+                    try:
+                        os.rename(name, checklink)
+                    except OSError:
+                        os.unlink(name)
                 return True
             except OSError as inst:
                 # link creation might race, try again
@@ -462,36 +519,6 @@ def spawndetached(args):
 
 def gethgcmd():
     return sys.argv[:1]
-
-def termwidth():
-    try:
-        import array
-        import termios
-        for dev in (sys.stderr, sys.stdout, sys.stdin):
-            try:
-                try:
-                    fd = dev.fileno()
-                except AttributeError:
-                    continue
-                if not os.isatty(fd):
-                    continue
-                try:
-                    arri = fcntl.ioctl(fd, termios.TIOCGWINSZ, '\0' * 8)
-                    width = array.array('h', arri)[1]
-                    if width > 0:
-                        return width
-                except AttributeError:
-                    pass
-            except ValueError:
-                pass
-            except IOError as e:
-                if e[0] == errno.EINVAL:
-                    pass
-                else:
-                    raise
-    except ImportError:
-        pass
-    return 80
 
 def makedir(path, notindexed):
     os.mkdir(path)

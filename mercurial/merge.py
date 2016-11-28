@@ -15,18 +15,20 @@ import struct
 
 from .i18n import _
 from .node import (
+    addednodeid,
     bin,
     hex,
+    modifiednodeid,
     nullhex,
     nullid,
     nullrev,
 )
 from . import (
     copies,
-    destutil,
     error,
     filemerge,
     obsolete,
+    pycompat,
     scmutil,
     subrepo,
     util,
@@ -66,7 +68,7 @@ class mergestate(object):
        (experimental)
     m: the external merge driver defined for this merge plus its run state
        (experimental)
-    f: a (filename, dictonary) tuple of optional values for a given file
+    f: a (filename, dictionary) tuple of optional values for a given file
     X: unsupported mandatory record type (used in tests)
     x: unsupported advisory record type (used in tests)
     l: the labels for the parts of the merge.
@@ -814,7 +816,7 @@ def manifestmerge(repo, wctx, p2, pa, branchmerge, force, matcher,
     if '.hgsubstate' in m1:
         # check whether sub state is modified
         if any(wctx.sub(s).dirty() for s in wctx.substate):
-            m1['.hgsubstate'] += '+'
+            m1['.hgsubstate'] = modifiednodeid
 
     # Compare manifests
     if matcher is not None:
@@ -873,7 +875,7 @@ def manifestmerge(repo, wctx, p2, pa, branchmerge, force, matcher,
                     else:
                         actions[f] = ('cd', (f, None, f, False, pa.node()),
                                       "prompt changed/deleted")
-                elif n1[20:] == 'a':
+                elif n1 == addednodeid:
                     # This extra 'a' is added by working copy manifest to mark
                     # the file as locally added. We should forget it instead of
                     # deleting it.
@@ -1039,7 +1041,7 @@ def batchremove(repo, actions):
     wjoin = repo.wjoin
     audit = repo.wvfs.audit
     try:
-        cwd = os.getcwd()
+        cwd = pycompat.getcwd()
     except OSError as err:
         if err.errno != errno.ENOENT:
             raise
@@ -1065,7 +1067,7 @@ def batchremove(repo, actions):
         # cwd was present before we started to remove files
         # let's check if it is present after we removed them
         try:
-            os.getcwd()
+            pycompat.getcwd()
         except OSError as err:
             if err.errno != errno.ENOENT:
                 raise
@@ -1481,11 +1483,6 @@ def update(repo, node, branchmerge, force, ancestor=None,
         pas = [None]
         if ancestor is not None:
             pas = [repo[ancestor]]
-
-        if node is None:
-            repo.ui.deprecwarn('update with no target', '3.9')
-            rev, _mark, _act = destutil.destupdate(repo)
-            node = repo[rev].node()
 
         overwrite = force and not branchmerge
 

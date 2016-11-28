@@ -332,7 +332,7 @@ ensure that we have a merge with unresolved conflicts
   +++ b/a/a
   @@ -1,2 +1,6 @@
    a
-  +<<<<<<< dest:   *  - shelve: pending changes temporary commit (glob)
+  +<<<<<<< dest:   * - shelve: pending changes temporary commit (glob)
    c
   +=======
   +a
@@ -759,7 +759,7 @@ unshelve and conflicts with tracked and untracked files
   M f
   ? f.orig
   $ cat f
-  <<<<<<< dest:   5f6b880e719b  - shelve: pending changes temporary commit
+  <<<<<<< dest:   5f6b880e719b - shelve: pending changes temporary commit
   g
   =======
   f
@@ -804,7 +804,7 @@ unshelve and conflicts with tracked and untracked files
   M f
   ? f.orig
   $ cat f
-  <<<<<<< dest:   *  - test: intermediate other change (glob)
+  <<<<<<< dest:   * - test: intermediate other change (glob)
   g
   =======
   f
@@ -1493,7 +1493,7 @@ test branch.
 When i unshelve resulting in merge conflicts and makes saved
 file shelvedstate looks like in previous versions in
 mercurial(without restore branch information in 7th line) i
-expect that after resolving conflicts and succesfully
+expect that after resolving conflicts and successfully
 running 'shelve --continue' the branch information won't be
 restored and branch will be unchanged.
 
@@ -1587,7 +1587,7 @@ On non bare shelve the branch information shouldn't be restored
   default
   $ cd ..
 
-Prepare unshleve with a corrupted shelvedstate
+Prepare unshelve with a corrupted shelvedstate
   $ hg init r1 && cd r1
   $ echo text1 > file && hg add file
   $ hg shelve
@@ -1622,3 +1622,31 @@ progress
   abort: no unshelve in progress
   [255]
   $ cd ..
+
+Unshelve respects --keep even if user intervention is needed
+  $ hg init unshelvekeep
+  $ echo 1 > file && hg ci -Am 1
+  adding file
+  $ echo 2 >> file
+  $ hg shelve
+  shelved as default
+  1 files updated, 0 files merged, 0 files removed, 0 files unresolved
+  $ echo 3 >> file && hg ci -Am 13
+  $ hg shelve --list
+  default         (1s ago)    changes to: 1
+  $ hg unshelve --keep
+  unshelving change 'default'
+  rebasing shelved changes
+  rebasing 3:1d24e58054c8 "changes to: 1" (tip)
+  merging file
+  warning: conflicts while merging file! (edit, then use 'hg resolve --mark')
+  unresolved conflicts (see 'hg resolve', then 'hg unshelve --continue')
+  [1]
+  $ hg resolve --mark file
+  (no more unresolved files)
+  continue: hg unshelve --continue
+  $ hg unshelve --continue
+  rebasing 3:1d24e58054c8 "changes to: 1" (tip)
+  unshelve of 'default' complete
+  $ hg shelve --list
+  default         (1s ago)    changes to: 1

@@ -14,14 +14,13 @@ import locale
 import os
 import re
 import signal
-import struct
-import sys
 
 from .i18n import _
 from . import (
     encoding,
     error,
     patch as patchmod,
+    scmutil,
     util,
 )
 stringio = util.stringio
@@ -52,11 +51,7 @@ patchhelptext = _("""#
 
 try:
     import curses
-    import fcntl
-    import termios
     curses.error
-    fcntl.ioctl
-    termios.TIOCGWINSZ
 except ImportError:
     # I have no idea if wcurses works with crecord...
     try:
@@ -74,8 +69,6 @@ def checkcurses(ui):
     it) and that the user has the correct flag for the ui.
     """
     return curses and ui.interface("chunkselector") == "curses"
-
-_origstdout = sys.__stdout__ # used by gethw()
 
 class patchnode(object):
     """abstract class for patch graph nodes
@@ -440,7 +433,7 @@ class uihunk(patchnode):
     def __repr__(self):
         return '<hunk %r@%d>' % (self.filename(), self.fromline)
 
-def filterpatch(ui, chunks, chunkselector):
+def filterpatch(ui, chunks, chunkselector, operation=None):
     """interactively filter patch chunks into applied-only chunks"""
     chunks = list(chunks)
     # convert chunks list into structure suitable for displaying/modifying
@@ -453,7 +446,7 @@ def filterpatch(ui, chunks, chunkselector):
     uiheaders = [uiheader(h) for h in headers]
     # let user choose headers/hunks/lines, and mark their applied flags
     # accordingly
-    ret = chunkselector(ui, uiheaders)
+    ret = chunkselector(ui, uiheaders, operation=operation)
     appliedhunklist = []
     for hdr in uiheaders:
         if (hdr.applied and
@@ -473,25 +466,13 @@ def filterpatch(ui, chunks, chunkselector):
 
     return (appliedhunklist, ret)
 
-def gethw():
-    """
-    magically get the current height and width of the window (without initscr)
-
-    this is a rip-off of a rip-off - taken from the bpython code.  it is
-    useful / necessary because otherwise curses.initscr() must be called,
-    which can leave the terminal in a nasty state after exiting.
-    """
-    h, w = struct.unpack(
-        "hhhh", fcntl.ioctl(_origstdout, termios.TIOCGWINSZ, "\000"*8))[0:2]
-    return h, w
-
-def chunkselector(ui, headerlist):
+def chunkselector(ui, headerlist, operation=None):
     """
     curses interface to get selection of chunks, and mark the applied flags
     of the chosen chunks.
     """
     ui.write(_('starting interactive selection\n'))
-    chunkselector = curseschunkselector(headerlist, ui)
+    chunkselector = curseschunkselector(headerlist, ui, operation)
     f = signal.getsignal(signal.SIGTSTP)
     curses.wrapper(chunkselector.main)
     if chunkselector.initerr is not None:
@@ -505,12 +486,12 @@ def testdecorator(testfn, f):
         return f(testfn, *args, **kwargs)
     return u
 
-def testchunkselector(testfn, ui, headerlist):
+def testchunkselector(testfn, ui, headerlist, operation=None):
     """
     test interface to get selection of chunks, and mark the applied flags
     of the chosen chunks.
     """
-    chunkselector = curseschunkselector(headerlist, ui)
+    chunkselector = curseschunkselector(headerlist, ui, operation)
     if testfn and os.path.exists(testfn):
         testf = open(testfn)
         testcommands = map(lambda x: x.rstrip('\n'), testf.readlines())
@@ -521,7 +502,7 @@ def testchunkselector(testfn, ui, headerlist):
     return chunkselector.opts
 
 class curseschunkselector(object):
-    def __init__(self, headerlist, ui):
+    def __init__(self, headerlist, ui, operation=None):
         # put the headers into a patch object
         self.headerlist = patch(headerlist)
 
@@ -574,6 +555,9 @@ class curseschunkselector(object):
 
         # if the last 'toggle all' command caused all changes to be applied
         self.waslasttoggleallapplied = True
+
+        # affects some ui text
+        self.operation = operation
 
     def uparrowevent(self):
         """
@@ -976,10 +960,10 @@ class curseschunkselector(object):
                             pairname='legend')
                 self.statuswin.refresh()
                 return
-            line1 = ("SELECT CHUNKS: (j/k/up/dn/pgup/pgdn) move cursor; "
-                   "(space/A) toggle hunk/all; (e)dit hunk;")
-            line2 = (" (f)old/unfold; (c)onfirm applied; (q)uit; (?) help "
-                   "| [X]=hunk applied **=folded, toggle [a]mend mode")
+            line1 = _("SELECT CHUNKS: (j/k/up/dn/pgup/pgdn) move cursor; "
+                      "(space/A) toggle hunk/all; (e)dit hunk;")
+            line2 = _(" (f)old/unfold; (c)onfirm applied; (q)uit; (?) help "
+                      "| [X]=hunk applied **=folded, toggle [a]mend mode")
 
             printstring(self.statuswin,
                         util.ellipsis(line1, self.xscreensize - 1),
@@ -1259,7 +1243,7 @@ class curseschunkselector(object):
         "handle window resizing"
         try:
             curses.endwin()
-            self.yscreensize, self.xscreensize = gethw()
+            self.xscreensize, self.yscreensize = scmutil.termsize(self.ui)
             self.statuswin.resize(self.numstatuslines, self.xscreensize)
             self.numpadlines = self.getnumlinesdisplayed(ignorefolding=True) + 1
             self.chunkpad = curses.newpad(self.numpadlines, self.xscreensize)
@@ -1321,7 +1305,8 @@ class curseschunkselector(object):
 
     def helpwindow(self):
         "print a help window to the screen.  exit after any keypress."
-        helptext = """            [press any key to return to the patch-display]
+        helptext = _(
+            """            [press any key to return to the patch-display]
 
 crecord allows you to interactively choose among the changes you have made,
 and confirm only those changes you select for further processing by the command
@@ -1345,7 +1330,7 @@ the following are valid keystrokes:
                       c : confirm selected changes
                       r : review/edit and confirm selected changes
                       q : quit without confirming (no changes will be made)
-                      ? : help (what you're currently reading)"""
+                      ? : help (what you're currently reading)""")
 
         helpwin = curses.newwin(self.yscreensize, 0, 0, 0)
         helplines = helptext.split("\n")
@@ -1384,7 +1369,7 @@ the following are valid keystrokes:
     def reviewcommit(self):
         """ask for 'y' to be pressed to confirm selected. return True if
         confirmed."""
-        confirmtext = (
+        confirmtext = _(
 """if you answer yes to the following, the your currently chosen patch chunks
 will be loaded into an editor.  you may modify the patch from the editor, and
 save the changes if you wish to change the patch.  otherwise, you can just
@@ -1416,19 +1401,19 @@ are you sure you want to review/edit and confirm the selected changes [yn]?
         except ValueError:
             ver = 1
         if ver < 2.19:
-            msg = ("The amend option is unavailable with hg versions < 2.2\n\n"
-                   "Press any key to continue.")
+            msg = _("The amend option is unavailable with hg versions < 2.2\n\n"
+                    "Press any key to continue.")
         elif opts.get('amend') is None:
             opts['amend'] = True
-            msg = ("Amend option is turned on -- commiting the currently "
-                   "selected changes will not create a new changeset, but "
-                   "instead update the most recently committed changeset.\n\n"
-                   "Press any key to continue.")
+            msg = _("Amend option is turned on -- committing the currently "
+                    "selected changes will not create a new changeset, but "
+                    "instead update the most recently committed changeset.\n\n"
+                    "Press any key to continue.")
         elif opts.get('amend') is True:
             opts['amend'] = None
-            msg = ("Amend option is turned off -- commiting the currently "
-                   "selected changes will create a new changeset.\n\n"
-                   "Press any key to continue.")
+            msg = _("Amend option is turned off -- committing the currently "
+                    "selected changes will create a new changeset.\n\n"
+                    "Press any key to continue.")
         if not test:
             self.confirmationwindow(msg)
 
@@ -1629,7 +1614,7 @@ are you sure you want to review/edit and confirm the selected changes [yn]?
         except curses.error:
             self.initerr = _('this diff is too large to be displayed')
             return
-        # initialize selecteitemendline (initial start-line is 0)
+        # initialize selecteditemendline (initial start-line is 0)
         self.selecteditemendline = self.getnumlinesdisplayed(
             self.currentselecteditem, recursechildren=False)
 

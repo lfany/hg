@@ -38,7 +38,6 @@ samefile = win32.samefile
 setsignalhandler = win32.setsignalhandler
 spawndetached = win32.spawndetached
 split = os.path.split
-termwidth = win32.termwidth
 testpid = win32.testpid
 unlink = win32.unlink
 
@@ -171,8 +170,6 @@ class winstdout(object):
                 raise
             self.close()
             raise IOError(errno.EPIPE, 'Broken pipe')
-
-sys.__stdout__ = sys.stdout = winstdout(sys.stdout)
 
 def _is_win_9x():
     '''return true if run on windows 95, 98 or me.'''

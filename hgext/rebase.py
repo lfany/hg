@@ -32,11 +32,13 @@ from mercurial import (
     commands,
     copies,
     destutil,
+    dirstateguard,
     error,
     extensions,
     hg,
     lock,
-    merge,
+    merge as mergemod,
+    mergeutil,
     obsolete,
     patch,
     phases,
@@ -482,19 +484,20 @@ class rebaseruntime(object):
             ui.note(_("update back to initial working directory parent\n"))
             hg.updaterepo(repo, newwd, False)
 
+        if self.currentbookmarks:
+            with repo.transaction('bookmark') as tr:
+                updatebookmarks(repo, targetnode, nstate,
+                                self.currentbookmarks, tr)
+                if self.activebookmark not in repo._bookmarks:
+                    # active bookmark was divergent one and has been deleted
+                    self.activebookmark = None
+
         if not self.keepf:
             collapsedas = None
             if self.collapsef:
                 collapsedas = newnode
             clearrebased(ui, repo, self.state, self.skipped, collapsedas)
 
-        with repo.transaction('bookmark') as tr:
-            if self.currentbookmarks:
-                updatebookmarks(repo, targetnode, nstate,
-                                self.currentbookmarks, tr)
-                if self.activebookmark not in repo._bookmarks:
-                    # active bookmark was divergent one and has been deleted
-                    self.activebookmark = None
         clearstatus(repo)
         clearcollapsemsg(repo)
 
@@ -661,6 +664,9 @@ def rebase(ui, repo, **opts):
                     _('abort and continue do not allow specifying revisions'))
             if abortf and opts.get('tool', False):
                 ui.warn(_('tool option will be ignored\n'))
+            if contf:
+                ms = mergemod.mergestate.read(repo)
+                mergeutil.checkunresolved(ms)
 
             retcode = rbsrt._prepareabortorcontinue(abortf)
             if retcode is not None:
@@ -786,7 +792,7 @@ def concludenode(repo, rev, p1, p2, commitmsg=None, editor=None, extrafn=None,
     '''Commit the wd changes with parents p1 and p2. Reuse commit info from rev
     but also store useful information in extra.
     Return node of committed revision.'''
-    dsguard = cmdutil.dirstateguard(repo, 'rebase')
+    dsguard = dirstateguard.dirstateguard(repo, 'rebase')
     try:
         repo.setparents(repo[p1].node(), repo[p2].node())
         ctx = repo[rev]
@@ -823,7 +829,7 @@ def rebasenode(repo, rev, p1, base, state, collapse, target):
     # Update to target and merge it with local
     if repo['.'].rev() != p1:
         repo.ui.debug(" update to %d:%s\n" % (p1, repo[p1]))
-        merge.update(repo, p1, False, True)
+        mergemod.update(repo, p1, False, True)
     else:
         repo.ui.debug(" already in target\n")
     repo.dirstate.write(repo.currenttransaction())
@@ -832,8 +838,8 @@ def rebasenode(repo, rev, p1, base, state, collapse, target):
         repo.ui.debug("   detach base %d:%s\n" % (base, repo[base]))
     # When collapsing in-place, the parent is the common ancestor, we
     # have to allow merging with it.
-    stats = merge.update(repo, rev, True, True, base, collapse,
-                        labels=['dest', 'source'])
+    stats = mergemod.update(repo, rev, True, True, base, collapse,
+                            labels=['dest', 'source'])
     if collapse:
         copies.duplicatecopies(repo, rev, target)
     else:
@@ -1150,7 +1156,7 @@ def abort(repo, originalwd, target, state, activebookmark=None):
 
             # Update away from the rebase if necessary
             if shouldupdate or needupdate(repo, state):
-                merge.update(repo, originalwd, False, True)
+                mergemod.update(repo, originalwd, False, True)
 
             # Strip from the first rebased revision
             if rebased:
@@ -1382,7 +1388,7 @@ def _computeobsoletenotrebased(repo, rebaseobsrevs, dest):
     """return a mapping obsolete => successor for all obsolete nodes to be
     rebased that have a successors in the destination
 
-    obsolete => None entries in the mapping indicate nodes with no succesor"""
+    obsolete => None entries in the mapping indicate nodes with no successor"""
     obsoletenotrebased = {}
 
     # Build a mapping successor => obsolete nodes for the obsolete

@@ -9,6 +9,6 @@ The full traceback is hidden to have a stable output.
   >   $PYTHON3 `which hg` $cmd 2>&1 2>&1 | tail -1
   > done
   version
-  TypeError: str expected, not bytes
+  NameError: name 'basestring' is not defined
   debuginstall
-  TypeError: str expected, not bytes
+  NameError: name 'basestring' is not defined

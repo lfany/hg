@@ -150,7 +150,7 @@ def has_cvsnt():
 
 @check("darcs", "darcs client")
 def has_darcs():
-    return matchoutput('darcs --version', br'2\.[2-9]', True)
+    return matchoutput('darcs --version', br'\b2\.([2-9]|\d{2})', True)
 
 @check("mtn", "monotone client (>= 1.0)")
 def has_mtn():
@@ -610,3 +610,12 @@ def has_hypothesis():
 @check("unziplinks", "unzip(1) understands and extracts symlinks")
 def unzip_understands_symlinks():
     return matchoutput('unzip --help', br'Info-ZIP')
+
+@check("zstd", "zstd Python module available")
+def has_zstd():
+    try:
+        import mercurial.zstd
+        mercurial.zstd.__version__
+        return True
+    except ImportError:
+        return False

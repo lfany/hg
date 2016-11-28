@@ -9,7 +9,6 @@ from __future__ import absolute_import, print_function
 
 import contextlib
 import os
-import sys
 import time
 
 from .i18n import _
@@ -80,11 +79,7 @@ def flameprofile(ui, fp):
 
 @contextlib.contextmanager
 def statprofile(ui, fp):
-    try:
-        import statprof
-    except ImportError:
-        raise error.Abort(_(
-            'statprof not available - install using "easy_install statprof"'))
+    from . import statprof
 
     freq = ui.configint('profiling', 'freq', default=1000)
     if freq > 0:
@@ -94,12 +89,29 @@ def statprofile(ui, fp):
     else:
         ui.warn(_("invalid sampling frequency '%s' - ignoring\n") % freq)
 
-    statprof.start()
+    statprof.start(mechanism='thread')
+
     try:
         yield
     finally:
-        statprof.stop()
-        statprof.display(fp)
+        data = statprof.stop()
+
+        profformat = ui.config('profiling', 'statformat', 'hotpath')
+
+        formats = {
+            'byline': statprof.DisplayFormats.ByLine,
+            'bymethod': statprof.DisplayFormats.ByMethod,
+            'hotpath': statprof.DisplayFormats.Hotpath,
+            'json': statprof.DisplayFormats.Json,
+        }
+
+        if profformat in formats:
+            displayformat = formats[profformat]
+        else:
+            ui.warn(_('unknown profiler output format: %s\n') % profformat)
+            displayformat = statprof.DisplayFormats.Hotpath
+
+        statprof.display(fp, data=data, format=displayformat)
 
 @contextlib.contextmanager
 def profile(ui):
@@ -110,10 +122,10 @@ def profile(ui):
     """
     profiler = os.getenv('HGPROF')
     if profiler is None:
-        profiler = ui.config('profiling', 'type', default='ls')
+        profiler = ui.config('profiling', 'type', default='stat')
     if profiler not in ('ls', 'stat', 'flame'):
         ui.warn(_("unrecognized profiler '%s' - ignored\n") % profiler)
-        profiler = 'ls'
+        profiler = 'stat'
 
     output = ui.config('profiling', 'output')
 
@@ -123,7 +135,7 @@ def profile(ui):
         path = ui.expandpath(output)
         fp = open(path, 'wb')
     else:
-        fp = sys.stderr
+        fp = ui.ferr
 
     try:
         if profiler == 'ls':

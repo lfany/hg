@@ -10,7 +10,6 @@ from __future__ import absolute_import
 import errno
 import os
 import re
-import sys
 import tempfile
 
 from .i18n import _
@@ -27,16 +26,19 @@ from . import (
     changelog,
     copies,
     crecord as crecordmod,
+    dirstateguard as dirstateguardmod,
     encoding,
     error,
     formatter,
     graphmod,
     lock as lockmod,
     match as matchmod,
+    mergeutil,
     obsolete,
     patch,
     pathutil,
     phases,
+    pycompat,
     repair,
     revlog,
     revset,
@@ -83,7 +85,7 @@ def filterchunks(ui, originalhunks, usecurses, testfile, operation=None):
         else:
             recordfn = crecordmod.chunkselector
 
-        return crecordmod.filterpatch(ui, originalhunks, recordfn)
+        return crecordmod.filterpatch(ui, originalhunks, recordfn, operation)
 
     else:
         return patch.filterpatch(ui, originalhunks, operation)
@@ -555,11 +557,11 @@ def openrevlog(repo, cmd, file_, opts):
             if 'treemanifest' not in repo.requirements:
                 raise error.Abort(_("--dir can only be used on repos with "
                                    "treemanifest enabled"))
-            dirlog = repo.manifest.dirlog(dir)
+            dirlog = repo.manifestlog._revlog.dirlog(dir)
             if len(dirlog):
                 r = dirlog
         elif mf:
-            r = repo.manifest
+            r = repo.manifestlog._revlog
         elif file_:
             filelog = repo.file(file_)
             if len(filelog):
@@ -569,7 +571,7 @@ def openrevlog(repo, cmd, file_, opts):
             raise error.CommandError(cmd, _('invalid arguments'))
         if not os.path.isfile(file_):
             raise error.Abort(_("revlog '%s' not found") % file_)
-        r = revlog.revlog(scmutil.opener(os.getcwd(), audit=False),
+        r = revlog.revlog(scmutil.opener(pycompat.getcwd(), audit=False),
                           file_[:-2] + ".i")
     return r
 
@@ -818,93 +820,6 @@ def copy(ui, repo, pats, opts, rename=False):
         ui.warn(_('(consider using --after)\n'))
 
     return errors != 0
-
-def service(opts, parentfn=None, initfn=None, runfn=None, logfile=None,
-    runargs=None, appendpid=False):
-    '''Run a command as a service.'''
-
-    def writepid(pid):
-        if opts['pid_file']:
-            if appendpid:
-                mode = 'a'
-            else:
-                mode = 'w'
-            fp = open(opts['pid_file'], mode)
-            fp.write(str(pid) + '\n')
-            fp.close()
-
-    if opts['daemon'] and not opts['daemon_postexec']:
-        # Signal child process startup with file removal
-        lockfd, lockpath = tempfile.mkstemp(prefix='hg-service-')
-        os.close(lockfd)
-        try:
-            if not runargs:
-                runargs = util.hgcmd() + sys.argv[1:]
-            runargs.append('--daemon-postexec=unlink:%s' % lockpath)
-            # Don't pass --cwd to the child process, because we've already
-            # changed directory.
-            for i in xrange(1, len(runargs)):
-                if runargs[i].startswith('--cwd='):
-                    del runargs[i]
-                    break
-                elif runargs[i].startswith('--cwd'):
-                    del runargs[i:i + 2]
-                    break
-            def condfn():
-                return not os.path.exists(lockpath)
-            pid = util.rundetached(runargs, condfn)
-            if pid < 0:
-                raise error.Abort(_('child process failed to start'))
-            writepid(pid)
-        finally:
-            try:
-                os.unlink(lockpath)
-            except OSError as e:
-                if e.errno != errno.ENOENT:
-                    raise
-        if parentfn:
-            return parentfn(pid)
-        else:
-            return
-
-    if initfn:
-        initfn()
-
-    if not opts['daemon']:
-        writepid(util.getpid())
-
-    if opts['daemon_postexec']:
-        try:
-            os.setsid()
-        except AttributeError:
-            pass
-        for inst in opts['daemon_postexec']:
-            if inst.startswith('unlink:'):
-                lockpath = inst[7:]
-                os.unlink(lockpath)
-            elif inst.startswith('chdir:'):
-                os.chdir(inst[6:])
-            elif inst != 'none':
-                raise error.Abort(_('invalid value for --daemon-postexec: %s')
-                                  % inst)
-        util.hidewindow()
-        sys.stdout.flush()
-        sys.stderr.flush()
-
-        nullfd = os.open(os.devnull, os.O_RDWR)
-        logfilefd = nullfd
-        if logfile:
-            logfilefd = os.open(logfile, os.O_RDWR | os.O_CREAT | os.O_APPEND)
-        os.dup2(nullfd, 0)
-        os.dup2(logfilefd, 1)
-        os.dup2(logfilefd, 2)
-        if nullfd not in (0, 1, 2):
-            os.close(nullfd)
-        if logfile and logfilefd not in (0, 1, 2):
-            os.close(logfilefd)
-
-    if runfn:
-        return runfn()
 
 ## facility to let extension process additional data into an import patch
 # list of identifier to be executed in order
@@ -1202,8 +1117,7 @@ def diffordiffstat(ui, repo, diffopts, node1, node2, match,
         chunks = patch.diff(repo, node1, node2, match, changes, diffopts,
                             prefix=prefix, relroot=relroot)
         for chunk, label in patch.diffstatui(util.iterlines(chunks),
-                                             width=width,
-                                             git=diffopts.git):
+                                             width=width):
             write(chunk, label=label)
     else:
         for chunk, label in patch.diffui(repo, node1, node2, match,
@@ -1324,7 +1238,8 @@ class changeset_printer(object):
             mnode = ctx.manifestnode()
             # i18n: column positioning for "hg log"
             self.ui.write(_("manifest:    %d:%s\n") %
-                          (self.repo.manifest.rev(mnode), hex(mnode)),
+                          (self.repo.manifestlog._revlog.rev(mnode),
+                           hex(mnode)),
                           label='ui.debug log.manifest')
         # i18n: column positioning for "hg log"
         self.ui.write(_("user:        %s\n") % ctx.user(),
@@ -2566,11 +2481,14 @@ def cat(ui, repo, ctx, matcher, prefix, **opts):
     # for performance to avoid the cost of parsing the manifest.
     if len(matcher.files()) == 1 and not matcher.anypats():
         file = matcher.files()[0]
-        mf = repo.manifest
+        mfl = repo.manifestlog
         mfnode = ctx.manifestnode()
-        if mfnode and mf.find(mfnode, file)[0]:
-            write(file)
-            return 0
+        try:
+            if mfnode and mfl[mfnode].find(file)[0]:
+                write(file)
+                return 0
+        except KeyError:
+            pass
 
     for abs in ctx.walk(matcher):
         write(abs)
@@ -2827,7 +2745,7 @@ def commitforceeditor(repo, ctx, subs, finishdesc=None, extramsg=None,
         committext = buildcommittext(repo, ctx, subs, extramsg)
 
     # run editor in the repository root
-    olddir = os.getcwd()
+    olddir = pycompat.getcwd()
     os.chdir(repo.root)
 
     # make in-memory changes visible to external process
@@ -3249,13 +3167,18 @@ def _performrevert(repo, parents, ctx, actions, interactive=False,
         fc = ctx[f]
         repo.wwrite(f, fc.data(), fc.flags())
 
+    def doremove(f):
+        try:
+            util.unlinkpath(repo.wjoin(f))
+        except OSError:
+            pass
+        repo.dirstate.remove(f)
+
     audit_path = pathutil.pathauditor(repo.root)
     for f in actions['forget'][0]:
         if interactive:
-            choice = \
-                repo.ui.promptchoice(
-                    _("forget added file %s (yn)?$$ &Yes $$ &No")
-                    % f)
+            choice = repo.ui.promptchoice(
+                _("forget added file %s (Yn)?$$ &Yes $$ &No") % f)
             if choice == 0:
                 repo.dirstate.drop(f)
             else:
@@ -3264,11 +3187,15 @@ def _performrevert(repo, parents, ctx, actions, interactive=False,
             repo.dirstate.drop(f)
     for f in actions['remove'][0]:
         audit_path(f)
-        try:
-            util.unlinkpath(repo.wjoin(f))
-        except OSError:
-            pass
-        repo.dirstate.remove(f)
+        if interactive:
+            choice = repo.ui.promptchoice(
+                _("remove added file %s (Yn)?$$ &Yes $$ &No") % f)
+            if choice == 0:
+                doremove(f)
+            else:
+                excluded_files.append(repo.wjoin(f))
+        else:
+            doremove(f)
     for f in actions['drop'][0]:
         audit_path(f)
         repo.dirstate.remove(f)
@@ -3403,6 +3330,11 @@ def command(table):
 
     return cmd
 
+def checkunresolved(ms):
+    ms._repo.ui.deprecwarn('checkunresolved moved from cmdutil to mergeutil',
+                           '4.1')
+    return mergeutil.checkunresolved(ms)
+
 # a list of (ui, repo, otherpeer, opts, missing) functions called by
 # commands.outgoing.  "missing" is "missing" of the result of
 # "findcommonoutgoing()"
@@ -3463,7 +3395,7 @@ def howtocontinue(repo):
     '''Check for an unfinished operation and return the command to finish
     it.
 
-    afterresolvedstates tupples define a .hg/{file} and the corresponding
+    afterresolvedstates tuples define a .hg/{file} and the corresponding
     command needed to finish it.
 
     Returns a (msg, warning) tuple. 'msg' is a string and 'warning' is
@@ -3510,57 +3442,9 @@ def wrongtooltocontinue(repo, task):
         hint = after[0]
     raise error.Abort(_('no %s in progress') % task, hint=hint)
 
-class dirstateguard(object):
-    '''Restore dirstate at unexpected failure.
-
-    At the construction, this class does:
-
-    - write current ``repo.dirstate`` out, and
-    - save ``.hg/dirstate`` into the backup file
-
-    This restores ``.hg/dirstate`` from backup file, if ``release()``
-    is invoked before ``close()``.
-
-    This just removes the backup file at ``close()`` before ``release()``.
-    '''
-
+class dirstateguard(dirstateguardmod.dirstateguard):
     def __init__(self, repo, name):
-        self._repo = repo
-        self._active = False
-        self._closed = False
-        self._suffix = '.backup.%s.%d' % (name, id(self))
-        repo.dirstate.savebackup(repo.currenttransaction(), self._suffix)
-        self._active = True
-
-    def __del__(self):
-        if self._active: # still active
-            # this may occur, even if this class is used correctly:
-            # for example, releasing other resources like transaction
-            # may raise exception before ``dirstateguard.release`` in
-            # ``release(tr, ....)``.
-            self._abort()
-
-    def close(self):
-        if not self._active: # already inactivated
-            msg = (_("can't close already inactivated backup: dirstate%s")
-                   % self._suffix)
-            raise error.Abort(msg)
-
-        self._repo.dirstate.clearbackup(self._repo.currenttransaction(),
-                                         self._suffix)
-        self._active = False
-        self._closed = True
-
-    def _abort(self):
-        self._repo.dirstate.restorebackup(self._repo.currenttransaction(),
-                                           self._suffix)
-        self._active = False
-
-    def release(self):
-        if not self._closed:
-            if not self._active: # already inactivated
-                msg = (_("can't release already inactivated backup:"
-                         " dirstate%s")
-                       % self._suffix)
-                raise error.Abort(msg)
-            self._abort()
+        dirstateguardmod.dirstateguard.__init__(self, repo, name)
+        repo.ui.deprecwarn(
+            'dirstateguard has moved from cmdutil to dirstateguard',
+            '4.1')

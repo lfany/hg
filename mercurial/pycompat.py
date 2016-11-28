@@ -10,6 +10,7 @@ This contains aliases to hide python version-specific details from the core.
 
 from __future__ import absolute_import
 
+import os
 import sys
 
 ispy3 = (sys.version_info[0] >= 3)
@@ -21,6 +22,7 @@ if not ispy3:
     import Queue as _queue
     import SocketServer as socketserver
     import urlparse
+    urlunquote = urlparse.unquote
     import xmlrpclib
 else:
     import http.client as httplib
@@ -29,13 +31,36 @@ else:
     import queue as _queue
     import socketserver
     import urllib.parse as urlparse
+    urlunquote = urlparse.unquote_to_bytes
     import xmlrpc.client as xmlrpclib
 
 if ispy3:
     import builtins
     import functools
-    import os
     fsencode = os.fsencode
+    fsdecode = os.fsdecode
+    # A bytes version of os.name.
+    osname = os.name.encode('ascii')
+    ospathsep = os.pathsep.encode('ascii')
+    ossep = os.sep.encode('ascii')
+    # os.getcwd() on Python 3 returns string, but it has os.getcwdb() which
+    # returns bytes.
+    getcwd = os.getcwdb
+
+    # TODO: .buffer might not exist if std streams were replaced; we'll need
+    # a silly wrapper to make a bytes stream backed by a unicode one.
+    stdin = sys.stdin.buffer
+    stdout = sys.stdout.buffer
+    stderr = sys.stderr.buffer
+
+    # Since Python 3 converts argv to wchar_t type by Py_DecodeLocale() on Unix,
+    # we can use os.fsencode() to get back bytes argv.
+    #
+    # https://hg.python.org/cpython/file/v3.5.1/Programs/python.c#l55
+    #
+    # TODO: On Windows, the native argv is wchar_t, so we'll need a different
+    # workaround to simulate the Python 2 (i.e. ANSI Win32 API) behavior.
+    sysargv = list(map(os.fsencode, sys.argv))
 
     def sysstr(s):
         """Return a keyword str to be passed to Python functions such as
@@ -75,6 +100,20 @@ else:
         else:
             raise TypeError(
                 "expect str, not %s" % type(filename).__name__)
+
+    # In Python 2, fsdecode() has a very chance to receive bytes. So it's
+    # better not to touch Python 2 part as it's already working fine.
+    def fsdecode(filename):
+        return filename
+
+    osname = os.name
+    ospathsep = os.pathsep
+    ossep = os.sep
+    stdin = sys.stdin
+    stdout = sys.stdout
+    stderr = sys.stderr
+    sysargv = sys.argv
+    getcwd = os.getcwd
 
 stringio = io.StringIO
 empty = _queue.Empty

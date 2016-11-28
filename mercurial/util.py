@@ -24,10 +24,12 @@ import gc
 import hashlib
 import imp
 import os
+import platform as pyplatform
 import re as remod
 import shutil
 import signal
 import socket
+import stat
 import string
 import subprocess
 import sys
@@ -46,28 +48,24 @@ from . import (
     pycompat,
 )
 
-for attr in (
-    'empty',
-    'httplib',
-    'httpserver',
-    'pickle',
-    'queue',
-    'urlerr',
-    'urlparse',
-    # we do import urlreq, but we do it outside the loop
-    #'urlreq',
-    'stringio',
-    'socketserver',
-    'xmlrpclib',
-):
-    a = pycompat.sysstr(attr)
-    globals()[a] = getattr(pycompat, a)
-
-# This line is to make pyflakes happy:
+empty = pycompat.empty
+httplib = pycompat.httplib
+httpserver = pycompat.httpserver
+pickle = pycompat.pickle
+queue = pycompat.queue
+socketserver = pycompat.socketserver
+stderr = pycompat.stderr
+stdin = pycompat.stdin
+stdout = pycompat.stdout
+stringio = pycompat.stringio
+urlerr = pycompat.urlerr
+urlparse = pycompat.urlparse
 urlreq = pycompat.urlreq
+xmlrpclib = pycompat.xmlrpclib
 
 if os.name == 'nt':
     from . import windows as platform
+    stdout = platform.winstdout(pycompat.stdout)
 else:
     from . import posix as platform
 
@@ -122,7 +120,6 @@ sshargs = platform.sshargs
 statfiles = getattr(osutil, 'statfiles', platform.statfiles)
 statisexec = platform.statisexec
 statislink = platform.statislink
-termwidth = platform.termwidth
 testpid = platform.testpid
 umask = platform.umask
 unlink = platform.unlink
@@ -938,6 +935,9 @@ if mainfrozen() and getattr(sys, 'frozen', None) != 'macosx_app':
 else:
     datapath = os.path.dirname(__file__)
 
+if not isinstance(datapath, bytes):
+    datapath = pycompat.fsencode(datapath)
+
 i18n.setdatapath(datapath)
 
 _hgexecutable = None
@@ -986,7 +986,7 @@ def system(cmd, environ=None, cwd=None, onerr=None, errprefix=None, out=None):
     if environ is None:
         environ = {}
     try:
-        sys.stdout.flush()
+        stdout.flush()
     except Exception:
         pass
     def py2shell(val):
@@ -1454,7 +1454,7 @@ class filestat(object):
     def __eq__(self, old):
         try:
             # if ambiguity between stat of new and old file is
-            # avoided, comparision of size, ctime and mtime is enough
+            # avoided, comparison of size, ctime and mtime is enough
             # to exactly detect change of a file regardless of platform
             return (self.stat.st_size == old.stat.st_size and
                     self.stat.st_ctime == old.stat.st_ctime and
@@ -2206,6 +2206,78 @@ def wrap(line, width, initindent='', hangindent=''):
                             subsequent_indent=hangindent)
     return wrapper.fill(line).encode(encoding.encoding)
 
+if (pyplatform.python_implementation() == 'CPython' and
+    sys.version_info < (3, 0)):
+    # There is an issue in CPython that some IO methods do not handle EINTR
+    # correctly. The following table shows what CPython version (and functions)
+    # are affected (buggy: has the EINTR bug, okay: otherwise):
+    #
+    #                | < 2.7.4 | 2.7.4 to 2.7.12 | >= 3.0
+    #   --------------------------------------------------
+    #    fp.__iter__ | buggy   | buggy           | okay
+    #    fp.read*    | buggy   | okay [1]        | okay
+    #
+    # [1]: fixed by changeset 67dc99a989cd in the cpython hg repo.
+    #
+    # Here we workaround the EINTR issue for fileobj.__iter__. Other methods
+    # like "read*" are ignored for now, as Python < 2.7.4 is a minority.
+    #
+    # Although we can workaround the EINTR issue for fp.__iter__, it is slower:
+    # "for x in fp" is 4x faster than "for x in iter(fp.readline, '')" in
+    # CPython 2, because CPython 2 maintains an internal readahead buffer for
+    # fp.__iter__ but not other fp.read* methods.
+    #
+    # On modern systems like Linux, the "read" syscall cannot be interrupted
+    # when reading "fast" files like on-disk files. So the EINTR issue only
+    # affects things like pipes, sockets, ttys etc. We treat "normal" (S_ISREG)
+    # files approximately as "fast" files and use the fast (unsafe) code path,
+    # to minimize the performance impact.
+    if sys.version_info >= (2, 7, 4):
+        # fp.readline deals with EINTR correctly, use it as a workaround.
+        def _safeiterfile(fp):
+            return iter(fp.readline, '')
+    else:
+        # fp.read* are broken too, manually deal with EINTR in a stupid way.
+        # note: this may block longer than necessary because of bufsize.
+        def _safeiterfile(fp, bufsize=4096):
+            fd = fp.fileno()
+            line = ''
+            while True:
+                try:
+                    buf = os.read(fd, bufsize)
+                except OSError as ex:
+                    # os.read only raises EINTR before any data is read
+                    if ex.errno == errno.EINTR:
+                        continue
+                    else:
+                        raise
+                line += buf
+                if '\n' in buf:
+                    splitted = line.splitlines(True)
+                    line = ''
+                    for l in splitted:
+                        if l[-1] == '\n':
+                            yield l
+                        else:
+                            line = l
+                if not buf:
+                    break
+            if line:
+                yield line
+
+    def iterfile(fp):
+        fastpath = True
+        if type(fp) is file:
+            fastpath = stat.S_ISREG(os.fstat(fp.fileno()).st_mode)
+        if fastpath:
+            return fp
+        else:
+            return _safeiterfile(fp)
+else:
+    # PyPy and CPython 3 do not have the EINTR issue thus no workaround needed.
+    def iterfile(fp):
+        return fp
+
 def iterlines(iterator):
     for chunk in iterator:
         for line in chunk.splitlines():
@@ -2396,7 +2468,7 @@ class url(object):
 
     _safechars = "!~*'()+"
     _safepchars = "/!~*'()+:\\"
-    _matchscheme = remod.compile(r'^[a-zA-Z0-9+.\-]+:').match
+    _matchscheme = remod.compile('^[a-zA-Z0-9+.\\-]+:').match
 
     def __init__(self, path, parsequery=True, parsefragment=True):
         # We slowly chomp away at path until we have only the path left
@@ -2410,7 +2482,7 @@ class url(object):
             path, self.fragment = path.split('#', 1)
 
         # special case for Windows drive letters and UNC paths
-        if hasdriveletter(path) or path.startswith(r'\\'):
+        if hasdriveletter(path) or path.startswith('\\\\'):
             self.path = path
             return
 
@@ -2488,7 +2560,7 @@ class url(object):
                   'path', 'fragment'):
             v = getattr(self, a)
             if v is not None:
-                setattr(self, a, pycompat.urlparse.unquote(v))
+                setattr(self, a, pycompat.urlunquote(v))
 
     def __repr__(self):
         attrs = []
@@ -2687,9 +2759,9 @@ def timed(func):
         finally:
             elapsed = time.time() - start
             _timenesting[0] -= indent
-            sys.stderr.write('%s%s: %s\n' %
-                             (' ' * _timenesting[0], func.__name__,
-                              timecount(elapsed)))
+            stderr.write('%s%s: %s\n' %
+                         (' ' * _timenesting[0], func.__name__,
+                          timecount(elapsed)))
     return wrapper
 
 _sizeunits = (('m', 2**20), ('k', 2**10), ('g', 2**30),
@@ -2754,7 +2826,7 @@ def getstackframes(skip=0, line=' %-*s in %s\n', fileline='%s:%s'):
             else:
                 yield line % (fnmax, fnln, func)
 
-def debugstacktrace(msg='stacktrace', skip=0, f=sys.stderr, otherf=sys.stdout):
+def debugstacktrace(msg='stacktrace', skip=0, f=stderr, otherf=stdout):
     '''Writes a message to f (stderr) with a nicely formatted stacktrace.
     Skips the 'skip' last entries. By default it will flush stdout first.
     It can be used everywhere and intentionally does not require an ui object.
@@ -2811,32 +2883,6 @@ def finddirs(path):
     while pos != -1:
         yield path[:pos]
         pos = path.rfind('/', 0, pos)
-
-# compression utility
-
-class nocompress(object):
-    def compress(self, x):
-        return x
-    def flush(self):
-        return ""
-
-compressors = {
-    None: nocompress,
-    # lambda to prevent early import
-    'BZ': lambda: bz2.BZ2Compressor(),
-    'GZ': lambda: zlib.compressobj(),
-    }
-# also support the old form by courtesies
-compressors['UN'] = compressors[None]
-
-def _makedecompressor(decompcls):
-    def generator(f):
-        d = decompcls()
-        for chunk in filechunkiter(f):
-            yield d.decompress(chunk)
-    def func(fh):
-        return chunkbuffer(generator(fh))
-    return func
 
 class ctxmanager(object):
     '''A context manager for use in 'with' blocks to allow multiple
@@ -2898,20 +2944,302 @@ class ctxmanager(object):
             raise exc_val
         return received and suppressed
 
-def _bz2():
-    d = bz2.BZ2Decompressor()
-    # Bzip2 stream start with BZ, but we stripped it.
-    # we put it back for good measure.
-    d.decompress('BZ')
-    return d
+# compression code
 
-decompressors = {None: lambda fh: fh,
-                 '_truncatedBZ': _makedecompressor(_bz2),
-                 'BZ': _makedecompressor(lambda: bz2.BZ2Decompressor()),
-                 'GZ': _makedecompressor(lambda: zlib.decompressobj()),
-                 }
-# also support the old form by courtesies
-decompressors['UN'] = decompressors[None]
+class compressormanager(object):
+    """Holds registrations of various compression engines.
+
+    This class essentially abstracts the differences between compression
+    engines to allow new compression formats to be added easily, possibly from
+    extensions.
+
+    Compressors are registered against the global instance by calling its
+    ``register()`` method.
+    """
+    def __init__(self):
+        self._engines = {}
+        # Bundle spec human name to engine name.
+        self._bundlenames = {}
+        # Internal bundle identifier to engine name.
+        self._bundletypes = {}
+
+    def __getitem__(self, key):
+        return self._engines[key]
+
+    def __contains__(self, key):
+        return key in self._engines
+
+    def __iter__(self):
+        return iter(self._engines.keys())
+
+    def register(self, engine):
+        """Register a compression engine with the manager.
+
+        The argument must be a ``compressionengine`` instance.
+        """
+        if not isinstance(engine, compressionengine):
+            raise ValueError(_('argument must be a compressionengine'))
+
+        name = engine.name()
+
+        if name in self._engines:
+            raise error.Abort(_('compression engine %s already registered') %
+                              name)
+
+        bundleinfo = engine.bundletype()
+        if bundleinfo:
+            bundlename, bundletype = bundleinfo
+
+            if bundlename in self._bundlenames:
+                raise error.Abort(_('bundle name %s already registered') %
+                                  bundlename)
+            if bundletype in self._bundletypes:
+                raise error.Abort(_('bundle type %s already registered by %s') %
+                                  (bundletype, self._bundletypes[bundletype]))
+
+            # No external facing name declared.
+            if bundlename:
+                self._bundlenames[bundlename] = name
+
+            self._bundletypes[bundletype] = name
+
+        self._engines[name] = engine
+
+    @property
+    def supportedbundlenames(self):
+        return set(self._bundlenames.keys())
+
+    @property
+    def supportedbundletypes(self):
+        return set(self._bundletypes.keys())
+
+    def forbundlename(self, bundlename):
+        """Obtain a compression engine registered to a bundle name.
+
+        Will raise KeyError if the bundle type isn't registered.
+
+        Will abort if the engine is known but not available.
+        """
+        engine = self._engines[self._bundlenames[bundlename]]
+        if not engine.available():
+            raise error.Abort(_('compression engine %s could not be loaded') %
+                              engine.name())
+        return engine
+
+    def forbundletype(self, bundletype):
+        """Obtain a compression engine registered to a bundle type.
+
+        Will raise KeyError if the bundle type isn't registered.
+
+        Will abort if the engine is known but not available.
+        """
+        engine = self._engines[self._bundletypes[bundletype]]
+        if not engine.available():
+            raise error.Abort(_('compression engine %s could not be loaded') %
+                              engine.name())
+        return engine
+
+compengines = compressormanager()
+
+class compressionengine(object):
+    """Base class for compression engines.
+
+    Compression engines must implement the interface defined by this class.
+    """
+    def name(self):
+        """Returns the name of the compression engine.
+
+        This is the key the engine is registered under.
+
+        This method must be implemented.
+        """
+        raise NotImplementedError()
+
+    def available(self):
+        """Whether the compression engine is available.
+
+        The intent of this method is to allow optional compression engines
+        that may not be available in all installations (such as engines relying
+        on C extensions that may not be present).
+        """
+        return True
+
+    def bundletype(self):
+        """Describes bundle identifiers for this engine.
+
+        If this compression engine isn't supported for bundles, returns None.
+
+        If this engine can be used for bundles, returns a 2-tuple of strings of
+        the user-facing "bundle spec" compression name and an internal
+        identifier used to denote the compression format within bundles. To
+        exclude the name from external usage, set the first element to ``None``.
+
+        If bundle compression is supported, the class must also implement
+        ``compressstream`` and `decompressorreader``.
+        """
+        return None
+
+    def compressstream(self, it, opts=None):
+        """Compress an iterator of chunks.
+
+        The method receives an iterator (ideally a generator) of chunks of
+        bytes to be compressed. It returns an iterator (ideally a generator)
+        of bytes of chunks representing the compressed output.
+
+        Optionally accepts an argument defining how to perform compression.
+        Each engine treats this argument differently.
+        """
+        raise NotImplementedError()
+
+    def decompressorreader(self, fh):
+        """Perform decompression on a file object.
+
+        Argument is an object with a ``read(size)`` method that returns
+        compressed data. Return value is an object with a ``read(size)`` that
+        returns uncompressed data.
+        """
+        raise NotImplementedError()
+
+class _zlibengine(compressionengine):
+    def name(self):
+        return 'zlib'
+
+    def bundletype(self):
+        return 'gzip', 'GZ'
+
+    def compressstream(self, it, opts=None):
+        opts = opts or {}
+
+        z = zlib.compressobj(opts.get('level', -1))
+        for chunk in it:
+            data = z.compress(chunk)
+            # Not all calls to compress emit data. It is cheaper to inspect
+            # here than to feed empty chunks through generator.
+            if data:
+                yield data
+
+        yield z.flush()
+
+    def decompressorreader(self, fh):
+        def gen():
+            d = zlib.decompressobj()
+            for chunk in filechunkiter(fh):
+                while chunk:
+                    # Limit output size to limit memory.
+                    yield d.decompress(chunk, 2 ** 18)
+                    chunk = d.unconsumed_tail
+
+        return chunkbuffer(gen())
+
+compengines.register(_zlibengine())
+
+class _bz2engine(compressionengine):
+    def name(self):
+        return 'bz2'
+
+    def bundletype(self):
+        return 'bzip2', 'BZ'
+
+    def compressstream(self, it, opts=None):
+        opts = opts or {}
+        z = bz2.BZ2Compressor(opts.get('level', 9))
+        for chunk in it:
+            data = z.compress(chunk)
+            if data:
+                yield data
+
+        yield z.flush()
+
+    def decompressorreader(self, fh):
+        def gen():
+            d = bz2.BZ2Decompressor()
+            for chunk in filechunkiter(fh):
+                yield d.decompress(chunk)
+
+        return chunkbuffer(gen())
+
+compengines.register(_bz2engine())
+
+class _truncatedbz2engine(compressionengine):
+    def name(self):
+        return 'bz2truncated'
+
+    def bundletype(self):
+        return None, '_truncatedBZ'
+
+    # We don't implement compressstream because it is hackily handled elsewhere.
+
+    def decompressorreader(self, fh):
+        def gen():
+            # The input stream doesn't have the 'BZ' header. So add it back.
+            d = bz2.BZ2Decompressor()
+            d.decompress('BZ')
+            for chunk in filechunkiter(fh):
+                yield d.decompress(chunk)
+
+        return chunkbuffer(gen())
+
+compengines.register(_truncatedbz2engine())
+
+class _noopengine(compressionengine):
+    def name(self):
+        return 'none'
+
+    def bundletype(self):
+        return 'none', 'UN'
+
+    def compressstream(self, it, opts=None):
+        return it
+
+    def decompressorreader(self, fh):
+        return fh
+
+compengines.register(_noopengine())
+
+class _zstdengine(compressionengine):
+    def name(self):
+        return 'zstd'
+
+    @propertycache
+    def _module(self):
+        # Not all installs have the zstd module available. So defer importing
+        # until first access.
+        try:
+            from . import zstd
+            # Force delayed import.
+            zstd.__version__
+            return zstd
+        except ImportError:
+            return None
+
+    def available(self):
+        return bool(self._module)
+
+    def bundletype(self):
+        return 'zstd', 'ZS'
+
+    def compressstream(self, it, opts=None):
+        opts = opts or {}
+        # zstd level 3 is almost always significantly faster than zlib
+        # while providing no worse compression. It strikes a good balance
+        # between speed and compression.
+        level = opts.get('level', 3)
+
+        zstd = self._module
+        z = zstd.ZstdCompressor(level=level).compressobj()
+        for chunk in it:
+            data = z.compress(chunk)
+            if data:
+                yield data
+
+        yield z.flush()
+
+    def decompressorreader(self, fh):
+        zstd = self._module
+        dctx = zstd.ZstdDecompressor()
+        return chunkbuffer(dctx.read_from(fh))
+
+compengines.register(_zstdengine())
 
 # convenient shortcut
 dst = debugstacktrace

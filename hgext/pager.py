@@ -72,6 +72,7 @@ from mercurial import (
     commands,
     dispatch,
     encoding,
+    error,
     extensions,
     util,
     )
@@ -87,14 +88,10 @@ def _runpager(ui, p):
                              close_fds=util.closefds, stdin=subprocess.PIPE,
                              stdout=util.stdout, stderr=util.stderr)
 
-    # back up original file objects and descriptors
-    olduifout = ui.fout
-    oldstdout = util.stdout
+    # back up original file descriptors
     stdoutfd = os.dup(util.stdout.fileno())
     stderrfd = os.dup(util.stderr.fileno())
 
-    # create new line-buffered stdout so that output can show up immediately
-    ui.fout = util.stdout = newstdout = os.fdopen(util.stdout.fileno(), 'wb', 1)
     os.dup2(pager.stdin.fileno(), util.stdout.fileno())
     if ui._isatty(util.stderr):
         os.dup2(pager.stdin.fileno(), util.stderr.fileno())
@@ -103,16 +100,14 @@ def _runpager(ui, p):
     def killpager():
         if util.safehasattr(signal, "SIGINT"):
             signal.signal(signal.SIGINT, signal.SIG_IGN)
-        pager.stdin.close()
-        ui.fout = olduifout
-        util.stdout = oldstdout
-        # close new stdout while it's associated with pager; otherwise stdout
-        # fd would be closed when newstdout is deleted
-        newstdout.close()
-        # restore original fds: stdout is open again
+        # restore original fds, closing pager.stdin copies in the process
         os.dup2(stdoutfd, util.stdout.fileno())
         os.dup2(stderrfd, util.stderr.fileno())
+        pager.stdin.close()
         pager.wait()
+
+def catchterm(*args):
+    raise error.SignalInterrupt
 
 def uisetup(ui):
     class pagerui(ui.__class__):
@@ -154,7 +149,7 @@ def uisetup(ui):
             ui.setconfig('ui', 'formatted', ui.formatted(), 'pager')
             ui.setconfig('ui', 'interactive', False, 'pager')
             if util.safehasattr(signal, "SIGPIPE"):
-                signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+                signal.signal(signal.SIGPIPE, catchterm)
             ui._runpager(p)
         return orig(ui, options, cmd, cmdfunc)
 

@@ -59,6 +59,7 @@ from . import (
     revset,
     scmutil,
     server,
+    smartset,
     sshserver,
     sslutil,
     streamclone,
@@ -1902,7 +1903,7 @@ def debuginstall(ui, **opts):
     fm.write('pythonver', _("checking Python version (%s)\n"),
              ("%d.%d.%d" % sys.version_info[:3]))
     fm.write('pythonlib', _("checking Python lib (%s)...\n"),
-             os.path.dirname(os.__file__))
+             os.path.dirname(pycompat.fsencode(os.__file__)))
 
     security = set(sslutil.supportedprotocols)
     if sslutil.hassni:
@@ -2804,8 +2805,8 @@ def debugrevspec(ui, repo, expr, **opts):
         arevs = revset.makematcher(treebystage['analyzed'])(repo)
         brevs = revset.makematcher(treebystage['optimized'])(repo)
         if ui.verbose:
-            ui.note(("* analyzed set:\n"), revset.prettyformatset(arevs), "\n")
-            ui.note(("* optimized set:\n"), revset.prettyformatset(brevs), "\n")
+            ui.note(("* analyzed set:\n"), smartset.prettyformat(arevs), "\n")
+            ui.note(("* optimized set:\n"), smartset.prettyformat(brevs), "\n")
         arevs = list(arevs)
         brevs = list(brevs)
         if arevs == brevs:
@@ -2828,7 +2829,7 @@ def debugrevspec(ui, repo, expr, **opts):
     func = revset.makematcher(tree)
     revs = func(repo)
     if ui.verbose:
-        ui.note(("* set:\n"), revset.prettyformatset(revs), "\n")
+        ui.note(("* set:\n"), smartset.prettyformat(revs), "\n")
     for c in revs:
         ui.write("%s\n" % c)
 
@@ -3916,6 +3917,7 @@ def help_(ui, name=None, **opts):
     if ui.verbose:
         keep.append('verbose')
 
+    fullname = name
     section = None
     subtopic = None
     if name and '.' in name:
@@ -3938,7 +3940,7 @@ def help_(ui, name=None, **opts):
     # to look for, or we could have simply failed to found "foo.bar"
     # because bar isn't a section of foo
     if section and not (formatted and name):
-        raise error.Abort(_("help section not found"))
+        raise error.Abort(_("help section not found: %s") % fullname)
 
     if 'verbose' in pruned:
         keep.append('omitted')
@@ -4127,8 +4129,9 @@ def import_(ui, repo, patch1=None, *patches, **opts):
     Import a list of patches and commit them individually (unless
     --no-commit is specified).
 
-    To read a patch from standard input, use "-" as the patch name. If
-    a URL is specified, the patch will be downloaded from there.
+    To read a patch from standard input (stdin), use "-" as the patch
+    name. If a URL is specified, the patch will be downloaded from
+    there.
 
     Import first applies changes to the working directory (unless
     --bypass is specified), import will abort if there are outstanding
@@ -4197,6 +4200,10 @@ def import_(ui, repo, patch1=None, *patches, **opts):
       - import all the patches in an Unix-style mbox::
 
           hg import incoming-patches.mbox
+
+      - import patches from stdin::
+
+          hg import -
 
       - attempt to exactly restore an exported changeset (not always
         possible)::

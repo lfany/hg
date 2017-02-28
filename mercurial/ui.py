@@ -7,13 +7,17 @@
 
 from __future__ import absolute_import
 
+import atexit
+import collections
 import contextlib
 import errno
 import getpass
 import inspect
 import os
 import re
+import signal
 import socket
+import subprocess
 import sys
 import tempfile
 import traceback
@@ -22,6 +26,7 @@ from .i18n import _
 from .node import hex
 
 from . import (
+    color,
     config,
     encoding,
     error,
@@ -33,6 +38,14 @@ from . import (
 )
 
 urlreq = util.urlreq
+
+# for use with str.translate(None, _keepalnum), to keep just alphanumerics
+if pycompat.ispy3:
+    _bytes = [bytes([c]) for c in range(256)]
+    _notalnum = [s for s in _bytes if not s.isalnum()]
+else:
+    _notalnum = [c for c in map(chr, range(256)) if not c.isalnum()]
+_keepalnum = ''.join(_notalnum)
 
 samplehgrcs = {
     'user':
@@ -94,6 +107,26 @@ default = %s
 # pager =""",
 }
 
+
+class httppasswordmgrdbproxy(object):
+    """Delays loading urllib2 until it's needed."""
+    def __init__(self):
+        self._mgr = None
+
+    def _get_mgr(self):
+        if self._mgr is None:
+            self._mgr = urlreq.httppasswordmgrwithdefaultrealm()
+        return self._mgr
+
+    def add_password(self, *args, **kwargs):
+        return self._get_mgr().add_password(*args, **kwargs)
+
+    def find_user_password(self, *args, **kwargs):
+        return self._get_mgr().find_user_password(*args, **kwargs)
+
+def _catchterm(*args):
+    raise error.SignalInterrupt
+
 class ui(object):
     def __init__(self, src=None):
         """Create a fresh new ui object if no src given
@@ -120,11 +153,19 @@ class ui(object):
         self.callhooks = True
         # Insecure server connections requested.
         self.insecureconnections = False
+        # Blocked time
+        self.logblockedtimes = False
+        # color mode: see mercurial/color.py for possible value
+        self._colormode = None
+        self._terminfoparams = {}
+        self._styles = {}
 
         if src:
             self.fout = src.fout
             self.ferr = src.ferr
             self.fin = src.fin
+            self.pageractive = src.pageractive
+            self._disablepager = src._disablepager
 
             self._tcfg = src._tcfg.copy()
             self._ucfg = src._ucfg.copy()
@@ -134,18 +175,26 @@ class ui(object):
             self.environ = src.environ
             self.callhooks = src.callhooks
             self.insecureconnections = src.insecureconnections
+            self._colormode = src._colormode
+            self._terminfoparams = src._terminfoparams.copy()
+            self._styles = src._styles.copy()
+
             self.fixconfig()
 
             self.httppasswordmgrdb = src.httppasswordmgrdb
+            self._blockedtimes = src._blockedtimes
         else:
             self.fout = util.stdout
             self.ferr = util.stderr
             self.fin = util.stdin
+            self.pageractive = False
+            self._disablepager = False
 
             # shared read-only environment
             self.environ = encoding.environ
 
-            self.httppasswordmgrdb = urlreq.httppasswordmgrwithdefaultrealm()
+            self.httppasswordmgrdb = httppasswordmgrdbproxy()
+            self._blockedtimes = collections.defaultdict(int)
 
         allowed = self.configlist('experimental', 'exportableenviron')
         if '*' in allowed:
@@ -172,7 +221,17 @@ class ui(object):
         """Clear internal state that shouldn't persist across commands"""
         if self._progbar:
             self._progbar.resetstate()  # reset last-print time of progress bar
-        self.httppasswordmgrdb = urlreq.httppasswordmgrwithdefaultrealm()
+        self.httppasswordmgrdb = httppasswordmgrdbproxy()
+
+    @contextlib.contextmanager
+    def timeblockedsection(self, key):
+        # this is open-coded below - search for timeblockedsection to find them
+        starttime = util.timer()
+        try:
+            yield
+        finally:
+            self._blockedtimes[key + '_blocked'] += \
+                (util.timer() - starttime) * 1000
 
     def formatter(self, topic, opts):
         return formatter.formatter(self, topic, opts)
@@ -277,6 +336,7 @@ class ui(object):
             self._reportuntrusted = self.debugflag or self.configbool("ui",
                 "report_untrusted", True)
             self.tracebackflag = self.configbool('ui', 'traceback', False)
+            self.logblockedtimes = self.configbool('ui', 'logblockedtimes')
 
         if section in (None, 'trusted'):
             # update trust information
@@ -402,6 +462,41 @@ class ui(object):
                                     % (section, name, v))
         return b
 
+    def configwith(self, convert, section, name, default=None,
+                   desc=None, untrusted=False):
+        """parse a configuration element with a conversion function
+
+        >>> u = ui(); s = 'foo'
+        >>> u.setconfig(s, 'float1', '42')
+        >>> u.configwith(float, s, 'float1')
+        42.0
+        >>> u.setconfig(s, 'float2', '-4.25')
+        >>> u.configwith(float, s, 'float2')
+        -4.25
+        >>> u.configwith(float, s, 'unknown', 7)
+        7
+        >>> u.setconfig(s, 'invalid', 'somevalue')
+        >>> u.configwith(float, s, 'invalid')
+        Traceback (most recent call last):
+            ...
+        ConfigError: foo.invalid is not a valid float ('somevalue')
+        >>> u.configwith(float, s, 'invalid', desc='womble')
+        Traceback (most recent call last):
+            ...
+        ConfigError: foo.invalid is not a valid womble ('somevalue')
+        """
+
+        v = self.config(section, name, None, untrusted)
+        if v is None:
+            return default
+        try:
+            return convert(v)
+        except ValueError:
+            if desc is None:
+                desc = convert.__name__
+            raise error.ConfigError(_("%s.%s is not a valid %s ('%s')")
+                                    % (section, name, desc, v))
+
     def configint(self, section, name, default=None, untrusted=False):
         """parse a configuration element as an integer
 
@@ -418,17 +513,11 @@ class ui(object):
         >>> u.configint(s, 'invalid')
         Traceback (most recent call last):
             ...
-        ConfigError: foo.invalid is not an integer ('somevalue')
+        ConfigError: foo.invalid is not a valid integer ('somevalue')
         """
 
-        v = self.config(section, name, None, untrusted)
-        if v is None:
-            return default
-        try:
-            return int(v)
-        except ValueError:
-            raise error.ConfigError(_("%s.%s is not an integer ('%s')")
-                                    % (section, name, v))
+        return self.configwith(int, section, name, default, 'integer',
+                               untrusted)
 
     def configbytes(self, section, name, default=0, untrusted=False):
         """parse a configuration element as a quantity in bytes
@@ -696,54 +785,175 @@ class ui(object):
     def write(self, *args, **opts):
         '''write args to output
 
-        By default, this method simply writes to the buffer or stdout,
-        but extensions or GUI tools may override this method,
-        write_err(), popbuffer(), and label() to style output from
-        various parts of hg.
+        By default, this method simply writes to the buffer or stdout.
+        Color mode can be set on the UI class to have the output decorated
+        with color modifier before being written to stdout.
 
-        An optional keyword argument, "label", can be passed in.
-        This should be a string containing label names separated by
-        space. Label names take the form of "topic.type". For example,
-        ui.debug() issues a label of "ui.debug".
+        The color used is controlled by an optional keyword argument, "label".
+        This should be a string containing label names separated by space.
+        Label names take the form of "topic.type". For example, ui.debug()
+        issues a label of "ui.debug".
 
         When labeling output for a specific command, a label of
         "cmdname.type" is recommended. For example, status issues
         a label of "status.modified" for modified files.
         '''
         if self._buffers and not opts.get('prompt', False):
-            self._buffers[-1].extend(a for a in args)
+            if self._bufferapplylabels:
+                label = opts.get('label', '')
+                self._buffers[-1].extend(self.label(a, label) for a in args)
+            else:
+                self._buffers[-1].extend(args)
+        elif self._colormode == 'win32':
+            # windows color printing is its own can of crab, defer to
+            # the color module and that is it.
+            color.win32print(self, self._write, *args, **opts)
         else:
+            msgs = args
+            if self._colormode is not None:
+                label = opts.get('label', '')
+                msgs = [self.label(a, label) for a in args]
+            self._write(*msgs, **opts)
+
+    def _write(self, *msgs, **opts):
             self._progclear()
-            for a in args:
-                self.fout.write(a)
+            # opencode timeblockedsection because this is a critical path
+            starttime = util.timer()
+            try:
+                for a in msgs:
+                    self.fout.write(a)
+            finally:
+                self._blockedtimes['stdio_blocked'] += \
+                    (util.timer() - starttime) * 1000
 
     def write_err(self, *args, **opts):
         self._progclear()
+        if self._bufferstates and self._bufferstates[-1][0]:
+            self.write(*args, **opts)
+        elif self._colormode == 'win32':
+            # windows color printing is its own can of crab, defer to
+            # the color module and that is it.
+            color.win32print(self, self._write_err, *args, **opts)
+        else:
+            msgs = args
+            if self._colormode is not None:
+                label = opts.get('label', '')
+                msgs = [self.label(a, label) for a in args]
+            self._write_err(*msgs, **opts)
+
+    def _write_err(self, *msgs, **opts):
         try:
-            if self._bufferstates and self._bufferstates[-1][0]:
-                return self.write(*args, **opts)
-            if not getattr(self.fout, 'closed', False):
-                self.fout.flush()
-            for a in args:
-                self.ferr.write(a)
-            # stderr may be buffered under win32 when redirected to files,
-            # including stdout.
-            if not getattr(self.ferr, 'closed', False):
-                self.ferr.flush()
+            with self.timeblockedsection('stdio'):
+                if not getattr(self.fout, 'closed', False):
+                    self.fout.flush()
+                for a in msgs:
+                    self.ferr.write(a)
+                # stderr may be buffered under win32 when redirected to files,
+                # including stdout.
+                if not getattr(self.ferr, 'closed', False):
+                    self.ferr.flush()
         except IOError as inst:
             if inst.errno not in (errno.EPIPE, errno.EIO, errno.EBADF):
                 raise
 
     def flush(self):
-        try: self.fout.flush()
-        except (IOError, ValueError): pass
-        try: self.ferr.flush()
-        except (IOError, ValueError): pass
+        # opencode timeblockedsection because this is a critical path
+        starttime = util.timer()
+        try:
+            try: self.fout.flush()
+            except (IOError, ValueError): pass
+            try: self.ferr.flush()
+            except (IOError, ValueError): pass
+        finally:
+            self._blockedtimes['stdio_blocked'] += \
+                (util.timer() - starttime) * 1000
 
     def _isatty(self, fh):
         if self.configbool('ui', 'nontty', False):
             return False
         return util.isatty(fh)
+
+    def disablepager(self):
+        self._disablepager = True
+
+    def pager(self, command):
+        """Start a pager for subsequent command output.
+
+        Commands which produce a long stream of output should call
+        this function to activate the user's preferred pagination
+        mechanism (which may be no pager). Calling this function
+        precludes any future use of interactive functionality, such as
+        prompting the user or activating curses.
+
+        Args:
+          command: The full, non-aliased name of the command. That is, "log"
+                   not "history, "summary" not "summ", etc.
+        """
+        if (self._disablepager
+            or self.pageractive
+            or command in self.configlist('pager', 'ignore')
+            or not self.configbool('pager', 'enable', True)
+            or not self.configbool('pager', 'attend-' + command, True)
+            # TODO: if we want to allow HGPLAINEXCEPT=pager,
+            # formatted() will need some adjustment.
+            or not self.formatted()
+            or self.plain()
+            # TODO: expose debugger-enabled on the UI object
+            or '--debugger' in sys.argv):
+            # We only want to paginate if the ui appears to be
+            # interactive, the user didn't say HGPLAIN or
+            # HGPLAINEXCEPT=pager, and the user didn't specify --debug.
+            return
+
+        # TODO: add a "system defaults" config section so this default
+        # of more(1) can be easily replaced with a global
+        # configuration file. For example, on OS X the sane default is
+        # less(1), not more(1), and on debian it's
+        # sensible-pager(1). We should probably also give the system
+        # default editor command similar treatment.
+        envpager = encoding.environ.get('PAGER', 'more')
+        pagercmd = self.config('pager', 'pager', envpager)
+        if not pagercmd:
+            return
+
+        self.debug('starting pager for command %r\n' % command)
+        self.pageractive = True
+        # Preserve the formatted-ness of the UI. This is important
+        # because we mess with stdout, which might confuse
+        # auto-detection of things being formatted.
+        self.setconfig('ui', 'formatted', self.formatted(), 'pager')
+        self.setconfig('ui', 'interactive', False, 'pager')
+        if util.safehasattr(signal, "SIGPIPE"):
+            signal.signal(signal.SIGPIPE, _catchterm)
+        self._runpager(pagercmd)
+
+    def _runpager(self, command):
+        """Actually start the pager and set up file descriptors.
+
+        This is separate in part so that extensions (like chg) can
+        override how a pager is invoked.
+        """
+        pager = subprocess.Popen(command, shell=True, bufsize=-1,
+                                 close_fds=util.closefds, stdin=subprocess.PIPE,
+                                 stdout=util.stdout, stderr=util.stderr)
+
+        # back up original file descriptors
+        stdoutfd = os.dup(util.stdout.fileno())
+        stderrfd = os.dup(util.stderr.fileno())
+
+        os.dup2(pager.stdin.fileno(), util.stdout.fileno())
+        if self._isatty(util.stderr):
+            os.dup2(pager.stdin.fileno(), util.stderr.fileno())
+
+        @atexit.register
+        def killpager():
+            if util.safehasattr(signal, "SIGINT"):
+                signal.signal(signal.SIGINT, signal.SIG_IGN)
+            # restore original fds, closing pager.stdin copies in the process
+            os.dup2(stdoutfd, util.stdout.fileno())
+            os.dup2(stderrfd, util.stderr.fileno())
+            pager.stdin.close()
+            pager.wait()
 
     def interface(self, feature):
         """what interface to use for interactive console features?
@@ -900,7 +1110,8 @@ class ui(object):
         sys.stdout = self.fout
         # prompt ' ' must exist; otherwise readline may delete entire line
         # - http://bugs.python.org/issue12833
-        line = raw_input(' ')
+        with self.timeblockedsection('stdio'):
+            line = raw_input(' ')
         sys.stdin = oldin
         sys.stdout = oldout
 
@@ -980,13 +1191,14 @@ class ui(object):
             self.write_err(self.label(prompt or _('password: '), 'ui.prompt'))
             # disable getpass() only if explicitly specified. it's still valid
             # to interact with tty even if fin is not a tty.
-            if self.configbool('ui', 'nontty'):
-                l = self.fin.readline()
-                if not l:
-                    raise EOFError
-                return l.rstrip('\n')
-            else:
-                return getpass.getpass('')
+            with self.timeblockedsection('stdio'):
+                if self.configbool('ui', 'nontty'):
+                    l = self.fin.readline()
+                    if not l:
+                        raise EOFError
+                    return l.rstrip('\n')
+                else:
+                    return getpass.getpass('')
         except EOFError:
             raise error.ResponseExpected()
     def status(self, *msg, **opts):
@@ -1038,7 +1250,7 @@ class ui(object):
                                       suffix=extra['suffix'], text=True,
                                       dir=rdir)
         try:
-            f = os.fdopen(fd, "w")
+            f = os.fdopen(fd, pycompat.sysstr("w"))
             f.write(text)
             f.close()
 
@@ -1058,7 +1270,8 @@ class ui(object):
 
             self.system("%s \"%s\"" % (editor, name),
                         environ=environ,
-                        onerr=error.Abort, errprefix=_("edit failed"))
+                        onerr=error.Abort, errprefix=_("edit failed"),
+                        blockedtag='editor')
 
             f = open(name)
             t = f.read()
@@ -1068,15 +1281,33 @@ class ui(object):
 
         return t
 
-    def system(self, cmd, environ=None, cwd=None, onerr=None, errprefix=None):
+    def system(self, cmd, environ=None, cwd=None, onerr=None, errprefix=None,
+               blockedtag=None):
         '''execute shell command with appropriate output stream. command
         output will be redirected if fout is not stdout.
+
+        if command fails and onerr is None, return status, else raise onerr
+        object as exception.
         '''
+        if blockedtag is None:
+            blockedtag = 'unknown_system_' + cmd.translate(None, _keepalnum)
         out = self.fout
         if any(s[1] for s in self._bufferstates):
             out = self
-        return util.system(cmd, environ=environ, cwd=cwd, onerr=onerr,
-                           errprefix=errprefix, out=out)
+        with self.timeblockedsection(blockedtag):
+            rc = self._runsystem(cmd, environ=environ, cwd=cwd, out=out)
+        if rc and onerr:
+            errmsg = '%s %s' % (os.path.basename(cmd.split(None, 1)[0]),
+                                util.explainexit(rc)[0])
+            if errprefix:
+                errmsg = '%s: %s' % (errprefix, errmsg)
+            raise onerr(errmsg)
+        return rc
+
+    def _runsystem(self, cmd, environ, cwd, out):
+        """actually execute the given shell command (can be overridden by
+        extensions like chg)"""
+        return util.system(cmd, environ=environ, cwd=cwd, out=out)
 
     def traceback(self, exc=None, force=False):
         '''print exception traceback if traceback printing enabled or forced.
@@ -1180,13 +1411,15 @@ class ui(object):
     def label(self, msg, label):
         '''style msg based on supplied label
 
-        Like ui.write(), this just returns msg unchanged, but extensions
-        and GUI tools can override it to allow styling output without
-        writing it.
+        If some color mode is enabled, this will add the necessary control
+        characters to apply such color. In addition, 'debug' color mode adds
+        markup showing which label affects a piece of text.
 
         ui.write(s, 'label') is equivalent to
         ui.write(ui.label(s, 'label')).
         '''
+        if self._colormode is not None:
+            return color.colorlabel(self, msg, label)
         return msg
 
     def develwarn(self, msg, stacklevel=1, config=None):

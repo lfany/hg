@@ -36,7 +36,7 @@ file open in your editor::
  #  p, pick = use commit
  #  e, edit = use commit, but stop for amending
  #  f, fold = use commit, but combine it with the one above
- #  r, roll = like fold, but discard this commit's description
+ #  r, roll = like fold, but discard this commit's description and date
  #  d, drop = remove commit from history
  #  m, mess = edit commit message without changing commit content
  #
@@ -58,7 +58,7 @@ would reorganize the file to look like this::
  #  p, pick = use commit
  #  e, edit = use commit, but stop for amending
  #  f, fold = use commit, but combine it with the one above
- #  r, roll = like fold, but discard this commit's description
+ #  r, roll = like fold, but discard this commit's description and date
  #  d, drop = remove commit from history
  #  m, mess = edit commit message without changing commit content
  #
@@ -71,11 +71,11 @@ those revisions together, offering you a chance to clean up the commit message::
  ***
  Add delta
 
-Edit the commit message to your liking, then close the editor. For
-this example, let's assume that the commit message was changed to
-``Add beta and delta.`` After histedit has run and had a chance to
-remove any old or temporary revisions it needed, the history looks
-like this::
+Edit the commit message to your liking, then close the editor. The date used
+for the commit will be the later of the two commits' dates. For this example,
+let's assume that the commit message was changed to ``Add beta and delta.``
+After histedit has run and had a chance to remove any old or temporary
+revisions it needed, the history looks like this::
 
  @  2[tip]   989b4d060121   2009-04-27 18:04 -0500   durin42
  |    Add beta and delta.
@@ -97,9 +97,10 @@ The ``edit`` operation will drop you back to a command prompt,
 allowing you to edit files freely, or even use ``hg record`` to commit
 some changes as a separate commit. When you're done, any remaining
 uncommitted changes will be committed as well. When done, run ``hg
-histedit --continue`` to finish this step. You'll be prompted for a
-new commit message, but the default commit message will be the
-original message for the ``edit`` ed revision.
+histedit --continue`` to finish this step. If there are uncommitted
+changes, you'll be prompted for a new commit message, but the default
+commit message will be the original message for the ``edit`` ed
+revision, and the date of the original commit will be preserved.
 
 The ``message`` operation will give you a chance to revise a commit
 message without changing the contents. It's a shortcut for doing
@@ -724,6 +725,15 @@ class fold(histeditaction):
         """
         return True
 
+    def firstdate(self):
+        """Returns true if the rule should preserve the date of the first
+        change.
+
+        This exists mainly so that 'rollup' rules can be a subclass of
+        'fold'.
+        """
+        return False
+
     def finishfold(self, ui, repo, ctx, oldctx, newnode, internalchanges):
         parent = ctx.parents()[0].node()
         repo.ui.pushbuffer()
@@ -742,7 +752,10 @@ class fold(histeditaction):
                 [oldctx.description()]) + '\n'
         commitopts['message'] = newmessage
         # date
-        commitopts['date'] = max(ctx.date(), oldctx.date())
+        if self.firstdate():
+            commitopts['date'] = ctx.date()
+        else:
+            commitopts['date'] = max(ctx.date(), oldctx.date())
         extra = ctx.extra().copy()
         # histedit_source
         # note: ctx is likely a temporary commit but that the best we can do
@@ -809,12 +822,15 @@ class _multifold(fold):
         return True
 
 @action(["roll", "r"],
-        _("like fold, but discard this commit's description"))
+        _("like fold, but discard this commit's description and date"))
 class rollup(fold):
     def mergedescs(self):
         return False
 
     def skipprompt(self):
+        return True
+
+    def firstdate(self):
         return True
 
 @action(["drop", "d"],
@@ -884,11 +900,11 @@ def histedit(ui, repo, *freeargs, **opts):
 
     - `mess` to reword the changeset commit message
 
-    - `fold` to combine it with the preceding changeset
+    - `fold` to combine it with the preceding changeset (using the later date)
 
-    - `roll` like fold, but discarding this commit's description
+    - `roll` like fold, but discarding this commit's description and date
 
-    - `edit` to edit this changeset
+    - `edit` to edit this changeset (preserving date)
 
     There are a number of ways to select the root changeset:
 
@@ -992,7 +1008,8 @@ def _getgoal(opts):
 
 def _readfile(ui, path):
     if path == '-':
-        return ui.fin.read()
+        with ui.timeblockedsection('histedit'):
+            return ui.fin.read()
     else:
         with open(path, 'rb') as f:
             return f.read()

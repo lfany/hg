@@ -47,6 +47,7 @@ from mercurial import (
     repoview,
     revset,
     scmutil,
+    smartset,
     util,
 )
 
@@ -118,8 +119,8 @@ def _revsetdestrebase(repo, subset, x):
     # i18n: "_rebasedefaultdest" is a keyword
     sourceset = None
     if x is not None:
-        sourceset = revset.getset(repo, revset.fullreposet(repo), x)
-    return subset & revset.baseset([_destrebase(repo, sourceset)])
+        sourceset = revset.getset(repo, smartset.fullreposet(repo), x)
+    return subset & smartset.baseset([_destrebase(repo, sourceset)])
 
 class rebaseruntime(object):
     """This class is a container for rebase runtime state"""
@@ -1367,7 +1368,7 @@ def _setrebasesetvisibility(repo, revs):
     """store the currently rebased set on the repo object
 
     This is used by another function to prevent rebased revision to because
-    hidden (see issue4505)"""
+    hidden (see issue4504)"""
     repo = repo.unfiltered()
     revs = set(revs)
     repo._rebaseset = revs
@@ -1383,7 +1384,7 @@ def _clearrebasesetvisibiliy(repo):
         del repo._rebaseset
 
 def _rebasedvisible(orig, repo):
-    """ensure rebased revs stay visible (see issue4505)"""
+    """ensure rebased revs stay visible (see issue4504)"""
     blockers = orig(repo)
     blockers.update(getattr(repo, '_rebaseset', ()))
     return blockers

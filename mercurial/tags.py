@@ -14,7 +14,6 @@ from __future__ import absolute_import
 
 import array
 import errno
-import time
 
 from .node import (
     bin,
@@ -25,6 +24,7 @@ from .node import (
 from . import (
     encoding,
     error,
+    scmutil,
     util,
 )
 
@@ -278,8 +278,6 @@ def _readtagcache(ui, repo):
     If the cache is not up to date, the caller is responsible for reading tag
     info from each returned head. (See findglobaltags().)
     '''
-    from . import scmutil  # avoid cycle
-
     try:
         cachefile = repo.vfs(_filename(repo), 'r')
         # force reading the file for static-http
@@ -344,7 +342,7 @@ def _readtagcache(ui, repo):
         # potentially expensive search.
         return ([], {}, valid, None, True)
 
-    starttime = time.time()
+    starttime = util.timer()
 
     # Now we have to lookup the .hgtags filenode for every new head.
     # This is the most expensive part of finding tags, so performance
@@ -359,7 +357,7 @@ def _readtagcache(ui, repo):
 
     fnodescache.write()
 
-    duration = time.time() - starttime
+    duration = util.timer() - starttime
     ui.log('tagscache',
            '%d/%d cache hits/lookups in %0.4f '
            'seconds\n',

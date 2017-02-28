@@ -11,6 +11,8 @@ Create a repository:
   ui.interactive=False
   ui.mergemarkers=detailed
   ui.promptecho=True
+  web.address=localhost
+  web\.ipv6=(?:True|False) (re)
   $ hg init t
   $ cd t
 

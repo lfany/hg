@@ -732,13 +732,15 @@ def updatetotally(ui, repo, checkout, brev, clean=False, check=False):
         movemarkfrom = None
         warndest = False
         if checkout is None:
-            updata = destutil.destupdate(repo, clean=clean, check=check)
+            updata = destutil.destupdate(repo, clean=clean)
             checkout, movemarkfrom, brev = updata
             warndest = True
 
         if clean:
             ret = _clean(repo, checkout)
         else:
+            if check:
+                cmdutil.bailifchanged(repo, merge=False)
             ret = _update(repo, checkout)
 
         if not ret and movemarkfrom:
@@ -802,7 +804,7 @@ def _incoming(displaychlist, subreporecurse, ui, repo, source,
         if not chlist:
             ui.status(_("no changes found\n"))
             return subreporecurse()
-
+        ui.pager('incoming')
         displayer = cmdutil.show_changeset(ui, other, opts, buffered)
         displaychlist(other, chlist, displayer)
         displayer.close()
@@ -870,6 +872,7 @@ def outgoing(ui, repo, dest, opts):
 
     if opts.get('newest_first'):
         o.reverse()
+    ui.pager('outgoing')
     displayer = cmdutil.show_changeset(ui, repo, opts)
     count = 0
     for n in o:

@@ -1166,7 +1166,7 @@ def _changesrange(fctx1, fctx2, linerange2, diffopts):
     diffinrange = any(stype == '!' for _, stype in filteredblocks)
     return diffinrange, linerange1
 
-def blockancestors(fctx, fromline, toline):
+def blockancestors(fctx, fromline, toline, followfirst=False):
     """Yield ancestors of `fctx` with respect to the block of lines within
     `fromline`-`toline` range.
     """
@@ -1175,9 +1175,11 @@ def blockancestors(fctx, fromline, toline):
     while visit:
         c, linerange2 = visit.pop(max(visit))
         pl = c.parents()
+        if followfirst:
+            pl = pl[:1]
         if not pl:
             # The block originates from the initial revision.
-            yield c
+            yield c, linerange2
             continue
         inrange = False
         for p in pl:
@@ -1190,7 +1192,7 @@ def blockancestors(fctx, fromline, toline):
                 continue
             visit[p.linkrev(), p.filenode()] = p, linerange1
         if inrange:
-            yield c
+            yield c, linerange2
 
 class committablectx(basectx):
     """A committablectx object provides common functionality for a context that

@@ -28,10 +28,12 @@ from mercurial import (
     merge,
     node as nodemod,
     patch,
+    pycompat,
     registrar,
     revlog,
     revset,
     scmutil,
+    smartset,
     util,
 )
 
@@ -197,7 +199,7 @@ class transplanter(object):
                     patchfile = None
                 else:
                     fd, patchfile = tempfile.mkstemp(prefix='hg-transplant-')
-                    fp = os.fdopen(fd, 'w')
+                    fp = os.fdopen(fd, pycompat.sysstr('w'))
                     gen = patch.diff(source, parent, node, opts=diffopts)
                     for chunk in gen:
                         fp.write(chunk)
@@ -245,7 +247,7 @@ class transplanter(object):
         self.ui.status(_('filtering %s\n') % patchfile)
         user, date, msg = (changelog[1], changelog[2], changelog[4])
         fd, headerfile = tempfile.mkstemp(prefix='hg-transplant-')
-        fp = os.fdopen(fd, 'w')
+        fp = os.fdopen(fd, pycompat.sysstr('w'))
         fp.write("# HG changeset patch\n")
         fp.write("# User %s\n" % user)
         fp.write("# Date %d %d\n" % date)
@@ -722,7 +724,7 @@ def revsettransplanted(repo, subset, x):
         s = revset.getset(repo, subset, x)
     else:
         s = subset
-    return revset.baseset([r for r in s if
+    return smartset.baseset([r for r in s if
         repo[r].extra().get('transplant_source')])
 
 templatekeyword = registrar.templatekeyword()

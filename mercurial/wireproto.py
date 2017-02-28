@@ -26,6 +26,7 @@ from . import (
     exchange,
     peer,
     pushkey as pushkeymod,
+    pycompat,
     streamclone,
     util,
 )
@@ -839,7 +840,6 @@ def getbundle(repo, proto, others):
             raise error.Abort(bundle2requiredmain,
                               hint=bundle2requiredhint)
 
-    #chunks = exchange.getbundlechunks(repo, 'serve', **opts)
     try:
         chunks = exchange.getbundlechunks(repo, 'serve', **opts)
     except error.Abort as exc:
@@ -961,7 +961,7 @@ def unbundle(repo, proto, heads):
 
         # write bundle data to temporary file because it can be big
         fd, tempname = tempfile.mkstemp(prefix='hg-unbundle-')
-        fp = os.fdopen(fd, 'wb+')
+        fp = os.fdopen(fd, pycompat.sysstr('wb+'))
         r = 0
         try:
             proto.getfile(fp)

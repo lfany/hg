@@ -28,6 +28,7 @@ from . import (
     bundle2,
     changegroup,
     changelog,
+    color,
     context,
     dirstate,
     dirstateguard,
@@ -50,11 +51,13 @@ from . import (
     pushkey,
     repoview,
     revset,
+    revsetlang,
     scmutil,
     store,
     subrepo,
     tags as tagsmod,
     transaction,
+    txnutil,
     util,
 )
 
@@ -270,7 +273,7 @@ class localrepository(object):
         self._phasedefaults = []
         try:
             self.ui.readconfig(self.join("hgrc"), self.root)
-            extensions.loadall(self.ui)
+            self._loadextensions()
         except IOError:
             pass
 
@@ -283,6 +286,7 @@ class localrepository(object):
                     setupfunc(self.ui, self.supported)
         else:
             self.supported = self._basesupported
+        color.setup(self.ui)
 
         # Add compression engines.
         for name in util.compengines:
@@ -370,6 +374,9 @@ class localrepository(object):
 
     def close(self):
         self._writecaches()
+
+    def _loadextensions(self):
+        extensions.loadall(self.ui)
 
     def _writecaches(self):
         if self._revbranchcache:
@@ -509,10 +516,8 @@ class localrepository(object):
     @storecache('00changelog.i')
     def changelog(self):
         c = changelog.changelog(self.svfs)
-        if 'HG_PENDING' in encoding.environ:
-            p = encoding.environ['HG_PENDING']
-            if p.startswith(self.root):
-                c.readpending('00changelog.i.a')
+        if txnutil.mayhavepending(self.root):
+            c.readpending('00changelog.i.a')
         return c
 
     def _constructmanifest(self):
@@ -570,15 +575,16 @@ class localrepository(object):
         '''Find revisions matching a revset.
 
         The revset is specified as a string ``expr`` that may contain
-        %-formatting to escape certain types. See ``revset.formatspec``.
+        %-formatting to escape certain types. See ``revsetlang.formatspec``.
 
         Revset aliases from the configuration are not expanded. To expand
-        user aliases, consider calling ``scmutil.revrange()``.
+        user aliases, consider calling ``scmutil.revrange()`` or
+        ``repo.anyrevs([expr], user=True)``.
 
         Returns a revset.abstractsmartset, which is a list-like interface
         that contains integer revisions.
         '''
-        expr = revset.formatspec(expr, *args)
+        expr = revsetlang.formatspec(expr, *args)
         m = revset.match(None, expr)
         return m(self)
 
@@ -593,6 +599,18 @@ class localrepository(object):
         '''
         for r in self.revs(expr, *args):
             yield self[r]
+
+    def anyrevs(self, specs, user=False):
+        '''Find revisions matching one of the given revsets.
+
+        Revset aliases from the configuration are not expanded by default. To
+        expand user aliases, specify ``user=True``.
+        '''
+        if user:
+            m = revset.matchany(self.ui, specs, repo=self)
+        else:
+            m = revset.matchany(None, specs)
+        return m(self)
 
     def url(self):
         return 'file:' + self.root
@@ -1852,6 +1870,11 @@ class localrepository(object):
                                   listsubrepos)
 
     def heads(self, start=None):
+        if start is None:
+            cl = self.changelog
+            headrevs = reversed(cl.headrevs())
+            return [cl.node(rev) for rev in headrevs]
+
         heads = self.changelog.heads(start)
         # sort the output in rev descending order
         return sorted(heads, key=self.changelog.rev, reverse=True)

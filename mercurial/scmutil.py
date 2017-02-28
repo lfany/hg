@@ -29,7 +29,7 @@ from . import (
     pathutil,
     phases,
     pycompat,
-    revset,
+    revsetlang,
     similar,
     util,
 )
@@ -890,7 +890,7 @@ def revsingle(repo, revspec, default='.'):
     return repo[l.last()]
 
 def _pairspec(revspec):
-    tree = revset.parse(revspec)
+    tree = revsetlang.parse(revspec)
     return tree and tree[0] in ('range', 'rangepre', 'rangepost', 'rangeall')
 
 def revpair(repo, revs):
@@ -936,7 +936,7 @@ def revrange(repo, specs):
     revision numbers.
 
     It is assumed the revsets are already formatted. If you have arguments
-    that need to be expanded in the revset, call ``revset.formatspec()``
+    that need to be expanded in the revset, call ``revsetlang.formatspec()``
     and pass the result as an element of ``specs``.
 
     Specifying a single revset is allowed.
@@ -947,10 +947,9 @@ def revrange(repo, specs):
     allspecs = []
     for spec in specs:
         if isinstance(spec, int):
-            spec = revset.formatspec('rev(%d)', spec)
+            spec = revsetlang.formatspec('rev(%d)', spec)
         allspecs.append(spec)
-    m = revset.matchany(repo.ui, allspecs, repo)
-    return m(repo)
+    return repo.anyrevs(allspecs, user=True)
 
 def meaningfulparents(repo, ctx):
     """Return list of meaningful (or all if debug) parentrevs for rev.

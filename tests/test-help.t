@@ -113,6 +113,7 @@ Short help:
    hgweb         Configuring hgweb
    internals     Technical implementation topics
    merge-tools   Merge Tools
+   pager         Pager Support
    patterns      File Name Patterns
    phases        Working with Phases
    revisions     Specifying Revisions
@@ -188,6 +189,7 @@ Short help:
    hgweb         Configuring hgweb
    internals     Technical implementation topics
    merge-tools   Merge Tools
+   pager         Pager Support
    patterns      File Name Patterns
    phases        Working with Phases
    revisions     Specifying Revisions
@@ -262,7 +264,6 @@ Test extension help:
        largefiles    track large binary files
        mq            manage a stack of patches
        notify        hooks for sending email push notifications
-       pager         browse command output with an external pager
        patchbomb     command to send changesets as (a series of) patch emails
        purge         command to delete untracked files from the working
                      directory
@@ -315,6 +316,8 @@ Test short command list with verbose option
                           all prompts
    -q --quiet             suppress output
    -v --verbose           enable additional output
+      --color TYPE        when to colorize (boolean, always, auto, never, or
+                          debug) (EXPERIMENTAL)
       --config CONFIG [+] set/override config option (use 'section.name=value')
       --debug             enable debugging output
       --debugger          start debugger
@@ -326,6 +329,8 @@ Test short command list with verbose option
       --version           output version information and exit
    -h --help              display help and exit
       --hidden            consider hidden changesets
+      --pager TYPE        when to paginate (boolean, always, auto, or never)
+                          (default: auto)
   
   (use 'hg help' for the full list of commands)
 
@@ -411,6 +416,8 @@ Verbose help for add
                           all prompts
    -q --quiet             suppress output
    -v --verbose           enable additional output
+      --color TYPE        when to colorize (boolean, always, auto, never, or
+                          debug) (EXPERIMENTAL)
       --config CONFIG [+] set/override config option (use 'section.name=value')
       --debug             enable debugging output
       --debugger          start debugger
@@ -422,6 +429,8 @@ Verbose help for add
       --version           output version information and exit
    -h --help              display help and exit
       --hidden            consider hidden changesets
+      --pager TYPE        when to paginate (boolean, always, auto, or never)
+                          (default: auto)
 
 Test the textwidth config option
 
@@ -678,6 +687,7 @@ this is a section and erroring out weirdly.
   >     ('', 'newline', '', 'line1\nline2')],
   >     'hg nohelp',
   >     norepo=True)
+  > @command('debugoptADV', [('', 'aopt', None, 'option is (ADVANCED)')])
   > @command('debugoptDEP', [('', 'dopt', None, 'option is (DEPRECATED)')])
   > @command('debugoptEXP', [('', 'eopt', None, 'option is (EXPERIMENTAL)')])
   > def nohelp(ui, *args, **kwargs):
@@ -827,6 +837,7 @@ Test that default list of commands omits extension commands
    hgweb         Configuring hgweb
    internals     Technical implementation topics
    merge-tools   Merge Tools
+   pager         Pager Support
    patterns      File Name Patterns
    phases        Working with Phases
    revisions     Specifying Revisions
@@ -889,6 +900,7 @@ Test list of internal help commands
                  complete "names" - tags, open branch names, bookmark names
    debugobsolete
                  create arbitrary obsolete marker
+   debugoptADV   (no help text available)
    debugoptDEP   (no help text available)
    debugoptEXP   (no help text available)
    debugpathcomplete
@@ -1102,7 +1114,15 @@ Test list of commands with command with no help text
   (use 'hg help -v helpext' to show built-in aliases and global options)
 
 
-test deprecated and experimental options are hidden in command help
+test advanced, deprecated and experimental options are hidden in command help
+  $ hg help debugoptADV
+  hg debugoptADV
+  
+  (no help text available)
+  
+  options:
+  
+  (some details hidden, use --verbose to show complete help)
   $ hg help debugoptDEP
   hg debugoptDEP
   
@@ -1121,7 +1141,9 @@ test deprecated and experimental options are hidden in command help
   
   (some details hidden, use --verbose to show complete help)
 
-test deprecated and experimental options is shown with -v
+test advanced, deprecated and experimental options are shown with -v
+  $ hg help -v debugoptADV | grep aopt
+    --aopt option is (ADVANCED)
   $ hg help -v debugoptDEP | grep dopt
     --dopt option is (DEPRECATED)
   $ hg help -v debugoptEXP | grep eopt
@@ -1547,11 +1569,11 @@ Test section lookup
          "default:pushurl" should be used instead.
   
   $ hg help glossary.mcguffin
-  abort: help section not found
+  abort: help section not found: glossary.mcguffin
   [255]
 
   $ hg help glossary.mc.guffin
-  abort: help section not found
+  abort: help section not found: glossary.mc.guffin
   [255]
 
   $ hg help template.files
@@ -1792,7 +1814,7 @@ Dish up an empty repo; serve it cold.
   $ hg serve -R "$TESTTMP/test" -n test -p $HGPORT -d --pid-file=hg.pid
   $ cat hg.pid >> $DAEMON_PIDS
 
-  $ get-with-headers.py 127.0.0.1:$HGPORT "help"
+  $ get-with-headers.py $LOCALIP:$HGPORT "help"
   200 Script output follows
   
   <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
@@ -1912,6 +1934,13 @@ Dish up an empty repo; serve it cold.
   </a>
   </td><td>
   Merge Tools
+  </td></tr>
+  <tr><td>
+  <a href="/help/pager">
+  pager
+  </a>
+  </td><td>
+  Pager Support
   </td></tr>
   <tr><td>
   <a href="/help/patterns">
@@ -2361,7 +2390,7 @@ Dish up an empty repo; serve it cold.
   </html>
   
 
-  $ get-with-headers.py 127.0.0.1:$HGPORT "help/add"
+  $ get-with-headers.py $LOCALIP:$HGPORT "help/add"
   200 Script output follows
   
   <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
@@ -2491,6 +2520,9 @@ Dish up an empty repo; serve it cold.
   <td>--verbose</td>
   <td>enable additional output</td></tr>
   <tr><td></td>
+  <td>--color TYPE</td>
+  <td>when to colorize (boolean, always, auto, never, or debug) (EXPERIMENTAL)</td></tr>
+  <tr><td></td>
   <td>--config CONFIG [+]</td>
   <td>set/override config option (use 'section.name=value')</td></tr>
   <tr><td></td>
@@ -2523,6 +2555,9 @@ Dish up an empty repo; serve it cold.
   <tr><td></td>
   <td>--hidden</td>
   <td>consider hidden changesets</td></tr>
+  <tr><td></td>
+  <td>--pager TYPE</td>
+  <td>when to paginate (boolean, always, auto, or never) (default: auto)</td></tr>
   </table>
   
   </div>
@@ -2535,7 +2570,7 @@ Dish up an empty repo; serve it cold.
   </html>
   
 
-  $ get-with-headers.py 127.0.0.1:$HGPORT "help/remove"
+  $ get-with-headers.py $LOCALIP:$HGPORT "help/remove"
   200 Script output follows
   
   <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
@@ -2686,6 +2721,9 @@ Dish up an empty repo; serve it cold.
   <td>--verbose</td>
   <td>enable additional output</td></tr>
   <tr><td></td>
+  <td>--color TYPE</td>
+  <td>when to colorize (boolean, always, auto, never, or debug) (EXPERIMENTAL)</td></tr>
+  <tr><td></td>
   <td>--config CONFIG [+]</td>
   <td>set/override config option (use 'section.name=value')</td></tr>
   <tr><td></td>
@@ -2718,6 +2756,9 @@ Dish up an empty repo; serve it cold.
   <tr><td></td>
   <td>--hidden</td>
   <td>consider hidden changesets</td></tr>
+  <tr><td></td>
+  <td>--pager TYPE</td>
+  <td>when to paginate (boolean, always, auto, or never) (default: auto)</td></tr>
   </table>
   
   </div>
@@ -2730,7 +2771,7 @@ Dish up an empty repo; serve it cold.
   </html>
   
 
-  $ get-with-headers.py 127.0.0.1:$HGPORT "help/dates"
+  $ get-with-headers.py $LOCALIP:$HGPORT "help/dates"
   200 Script output follows
   
   <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
@@ -2837,7 +2878,7 @@ Dish up an empty repo; serve it cold.
 
 Sub-topic indexes rendered properly
 
-  $ get-with-headers.py 127.0.0.1:$HGPORT "help/internals"
+  $ get-with-headers.py $LOCALIP:$HGPORT "help/internals"
   200 Script output follows
   
   <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
@@ -2933,7 +2974,7 @@ Sub-topic indexes rendered properly
 
 Sub-topic topics rendered properly
 
-  $ get-with-headers.py 127.0.0.1:$HGPORT "help/internals.changegroups"
+  $ get-with-headers.py $LOCALIP:$HGPORT "help/internals.changegroups"
   200 Script output follows
   
   <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">

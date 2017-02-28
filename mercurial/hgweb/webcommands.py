@@ -32,7 +32,9 @@ from .. import (
     error,
     graphmod,
     revset,
+    revsetlang,
     scmutil,
+    smartset,
     templatefilters,
     templater,
     util,
@@ -238,20 +240,20 @@ def _search(web, req, tmpl):
 
         revdef = 'reverse(%s)' % query
         try:
-            tree = revset.parse(revdef)
+            tree = revsetlang.parse(revdef)
         except error.ParseError:
             # can't parse to a revset tree
             return MODE_KEYWORD, query
 
-        if revset.depth(tree) <= 2:
+        if revsetlang.depth(tree) <= 2:
             # no revset syntax used
             return MODE_KEYWORD, query
 
         if any((token, (value or '')[:3]) == ('string', 're:')
-                    for token, value, pos in revset.tokenize(revdef)):
+               for token, value, pos in revsetlang.tokenize(revdef)):
             return MODE_KEYWORD, query
 
-        funcsused = revset.funcsused(tree)
+        funcsused = revsetlang.funcsused(tree)
         if not funcsused.issubset(revset.safesymbols):
             return MODE_KEYWORD, query
 
@@ -752,13 +754,14 @@ def filediff(web, req, tmpl):
     if fctx is not None:
         path = fctx.path()
         ctx = fctx.changectx()
+    basectx = ctx.p1()
 
     parity = paritygen(web.stripecount)
     style = web.config('web', 'style', 'paper')
     if 'style' in req.form:
         style = req.form['style'][0]
 
-    diffs = webutil.diffs(web.repo, tmpl, ctx, None, [path], parity, style)
+    diffs = webutil.diffs(web.repo, tmpl, ctx, basectx, [path], parity, style)
     if fctx is not None:
         rename = webutil.renamelink(fctx)
         ctx = fctx
@@ -1148,7 +1151,7 @@ def graph(web, req, tmpl):
         # We have to feed a baseset to dagwalker as it is expecting smartset
         # object. This does not have a big impact on hgweb performance itself
         # since hgweb graphing code is not itself lazy yet.
-        dag = graphmod.dagwalker(web.repo, revset.baseset(revs))
+        dag = graphmod.dagwalker(web.repo, smartset.baseset(revs))
         # As we said one line above... not lazy.
         tree = list(graphmod.colored(dag, web.repo))
 

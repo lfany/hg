@@ -320,9 +320,6 @@ def processbundle(repo, unbundler, transactiongetter=None, op=None):
     It iterates over each part then searches for and uses the proper handling
     code to process the part. Parts are processed in order.
 
-    This is very early version of this function that will be strongly reworked
-    before final usage.
-
     Unknown Mandatory part will abort the process.
 
     It is temporarily possible to provide a prebuilt bundleoperation to the
@@ -864,6 +861,11 @@ class bundlepart(object):
         # - True: generation done.
         self._generated = None
         self.mandatory = mandatory
+
+    def __repr__(self):
+        cls = "%s.%s" % (self.__class__.__module__, self.__class__.__name__)
+        return ('<%s object at %x; id: %s; type: %s; mandatory: %s>'
+                % (cls, id(self), self.id, self.type, self.mandatory))
 
     def copy(self):
         """return a copy of the part

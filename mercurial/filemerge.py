@@ -489,8 +489,11 @@ def _xmerge(repo, mynode, orig, fcd, fco, fca, toolconf, files, labels=None):
     args = util.interpolate(r'\$', replace, args,
                             lambda s: util.shellquote(util.localpath(s)))
     cmd = toolpath + ' ' + args
+    if _toolbool(ui, tool, "gui"):
+        repo.ui.status(_('running merge tool %s for file %s\n') %
+                       (tool, fcd.path()))
     repo.ui.debug('launching merge tool: %s\n' % cmd)
-    r = ui.system(cmd, cwd=repo.root, environ=env)
+    r = ui.system(cmd, cwd=repo.root, environ=env, blockedtag='mergetool')
     repo.ui.debug('merge tool returned: %s\n' % r)
     return True, r, False
 
@@ -582,7 +585,7 @@ def _filemerge(premerge, repo, mynode, orig, fcd, fco, fca, labels=None):
         pre = "%s~%s." % (os.path.basename(fullbase), prefix)
         (fd, name) = tempfile.mkstemp(prefix=pre, suffix=ext)
         data = repo.wwritedata(ctx.path(), ctx.data())
-        f = os.fdopen(fd, "wb")
+        f = os.fdopen(fd, pycompat.sysstr("wb"))
         f.write(data)
         f.close()
         return name

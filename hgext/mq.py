@@ -14,7 +14,7 @@ applied patches (subset of known patches).
 Known patches are represented as patch files in the .hg/patches
 directory. Applied patches are both patch files and changesets.
 
-Common tasks (use :hg:`help command` for more details)::
+Common tasks (use :hg:`help COMMAND` for more details)::
 
   create new patch                          qnew
   import existing patch                     qimport
@@ -89,10 +89,12 @@ from mercurial import (
     phases,
     pycompat,
     registrar,
-    revset,
+    revsetlang,
     scmutil,
+    smartset,
     subrepo,
     util,
+    vfs as vfsmod,
 )
 
 release = lockmod.release
@@ -433,7 +435,7 @@ class queue(object):
         except IOError:
             curpath = os.path.join(path, 'patches')
         self.path = patchdir or curpath
-        self.opener = scmutil.opener(self.path)
+        self.opener = vfsmod.vfs(self.path)
         self.ui = ui
         self.baseui = baseui
         self.applieddirty = False
@@ -2675,6 +2677,7 @@ def diff(ui, repo, *pats, **opts):
 
     Returns 0 on success.
     """
+    ui.pager('qdiff')
     repo.mq.diff(repo, pats, opts)
     return 0
 
@@ -3567,9 +3570,9 @@ revsetpredicate = registrar.revsetpredicate()
 def revsetmq(repo, subset, x):
     """Changesets managed by MQ.
     """
-    revset.getargs(x, 0, 0, _("mq takes no arguments"))
+    revsetlang.getargs(x, 0, 0, _("mq takes no arguments"))
     applied = set([repo[r.node].rev() for r in repo.mq.applied])
-    return revset.baseset([r for r in subset if r in applied])
+    return smartset.baseset([r for r in subset if r in applied])
 
 # tell hggettext to extract docstrings from these functions:
 i18nfunctions = [revsetmq]

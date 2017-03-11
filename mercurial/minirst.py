@@ -138,7 +138,7 @@ def findliteralblocks(blocks):
         i += 1
     return blocks
 
-_bulletre = re.compile(r'(-|[0-9A-Za-z]+\.|\(?[0-9A-Za-z]+\)|\|) ')
+_bulletre = re.compile(r'(\*|-|[0-9A-Za-z]+\.|\(?[0-9A-Za-z]+\)|\|) ')
 _optionre = re.compile(r'^(-([a-zA-Z0-9]), )?(--[a-z0-9-]+)'
                        r'((.*)  +)(.*)$')
 _fieldre = re.compile(r':(?![: ])([^:]*)(?<! ):[ ]+(.*)')
@@ -411,18 +411,33 @@ def prunecomments(blocks):
             i += 1
     return blocks
 
-_admonitionre = re.compile(r"\.\. (admonition|attention|caution|danger|"
-                           r"error|hint|important|note|tip|warning)::",
-                           flags=re.IGNORECASE)
 
-def findadmonitions(blocks):
+_admonitions = set([
+    'admonition',
+    'attention',
+    'caution',
+    'danger',
+    'error',
+    'hint',
+    'important',
+    'note',
+    'tip',
+    'warning',
+])
+
+def findadmonitions(blocks, admonitions=None):
     """
     Makes the type of the block an admonition block if
     the first line is an admonition directive
     """
+    admonitions = admonitions or _admonitions
+
+    admonitionre = re.compile(r'\.\. (%s)::' % '|'.join(sorted(admonitions)),
+                              flags=re.IGNORECASE)
+
     i = 0
     while i < len(blocks):
-        m = _admonitionre.match(blocks[i]['lines'][0])
+        m = admonitionre.match(blocks[i]['lines'][0])
         if m:
             blocks[i]['type'] = 'admonition'
             admonitiontitle = blocks[i]['lines'][0][3:m.end() - 2].lower()
@@ -596,7 +611,7 @@ def formathtml(blocks):
             out.append(' <dt>%s\n <dd>%s\n' % (term, text))
         elif btype == 'bullet':
             bullet, head = lines[0].split(' ', 1)
-            if bullet == '-':
+            if bullet in ('*', '-'):
                 openlist('ul', level)
             else:
                 openlist('ol', level)
@@ -629,7 +644,7 @@ def formathtml(blocks):
 
     return ''.join(out)
 
-def parse(text, indent=0, keep=None):
+def parse(text, indent=0, keep=None, admonitions=None):
     """Parse text into a list of blocks"""
     pruned = []
     blocks = findblocks(text)
@@ -644,7 +659,7 @@ def parse(text, indent=0, keep=None):
     blocks = splitparagraphs(blocks)
     blocks = updatefieldlists(blocks)
     blocks = updateoptionlists(blocks)
-    blocks = findadmonitions(blocks)
+    blocks = findadmonitions(blocks, admonitions=admonitions)
     blocks = addmargins(blocks)
     blocks = prunecomments(blocks)
     return blocks, pruned

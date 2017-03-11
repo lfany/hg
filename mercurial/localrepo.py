@@ -28,6 +28,7 @@ from . import (
     bundle2,
     changegroup,
     changelog,
+    color,
     context,
     dirstate,
     dirstateguard,
@@ -50,12 +51,15 @@ from . import (
     pushkey,
     repoview,
     revset,
+    revsetlang,
     scmutil,
     store,
     subrepo,
     tags as tagsmod,
     transaction,
+    txnutil,
     util,
+    vfs as vfsmod,
 )
 
 release = lockmod.release
@@ -66,6 +70,8 @@ class repofilecache(scmutil.filecache):
     """All filecache usage on repo are done for logic that should be unfiltered
     """
 
+    def join(self, obj, fname):
+        return obj.vfs.join(fname)
     def __get__(self, repo, type=None):
         if repo is None:
             return self
@@ -241,7 +247,7 @@ class localrepository(object):
     supportedformats = set(('revlogv1', 'generaldelta', 'treemanifest',
                             'manifestv2'))
     _basesupported = supportedformats | set(('store', 'fncache', 'shared',
-                                             'dotencode'))
+                                             'relshared', 'dotencode'))
     openerreqs = set(('revlogv1', 'generaldelta', 'treemanifest', 'manifestv2'))
     filtername = None
 
@@ -251,16 +257,19 @@ class localrepository(object):
 
     def __init__(self, baseui, path, create=False):
         self.requirements = set()
-        self.wvfs = scmutil.vfs(path, expandpath=True, realpath=True)
-        self.wopener = self.wvfs
+        # vfs to access the working copy
+        self.wvfs = vfsmod.vfs(path, expandpath=True, realpath=True)
+        # vfs to access the content of the repository
+        self.vfs = None
+        # vfs to access the store part of the repository
+        self.svfs = None
         self.root = self.wvfs.base
         self.path = self.wvfs.join(".hg")
         self.origroot = path
         self.auditor = pathutil.pathauditor(self.root, self._checknested)
         self.nofsauditor = pathutil.pathauditor(self.root, self._checknested,
                                                 realfs=False)
-        self.vfs = scmutil.vfs(self.path)
-        self.opener = self.vfs
+        self.vfs = vfsmod.vfs(self.path)
         self.baseui = baseui
         self.ui = baseui.copy()
         self.ui.copy = baseui.copy # prevent copying repo configuration
@@ -270,7 +279,7 @@ class localrepository(object):
         self._phasedefaults = []
         try:
             self.ui.readconfig(self.join("hgrc"), self.root)
-            extensions.loadall(self.ui)
+            self._loadextensions()
         except IOError:
             pass
 
@@ -283,6 +292,7 @@ class localrepository(object):
                     setupfunc(self.ui, self.supported)
         else:
             self.supported = self._basesupported
+        color.setup(self.ui)
 
         # Add compression engines.
         for name in util.compengines:
@@ -321,8 +331,10 @@ class localrepository(object):
 
         self.sharedpath = self.path
         try:
-            vfs = scmutil.vfs(self.vfs.read("sharedpath").rstrip('\n'),
-                              realpath=True)
+            sharedpath = self.vfs.read("sharedpath").rstrip('\n')
+            if 'relshared' in self.requirements:
+                sharedpath = self.vfs.join(sharedpath)
+            vfs = vfsmod.vfs(sharedpath, realpath=True)
             s = vfs.base
             if not vfs.exists():
                 raise error.RepoError(
@@ -333,7 +345,7 @@ class localrepository(object):
                 raise
 
         self.store = store.store(
-                self.requirements, self.sharedpath, scmutil.vfs)
+                self.requirements, self.sharedpath, vfsmod.vfs)
         self.spath = self.store.path
         self.svfs = self.store.vfs
         self.sjoin = self.store.join
@@ -368,8 +380,21 @@ class localrepository(object):
         # generic mapping between names and nodes
         self.names = namespaces.namespaces()
 
+    @property
+    def wopener(self):
+        self.ui.deprecwarn("use 'repo.wvfs' instead of 'repo.wopener'", '4.2')
+        return self.wvfs
+
+    @property
+    def opener(self):
+        self.ui.deprecwarn("use 'repo.vfs' instead of 'repo.opener'", '4.2')
+        return self.vfs
+
     def close(self):
         self._writecaches()
+
+    def _loadextensions(self):
+        extensions.loadall(self.ui)
 
     def _writecaches(self):
         if self._revbranchcache:
@@ -461,9 +486,9 @@ class localrepository(object):
         """Return a filtered version of a repository"""
         # build a new class with the mixin and the current class
         # (possibly subclass of the repo)
-        class proxycls(repoview.repoview, self.unfiltered().__class__):
+        class filteredrepo(repoview.repoview, self.unfiltered().__class__):
             pass
-        return proxycls(self, name)
+        return filteredrepo(self, name)
 
     @repofilecache('bookmarks', 'bookmarks.current')
     def _bookmarks(self):
@@ -509,10 +534,8 @@ class localrepository(object):
     @storecache('00changelog.i')
     def changelog(self):
         c = changelog.changelog(self.svfs)
-        if 'HG_PENDING' in encoding.environ:
-            p = encoding.environ['HG_PENDING']
-            if p.startswith(self.root):
-                c.readpending('00changelog.i.a')
+        if txnutil.mayhavepending(self.root):
+            c.readpending('00changelog.i.a')
         return c
 
     def _constructmanifest(self):
@@ -570,15 +593,16 @@ class localrepository(object):
         '''Find revisions matching a revset.
 
         The revset is specified as a string ``expr`` that may contain
-        %-formatting to escape certain types. See ``revset.formatspec``.
+        %-formatting to escape certain types. See ``revsetlang.formatspec``.
 
         Revset aliases from the configuration are not expanded. To expand
-        user aliases, consider calling ``scmutil.revrange()``.
+        user aliases, consider calling ``scmutil.revrange()`` or
+        ``repo.anyrevs([expr], user=True)``.
 
         Returns a revset.abstractsmartset, which is a list-like interface
         that contains integer revisions.
         '''
-        expr = revset.formatspec(expr, *args)
+        expr = revsetlang.formatspec(expr, *args)
         m = revset.match(None, expr)
         return m(self)
 
@@ -593,6 +617,18 @@ class localrepository(object):
         '''
         for r in self.revs(expr, *args):
             yield self[r]
+
+    def anyrevs(self, specs, user=False):
+        '''Find revisions matching one of the given revsets.
+
+        Revset aliases from the configuration are not expanded by default. To
+        expand user aliases, specify ``user=True``.
+        '''
+        if user:
+            m = revset.matchany(self.ui, specs, repo=self)
+        else:
+            m = revset.matchany(None, specs)
+        return m(self)
 
     def url(self):
         return 'file:' + self.root
@@ -1852,6 +1888,11 @@ class localrepository(object):
                                   listsubrepos)
 
     def heads(self, start=None):
+        if start is None:
+            cl = self.changelog
+            headrevs = reversed(cl.headrevs())
+            return [cl.node(rev) for rev in headrevs]
+
         heads = self.changelog.heads(start)
         # sort the output in rev descending order
         return sorted(heads, key=self.changelog.rev, reverse=True)
@@ -1972,6 +2013,14 @@ def aftertrans(files):
     renamefiles = [tuple(t) for t in files]
     def a():
         for vfs, src, dest in renamefiles:
+            try:
+                # if src and dest refer to a same file, vfs.rename is a no-op,
+                # leaving both src and dest on disk. delete dest to make sure
+                # the rename couldn't be such a no-op.
+                vfs.unlink(dest)
+            except OSError as ex:
+                if ex.errno != errno.ENOENT:
+                    raise
             try:
                 vfs.rename(src, dest)
             except OSError: # journal file does not yet exist

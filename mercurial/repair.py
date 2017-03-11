@@ -12,7 +12,6 @@ import errno
 import hashlib
 import stat
 import tempfile
-import time
 
 from .i18n import _
 from .node import short
@@ -27,6 +26,7 @@ from . import (
     revlog,
     scmutil,
     util,
+    vfs as vfsmod,
 )
 
 def _bundle(repo, bases, heads, node, suffix, compress=True):
@@ -883,7 +883,7 @@ def _upgraderepo(ui, srcrepo, dstrepo, requirements, actions):
     ui.write(_('data fully migrated to temporary repository\n'))
 
     backuppath = tempfile.mkdtemp(prefix='upgradebackup.', dir=srcrepo.path)
-    backupvfs = scmutil.vfs(backuppath)
+    backupvfs = vfsmod.vfs(backuppath)
 
     # Make a backup of requires file first, as it is the first to be modified.
     util.copyfile(srcrepo.join('requires'), backupvfs.join('requires'))
@@ -905,10 +905,10 @@ def _upgraderepo(ui, srcrepo, dstrepo, requirements, actions):
     # the operation nearly instantaneous and atomic (at least in well-behaved
     # environments).
     ui.write(_('replacing store...\n'))
-    tstart = time.time()
+    tstart = util.timer()
     util.rename(srcrepo.spath, backupvfs.join('store'))
     util.rename(dstrepo.spath, srcrepo.spath)
-    elapsed = time.time() - tstart
+    elapsed = util.timer() - tstart
     ui.write(_('store replacement complete; repository was inconsistent for '
                '%0.1fs\n') % elapsed)
 

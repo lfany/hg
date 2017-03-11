@@ -18,11 +18,11 @@ from .node import (
     bin,
     hex,
     modifiednodeid,
-    newnodeid,
     nullid,
     nullrev,
     short,
     wdirid,
+    wdirnodes,
 )
 from . import (
     encoding,
@@ -90,14 +90,11 @@ class basectx(object):
     def __iter__(self):
         return iter(self._manifest)
 
-    def _manifestmatches(self, match, s):
-        """generate a new manifest filtered by the match argument
-
-        This method is for internal use only and mainly exists to provide an
-        object oriented way for other contexts to customize the manifest
-        generation.
-        """
-        return self.manifest().matches(match)
+    def _buildstatusmanifest(self, status):
+        """Builds a manifest that includes the given status results, if this is
+        a working copy context. For non-working copy contexts, it just returns
+        the normal manifest."""
+        return self.manifest()
 
     def _matchstatus(self, other, match):
         """return match.always if match is none
@@ -116,17 +113,19 @@ class basectx(object):
         # 1000 and cache it so that when you read 1001, we just need to apply a
         # delta to what's in the cache. So that's one full reconstruction + one
         # delta application.
+        mf2 = None
         if self.rev() is not None and self.rev() < other.rev():
-            self.manifest()
-        mf1 = other._manifestmatches(match, s)
-        mf2 = self._manifestmatches(match, s)
+            mf2 = self._buildstatusmanifest(s)
+        mf1 = other._buildstatusmanifest(s)
+        if mf2 is None:
+            mf2 = self._buildstatusmanifest(s)
 
         modified, added = [], []
         removed = []
         clean = []
         deleted, unknown, ignored = s.deleted, s.unknown, s.ignored
         deletedset = set(deleted)
-        d = mf1.diff(mf2, clean=listclean)
+        d = mf1.diff(mf2, match=match, clean=listclean)
         for fn, value in d.iteritems():
             if fn in deletedset:
                 continue
@@ -140,7 +139,7 @@ class basectx(object):
                 removed.append(fn)
             elif flag1 != flag2:
                 modified.append(fn)
-            elif node2 != newnodeid:
+            elif node2 not in wdirnodes:
                 # When comparing files between two commits, we save time by
                 # not comparing the file contents when the nodeids differ.
                 # Note that this means we incorrectly report a reverted change
@@ -153,8 +152,10 @@ class basectx(object):
 
         if removed:
             # need to filter files if they are already reported as removed
-            unknown = [fn for fn in unknown if fn not in mf1]
-            ignored = [fn for fn in ignored if fn not in mf1]
+            unknown = [fn for fn in unknown if fn not in mf1 and
+                                               (not match or match(fn))]
+            ignored = [fn for fn in ignored if fn not in mf1 and
+                                               (not match or match(fn))]
             # if they're deleted, don't report them as removed
             removed = [fn for fn in removed if fn not in deletedset]
 
@@ -1166,7 +1167,7 @@ def _changesrange(fctx1, fctx2, linerange2, diffopts):
     diffinrange = any(stype == '!' for _, stype in filteredblocks)
     return diffinrange, linerange1
 
-def blockancestors(fctx, fromline, toline):
+def blockancestors(fctx, fromline, toline, followfirst=False):
     """Yield ancestors of `fctx` with respect to the block of lines within
     `fromline`-`toline` range.
     """
@@ -1175,9 +1176,11 @@ def blockancestors(fctx, fromline, toline):
     while visit:
         c, linerange2 = visit.pop(max(visit))
         pl = c.parents()
+        if followfirst:
+            pl = pl[:1]
         if not pl:
             # The block originates from the initial revision.
-            yield c
+            yield c, linerange2
             continue
         inrange = False
         for p in pl:
@@ -1190,7 +1193,7 @@ def blockancestors(fctx, fromline, toline):
                 continue
             visit[p.linkrev(), p.filenode()] = p, linerange1
         if inrange:
-            yield c
+            yield c, linerange2
 
 class committablectx(basectx):
     """A committablectx object provides common functionality for a context that
@@ -1261,35 +1264,6 @@ class committablectx(basectx):
     @propertycache
     def _flagfunc(self):
         return self._repo.dirstate.flagfunc(self._buildflagfunc)
-
-    @propertycache
-    def _manifest(self):
-        """generate a manifest corresponding to the values in self._status
-
-        This reuse the file nodeid from parent, but we append an extra letter
-        when modified. Modified files get an extra 'm' while added files get
-        an extra 'a'. This is used by manifests merge to see that files
-        are different and by update logic to avoid deleting newly added files.
-        """
-        parents = self.parents()
-
-        man = parents[0].manifest().copy()
-
-        ff = self._flagfunc
-        for i, l in ((addednodeid, self._status.added),
-                     (modifiednodeid, self._status.modified)):
-            for f in l:
-                man[f] = i
-                try:
-                    man.setflag(f, ff(f))
-                except OSError:
-                    pass
-
-        for f in self._status.deleted + self._status.removed:
-            if f in man:
-                del man[f]
-
-        return man
 
     @propertycache
     def _status(self):
@@ -1605,22 +1579,6 @@ class workingctx(committablectx):
                 pass
         return modified, fixup
 
-    def _manifestmatches(self, match, s):
-        """Slow path for workingctx
-
-        The fast path is when we compare the working directory to its parent
-        which means this function is comparing with a non-parent; therefore we
-        need to build a manifest and return what matches.
-        """
-        mf = self._repo['.']._manifestmatches(match, s)
-        for f in s.modified + s.added:
-            mf[f] = newnodeid
-            mf.setflag(f, self.flags(f))
-        for f in s.removed:
-            if f in mf:
-                del mf[f]
-        return mf
-
     def _dirstatestatus(self, match=None, ignored=False, clean=False,
                         unknown=False):
         '''Gets the status from the dirstate -- internal use only.'''
@@ -1651,6 +1609,39 @@ class workingctx(committablectx):
                 self._status = s
 
         return s
+
+    @propertycache
+    def _manifest(self):
+        """generate a manifest corresponding to the values in self._status
+
+        This reuse the file nodeid from parent, but we use special node
+        identifiers for added and modified files. This is used by manifests
+        merge to see that files are different and by update logic to avoid
+        deleting newly added files.
+        """
+        return self._buildstatusmanifest(self._status)
+
+    def _buildstatusmanifest(self, status):
+        """Builds a manifest that includes the given status results."""
+        parents = self.parents()
+
+        man = parents[0].manifest().copy()
+
+        ff = self._flagfunc
+        for i, l in ((addednodeid, status.added),
+                     (modifiednodeid, status.modified)):
+            for f in l:
+                man[f] = i
+                try:
+                    man.setflag(f, ff(f))
+                except OSError:
+                    pass
+
+        for f in status.deleted + status.removed:
+            if f in man:
+                del man[f]
+
+        return man
 
     def _buildstatus(self, other, s, match, listignored, listclean,
                      listunknown):

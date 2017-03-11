@@ -17,8 +17,8 @@ from . import (
     error,
     parsers,
     pycompat,
-    scmutil,
     util,
+    vfs as vfsmod,
 )
 
 # This avoids a collision between a file named foo and a dir named
@@ -99,12 +99,8 @@ def _buildencodefun():
     'the\\x07quick\\xadshot'
     '''
     e = '_'
-    if pycompat.ispy3:
-        xchr = lambda x: bytes([x])
-        asciistr = bytes(xrange(127))
-    else:
-        xchr = chr
-        asciistr = map(chr, xrange(127))
+    xchr = pycompat.bytechr
+    asciistr = list(map(xchr, range(127)))
     capitals = list(range(ord("A"), ord("Z") + 1))
 
     cmap = dict((x, x) for x in asciistr)
@@ -128,7 +124,7 @@ def _buildencodefun():
                     pass
             else:
                 raise KeyError
-    return (lambda s: ''.join([cmap[c] for c in s]),
+    return (lambda s: ''.join([cmap[s[c:c + 1]] for c in xrange(len(s))]),
             lambda s: ''.join(list(decode(s))))
 
 _encodefname, _decodefname = _buildencodefun()
@@ -325,7 +321,7 @@ class basicstore(object):
         self.createmode = _calcmode(vfs)
         vfs.createmode = self.createmode
         self.rawvfs = vfs
-        self.vfs = scmutil.filtervfs(vfs, encodedir)
+        self.vfs = vfsmod.filtervfs(vfs, encodedir)
         self.opener = self.vfs
 
     def join(self, f):
@@ -398,7 +394,7 @@ class encodedstore(basicstore):
         self.createmode = _calcmode(vfs)
         vfs.createmode = self.createmode
         self.rawvfs = vfs
-        self.vfs = scmutil.filtervfs(vfs, encodefilename)
+        self.vfs = vfsmod.filtervfs(vfs, encodefilename)
         self.opener = self.vfs
 
     def datafiles(self):
@@ -477,9 +473,9 @@ class fncache(object):
             self._load()
         return iter(self.entries)
 
-class _fncachevfs(scmutil.abstractvfs, scmutil.auditvfs):
+class _fncachevfs(vfsmod.abstractvfs, vfsmod.auditvfs):
     def __init__(self, vfs, fnc, encode):
-        scmutil.auditvfs.__init__(self, vfs)
+        vfsmod.auditvfs.__init__(self, vfs)
         self.fncache = fnc
         self.encode = encode
 

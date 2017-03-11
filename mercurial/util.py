@@ -63,9 +63,21 @@ urlparse = pycompat.urlparse
 urlreq = pycompat.urlreq
 xmlrpclib = pycompat.xmlrpclib
 
+def isatty(fp):
+    try:
+        return fp.isatty()
+    except AttributeError:
+        return False
+
+# glibc determines buffering on first write to stdout - if we replace a TTY
+# destined stdout with a pipe destined stdout (e.g. pager), we want line
+# buffering
+if isatty(stdout):
+    stdout = os.fdopen(stdout.fileno(), pycompat.sysstr('wb'), 1)
+
 if pycompat.osname == 'nt':
     from . import windows as platform
-    stdout = platform.winstdout(pycompat.stdout)
+    stdout = platform.winstdout(stdout)
 else:
     from . import posix as platform
 
@@ -797,7 +809,7 @@ def tempfilter(s, cmd):
     inname, outname = None, None
     try:
         infd, inname = tempfile.mkstemp(prefix='hg-filter-in-')
-        fp = os.fdopen(infd, 'wb')
+        fp = os.fdopen(infd, pycompat.sysstr('wb'))
         fp.write(s)
         fp.close()
         outfd, outname = tempfile.mkstemp(prefix='hg-filter-out-')
@@ -943,10 +955,7 @@ if mainfrozen() and getattr(sys, 'frozen', None) != 'macosx_app':
     # executable version (py2exe) doesn't support __file__
     datapath = os.path.dirname(pycompat.sysexecutable)
 else:
-    datapath = os.path.dirname(__file__)
-
-if not isinstance(datapath, bytes):
-    datapath = pycompat.fsencode(datapath)
+    datapath = os.path.dirname(pycompat.fsencode(__file__))
 
 i18n.setdatapath(datapath)
 
@@ -968,8 +977,9 @@ def hgexecutable():
                 _sethgexecutable(encoding.environ['EXECUTABLEPATH'])
             else:
                 _sethgexecutable(pycompat.sysexecutable)
-        elif os.path.basename(getattr(mainmod, '__file__', '')) == 'hg':
-            _sethgexecutable(mainmod.__file__)
+        elif (os.path.basename(
+            pycompat.fsencode(getattr(mainmod, '__file__', ''))) == 'hg'):
+            _sethgexecutable(pycompat.fsencode(mainmod.__file__))
         else:
             exe = findexe('hg') or os.path.basename(sys.argv[0])
             _sethgexecutable(exe)
@@ -999,12 +1009,9 @@ def shellenviron(environ=None):
     env['HG'] = hgexecutable()
     return env
 
-def system(cmd, environ=None, cwd=None, onerr=None, errprefix=None, out=None):
+def system(cmd, environ=None, cwd=None, out=None):
     '''enhanced shell command execution.
     run with environment maybe modified, maybe in different dir.
-
-    if command fails and onerr is None, return status, else raise onerr
-    object as exception.
 
     if out is specified, it is assumed to be a file-like object that has a
     write() method. stdout and stderr will be redirected to out.'''
@@ -1012,7 +1019,6 @@ def system(cmd, environ=None, cwd=None, onerr=None, errprefix=None, out=None):
         stdout.flush()
     except Exception:
         pass
-    origcmd = cmd
     cmd = quotecommand(cmd)
     if pycompat.sysplatform == 'plan9' and (sys.version_info[0] == 2
                                     and sys.version_info[1] < 7):
@@ -1036,12 +1042,6 @@ def system(cmd, environ=None, cwd=None, onerr=None, errprefix=None, out=None):
             rc = proc.returncode
         if pycompat.sysplatform == 'OpenVMS' and rc & 1:
             rc = 0
-    if rc and onerr:
-        errmsg = '%s %s' % (os.path.basename(origcmd.split(None, 1)[0]),
-                            explainexit(rc)[0])
-        if errprefix:
-            errmsg = '%s: %s' % (errprefix, errmsg)
-        raise onerr(errmsg)
     return rc
 
 def checksignature(func):
@@ -1055,6 +1055,11 @@ def checksignature(func):
             raise
 
     return check
+
+# Hardlinks are problematic on CIFS, do not allow hardlinks
+# until we find a way to work around it cleanly (issue4546).
+# This is a variable so extensions can opt-in to using them.
+allowhardlinks = False
 
 def copyfile(src, dest, hardlink=False, copystat=False, checkambig=False):
     '''copy a file, preserving mode and optionally other stat info like
@@ -1072,9 +1077,7 @@ def copyfile(src, dest, hardlink=False, copystat=False, checkambig=False):
         if checkambig:
             oldstat = checkambig and filestat(dest)
         unlink(dest)
-    # hardlinks are problematic on CIFS, quietly ignore this flag
-    # until we find a way to work around it cleanly (issue4546)
-    if False and hardlink:
+    if allowhardlinks and hardlink:
         try:
             oslink(src, dest)
             return
@@ -1191,8 +1194,13 @@ def checkwinfilename(path):
 
 if pycompat.osname == 'nt':
     checkosfilename = checkwinfilename
+    timer = time.clock
 else:
     checkosfilename = platform.checkosfilename
+    timer = time.time
+
+if safehasattr(time, "perf_counter"):
+    timer = time.perf_counter
 
 def makelock(info, pathname):
     try:
@@ -2750,12 +2758,6 @@ def removeauth(u):
     u.user = u.passwd = None
     return str(u)
 
-def isatty(fp):
-    try:
-        return fp.isatty()
-    except AttributeError:
-        return False
-
 timecount = unitcountfn(
     (1, 1e3, _('%.0f s')),
     (100, 1, _('%.1f s')),
@@ -2786,13 +2788,13 @@ def timed(func):
     '''
 
     def wrapper(*args, **kwargs):
-        start = time.time()
+        start = timer()
         indent = 2
         _timenesting[0] += indent
         try:
             return func(*args, **kwargs)
         finally:
-            elapsed = time.time() - start
+            elapsed = timer() - start
             _timenesting[0] -= indent
             stderr.write('%s%s: %s\n' %
                          (' ' * _timenesting[0], func.__name__,

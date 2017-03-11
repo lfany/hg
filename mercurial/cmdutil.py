@@ -26,14 +26,12 @@ from . import (
     changelog,
     copies,
     crecord as crecordmod,
-    dirstateguard as dirstateguardmod,
     encoding,
     error,
     formatter,
     graphmod,
     lock as lockmod,
     match as matchmod,
-    mergeutil,
     obsolete,
     patch,
     pathutil,
@@ -43,9 +41,11 @@ from . import (
     revlog,
     revset,
     scmutil,
+    smartset,
     templatekw,
     templater,
     util,
+    vfs as vfsmod,
 )
 stringio = util.stringio
 
@@ -584,7 +584,7 @@ def openrevlog(repo, cmd, file_, opts):
             raise error.CommandError(cmd, _('invalid arguments'))
         if not os.path.isfile(file_):
             raise error.Abort(_("revlog '%s' not found") % file_)
-        r = revlog.revlog(scmutil.opener(pycompat.getcwd(), audit=False),
+        r = revlog.revlog(vfsmod.vfs(pycompat.getcwd(), audit=False),
                           file_[:-2] + ".i")
     return r
 
@@ -1443,24 +1443,13 @@ class changeset_templater(changeset_printer):
 
     def __init__(self, ui, repo, matchfn, diffopts, tmpl, mapfile, buffered):
         changeset_printer.__init__(self, ui, repo, matchfn, diffopts, buffered)
-        formatnode = ui.debugflag and (lambda x: x) or (lambda x: x[:12])
-        filters = {'formatnode': formatnode}
-        defaulttempl = {
-            'parent': '{rev}:{node|formatnode} ',
-            'manifest': '{rev}:{node|formatnode}',
-            'file_copy': '{name} ({source})',
-            'envvar': '{key}={value}',
-            'extra': '{key}={value|stringescape}'
-            }
-        # filecopy is preserved for compatibility reasons
-        defaulttempl['filecopy'] = defaulttempl['file_copy']
         assert not (tmpl and mapfile)
+        defaulttempl = templatekw.defaulttempl
         if mapfile:
-            self.t = templater.templater.frommapfile(mapfile, filters=filters,
+            self.t = templater.templater.frommapfile(mapfile,
                                                      cache=defaulttempl)
         else:
             self.t = formatter.maketemplater(ui, 'changeset', tmpl,
-                                             filters=filters,
                                              cache=defaulttempl)
 
         self.cache = {}
@@ -2092,11 +2081,11 @@ def _logrevs(repo, opts):
     if opts.get('rev'):
         revs = scmutil.revrange(repo, opts['rev'])
     elif follow and repo.dirstate.p1() == nullid:
-        revs = revset.baseset()
+        revs = smartset.baseset()
     elif follow:
         revs = repo.revs('reverse(:.)')
     else:
-        revs = revset.spanset(repo)
+        revs = smartset.spanset(repo)
         revs.reverse()
     return revs
 
@@ -2111,7 +2100,7 @@ def getgraphlogrevs(repo, pats, opts):
     limit = loglimit(opts)
     revs = _logrevs(repo, opts)
     if not revs:
-        return revset.baseset(), None, None
+        return smartset.baseset(), None, None
     expr, filematcher = _makelogrevset(repo, pats, opts, revs)
     if opts.get('rev'):
         # User-specified revs might be unsorted, but don't sort before
@@ -2127,7 +2116,7 @@ def getgraphlogrevs(repo, pats, opts):
             if idx >= limit:
                 break
             limitedrevs.append(rev)
-        revs = revset.baseset(limitedrevs)
+        revs = smartset.baseset(limitedrevs)
 
     return revs, expr, filematcher
 
@@ -2142,7 +2131,7 @@ def getlogrevs(repo, pats, opts):
     limit = loglimit(opts)
     revs = _logrevs(repo, opts)
     if not revs:
-        return revset.baseset([]), None, None
+        return smartset.baseset([]), None, None
     expr, filematcher = _makelogrevset(repo, pats, opts, revs)
     if expr:
         matcher = revset.match(repo.ui, expr, order=revset.followorder)
@@ -2153,7 +2142,7 @@ def getlogrevs(repo, pats, opts):
             if limit <= idx:
                 break
             limitedrevs.append(r)
-        revs = revset.baseset(limitedrevs)
+        revs = smartset.baseset(limitedrevs)
 
     return revs, expr, filematcher
 
@@ -2236,6 +2225,8 @@ def graphlog(ui, repo, *pats, **opts):
         if opts.get('rev'):
             endrev = scmutil.revrange(repo, opts.get('rev')).max() + 1
         getrenamed = templatekw.getrenamedfn(repo, endrev=endrev)
+
+    ui.pager('log')
     displayer = show_changeset(ui, repo, opts, buffered=True)
     displaygraph(ui, repo, revdag, displayer, graphmod.asciiedges, getrenamed,
                  filematcher)
@@ -2975,13 +2966,6 @@ def revert(ui, repo, ctx, parents, *pats, **opts):
         clean    = set(changes.clean)
         modadded = set()
 
-        # split between files known in target manifest and the others
-        smf = set(mf)
-
-        # determine the exact nature of the deleted changesets
-        deladded = _deleted - smf
-        deleted = _deleted - deladded
-
         # We need to account for the state of the file in the dirstate,
         # even when we revert against something else than parent. This will
         # slightly alter the behavior of revert (doing back up or not, delete
@@ -3023,7 +3007,10 @@ def revert(ui, repo, ctx, parents, *pats, **opts):
         # in case of merge, files that are actually added can be reported as
         # modified, we need to post process the result
         if p2 != nullid:
-            mergeadd = dsmodified - smf
+            mergeadd = set(dsmodified)
+            for path in dsmodified:
+                if path in mf:
+                    mergeadd.remove(path)
             dsadded |= mergeadd
             dsmodified -= mergeadd
 
@@ -3035,6 +3022,13 @@ def revert(ui, repo, ctx, parents, *pats, **opts):
             if src and src not in names and repo.dirstate[src] == 'r':
                 dsremoved.add(src)
                 names[src] = (repo.pathto(src, cwd), True)
+
+        # determine the exact nature of the deleted changesets
+        deladded = set(_deleted)
+        for path in _deleted:
+            if path in mf:
+                deladded.remove(path)
+        deleted = _deleted - deladded
 
         # distinguish between file to forget and the other
         added = set()
@@ -3254,15 +3248,18 @@ def _performrevert(repo, parents, ctx, actions, interactive=False,
         diffopts = patch.difffeatureopts(repo.ui, whitespace=True)
         diffopts.nodates = True
         diffopts.git = True
-        reversehunks = repo.ui.configbool('experimental',
-                                          'revertalternateinteractivemode',
-                                          True)
+        operation = 'discard'
+        reversehunks = True
+        if node != parent:
+            operation = 'revert'
+            reversehunks = repo.ui.configbool('experimental',
+                                              'revertalternateinteractivemode',
+                                              True)
         if reversehunks:
             diff = patch.diff(repo, ctx.node(), None, m, opts=diffopts)
         else:
             diff = patch.diff(repo, None, ctx.node(), m, opts=diffopts)
         originalchunks = patch.parsepatch(diff)
-        operation = 'discard' if node == parent else 'revert'
 
         try:
 
@@ -3365,11 +3362,6 @@ def command(table):
         return decorator
 
     return cmd
-
-def checkunresolved(ms):
-    ms._repo.ui.deprecwarn('checkunresolved moved from cmdutil to mergeutil',
-                           '4.1')
-    return mergeutil.checkunresolved(ms)
 
 # a list of (ui, repo, otherpeer, opts, missing) functions called by
 # commands.outgoing.  "missing" is "missing" of the result of
@@ -3477,10 +3469,3 @@ def wrongtooltocontinue(repo, task):
     if after[1]:
         hint = after[0]
     raise error.Abort(_('no %s in progress') % task, hint=hint)
-
-class dirstateguard(dirstateguardmod.dirstateguard):
-    def __init__(self, repo, name):
-        dirstateguardmod.dirstateguard.__init__(self, repo, name)
-        repo.ui.deprecwarn(
-            'dirstateguard has moved from cmdutil to dirstateguard',
-            '4.1')

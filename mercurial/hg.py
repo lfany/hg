@@ -40,6 +40,7 @@ from . import (
     url,
     util,
     verify as verifymod,
+    vfs as vfsmod,
 )
 
 release = lock.release
@@ -195,7 +196,8 @@ def defaultdest(source):
         return ''
     return os.path.basename(os.path.normpath(path))
 
-def share(ui, source, dest=None, update=True, bookmarks=True, defaultpath=None):
+def share(ui, source, dest=None, update=True, bookmarks=True, defaultpath=None,
+          relative=False):
     '''create a shared repository'''
 
     if not islocal(source):
@@ -218,8 +220,8 @@ def share(ui, source, dest=None, update=True, bookmarks=True, defaultpath=None):
 
     sharedpath = srcrepo.sharedpath # if our source is already sharing
 
-    destwvfs = scmutil.vfs(dest, realpath=True)
-    destvfs = scmutil.vfs(os.path.join(destwvfs.base, '.hg'), realpath=True)
+    destwvfs = vfsmod.vfs(dest, realpath=True)
+    destvfs = vfsmod.vfs(os.path.join(destwvfs.base, '.hg'), realpath=True)
 
     if destvfs.lexists():
         raise error.Abort(_('destination already exists'))
@@ -235,7 +237,16 @@ def share(ui, source, dest=None, update=True, bookmarks=True, defaultpath=None):
         if inst.errno != errno.ENOENT:
             raise
 
-    requirements += 'shared\n'
+    if relative:
+        try:
+            sharedpath = os.path.relpath(sharedpath, destvfs.base)
+            requirements += 'relshared\n'
+        except IOError as e:
+            raise error.Abort(_('cannot calculate relative path'),
+                              hint=str(e))
+    else:
+        requirements += 'shared\n'
+
     destvfs.write('requires', requirements)
     destvfs.write('sharedpath', sharedpath)
 
@@ -302,8 +313,8 @@ def copystore(ui, srcrepo, destpath):
             else:
                 ui.progress(topic, pos + num)
         srcpublishing = srcrepo.publishing()
-        srcvfs = scmutil.vfs(srcrepo.sharedpath)
-        dstvfs = scmutil.vfs(destpath)
+        srcvfs = vfsmod.vfs(srcrepo.sharedpath)
+        dstvfs = vfsmod.vfs(destpath)
         for f in srcrepo.store.copylist():
             if srcpublishing and f.endswith('phaseroots'):
                 continue
@@ -359,7 +370,7 @@ def clonewithshare(ui, peeropts, sharepath, source, srcpeer, dest, pull=False,
         if e.errno != errno.EEXIST:
             raise
 
-    poolvfs = scmutil.vfs(pooldir)
+    poolvfs = vfsmod.vfs(pooldir)
     basename = os.path.basename(sharepath)
 
     with lock.lock(poolvfs, '%s.lock' % basename):
@@ -464,7 +475,7 @@ def clone(ui, peeropts, source, dest=None, pull=False, rev=None,
     if not dest:
         raise error.Abort(_("empty destination path is not valid"))
 
-    destvfs = scmutil.vfs(dest, expandpath=True)
+    destvfs = vfsmod.vfs(dest, expandpath=True)
     if destvfs.lexists():
         if not destvfs.isdir():
             raise error.Abort(_("destination '%s' already exists") % dest)
@@ -681,18 +692,19 @@ def _showstats(repo, stats, quietempty=False):
     repo.ui.status(_("%d files updated, %d files merged, "
                      "%d files removed, %d files unresolved\n") % stats)
 
-def updaterepo(repo, node, overwrite):
+def updaterepo(repo, node, overwrite, updatecheck=None):
     """Update the working directory to node.
 
     When overwrite is set, changes are clobbered, merged else
 
     returns stats (see pydoc mercurial.merge.applyupdates)"""
     return mergemod.update(repo, node, False, overwrite,
-                           labels=['working copy', 'destination'])
+                           labels=['working copy', 'destination'],
+                           updatecheck=updatecheck)
 
-def update(repo, node, quietempty=False):
-    """update the working directory to node, merging linear changes"""
-    stats = updaterepo(repo, node, False)
+def update(repo, node, quietempty=False, updatecheck=None):
+    """update the working directory to node"""
+    stats = updaterepo(repo, node, False, updatecheck=updatecheck)
     _showstats(repo, stats, quietempty)
     if stats[3]:
         repo.ui.status(_("use 'hg resolve' to retry unresolved file merges\n"))
@@ -712,7 +724,7 @@ def clean(repo, node, show_stats=True, quietempty=False):
 # naming conflict in updatetotally()
 _clean = clean
 
-def updatetotally(ui, repo, checkout, brev, clean=False, check=False):
+def updatetotally(ui, repo, checkout, brev, clean=False, updatecheck=None):
     """Update the working directory with extra care for non-file components
 
     This takes care of non-file components below:
@@ -724,22 +736,38 @@ def updatetotally(ui, repo, checkout, brev, clean=False, check=False):
     :checkout: to which revision the working directory is updated
     :brev: a name, which might be a bookmark to be activated after updating
     :clean: whether changes in the working directory can be discarded
-    :check: whether changes in the working directory should be checked
+    :updatecheck: how to deal with a dirty working directory
+
+    Valid values for updatecheck are (None => linear):
+
+     * abort: abort if the working directory is dirty
+     * none: don't check (merge working directory changes into destination)
+     * linear: check that update is linear before merging working directory
+               changes into destination
+     * noconflict: check that the update does not result in file merges
 
     This returns whether conflict is detected at updating or not.
     """
+    if updatecheck is None:
+        updatecheck = ui.config('experimental', 'updatecheck')
+        if updatecheck not in ('abort', 'none', 'linear', 'noconflict'):
+            # If not configured, or invalid value configured
+            updatecheck = 'linear'
     with repo.wlock():
         movemarkfrom = None
         warndest = False
         if checkout is None:
-            updata = destutil.destupdate(repo, clean=clean, check=check)
+            updata = destutil.destupdate(repo, clean=clean)
             checkout, movemarkfrom, brev = updata
             warndest = True
 
         if clean:
             ret = _clean(repo, checkout)
         else:
-            ret = _update(repo, checkout)
+            if updatecheck == 'abort':
+                cmdutil.bailifchanged(repo, merge=False)
+                updatecheck = 'none'
+            ret = _update(repo, checkout, updatecheck=updatecheck)
 
         if not ret and movemarkfrom:
             if movemarkfrom == repo['.'].node():
@@ -802,7 +830,7 @@ def _incoming(displaychlist, subreporecurse, ui, repo, source,
         if not chlist:
             ui.status(_("no changes found\n"))
             return subreporecurse()
-
+        ui.pager('incoming')
         displayer = cmdutil.show_changeset(ui, other, opts, buffered)
         displaychlist(other, chlist, displayer)
         displayer.close()
@@ -870,6 +898,7 @@ def outgoing(ui, repo, dest, opts):
 
     if opts.get('newest_first'):
         o.reverse()
+    ui.pager('outgoing')
     displayer = cmdutil.show_changeset(ui, repo, opts)
     count = 0
     for n in o:

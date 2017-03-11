@@ -40,6 +40,8 @@ these predicates use '\0' as a separator:
   >     cmdutil,
   >     node as nodemod,
   >     revset,
+  >     revsetlang,
+  >     smartset,
   > )
   > cmdtable = {}
   > command = cmdutil.command(cmdtable)
@@ -49,17 +51,18 @@ these predicates use '\0' as a separator:
   > def debugrevlistspec(ui, repo, fmt, *args, **opts):
   >     if opts['bin']:
   >         args = map(nodemod.bin, args)
-  >     expr = revset.formatspec(fmt, list(args))
+  >     expr = revsetlang.formatspec(fmt, list(args))
   >     if ui.verbose:
-  >         tree = revset.parse(expr, lookup=repo.__contains__)
-  >         ui.note(revset.prettyformat(tree), "\n")
+  >         tree = revsetlang.parse(expr, lookup=repo.__contains__)
+  >         ui.note(revsetlang.prettyformat(tree), "\n")
   >         if opts["optimize"]:
-  >             opttree = revset.optimize(revset.analyze(tree))
-  >             ui.note("* optimized:\n", revset.prettyformat(opttree), "\n")
+  >             opttree = revsetlang.optimize(revsetlang.analyze(tree))
+  >             ui.note("* optimized:\n", revsetlang.prettyformat(opttree),
+  >                     "\n")
   >     func = revset.match(ui, expr, repo)
   >     revs = func(repo)
   >     if ui.verbose:
-  >         ui.note("* set:\n", revset.prettyformatset(revs), "\n")
+  >         ui.note("* set:\n", smartset.prettyformat(revs), "\n")
   >     for c in revs:
   >         ui.write("%s\n" % c)
   > EOF

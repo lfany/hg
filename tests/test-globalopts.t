@@ -340,6 +340,7 @@ Testing -h/--help:
   
   additional help topics:
   
+   color         Colorizing Outputs
    config        Configuration Files
    dates         Date Formats
    diffs         Diff Formats
@@ -351,6 +352,7 @@ Testing -h/--help:
    hgweb         Configuring hgweb
    internals     Technical implementation topics
    merge-tools   Merge Tools
+   pager         Pager Support
    patterns      File Name Patterns
    phases        Working with Phases
    revisions     Specifying Revisions
@@ -421,6 +423,7 @@ Testing -h/--help:
   
   additional help topics:
   
+   color         Colorizing Outputs
    config        Configuration Files
    dates         Date Formats
    diffs         Diff Formats
@@ -432,6 +435,7 @@ Testing -h/--help:
    hgweb         Configuring hgweb
    internals     Technical implementation topics
    merge-tools   Merge Tools
+   pager         Pager Support
    patterns      File Name Patterns
    phases        Working with Phases
    revisions     Specifying Revisions

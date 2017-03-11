@@ -46,6 +46,7 @@ from mercurial import (
     scmutil,
     templatefilters,
     util,
+    vfs as vfsmod,
 )
 
 from . import (
@@ -78,8 +79,8 @@ class shelvedfile(object):
     def __init__(self, repo, name, filetype=None):
         self.repo = repo
         self.name = name
-        self.vfs = scmutil.vfs(repo.join(shelvedir))
-        self.backupvfs = scmutil.vfs(repo.join(backupdir))
+        self.vfs = vfsmod.vfs(repo.join(shelvedir))
+        self.backupvfs = vfsmod.vfs(repo.join(backupdir))
         self.ui = self.repo.ui
         if filetype:
             self.fname = name + '.' + filetype
@@ -220,7 +221,7 @@ class shelvedstate(object):
         util.unlinkpath(repo.join(cls._filename), ignoremissing=True)
 
 def cleanupoldbackups(repo):
-    vfs = scmutil.vfs(repo.join(backupdir))
+    vfs = vfsmod.vfs(repo.join(backupdir))
     maxbackups = repo.ui.configint('shelve', 'maxbackups', 10)
     hgfiles = [f for f in vfs.listdir()
                if f.endswith('.' + patchextension)]
@@ -485,6 +486,7 @@ def listcmd(ui, repo, pats, opts):
     if not ui.plain():
         width = ui.termwidth()
     namelabel = 'shelve.newest'
+    ui.pager('shelve')
     for mtime, name in listshelves(repo):
         sname = util.split(name)[1]
         if pats and sname not in pats:
@@ -747,10 +749,12 @@ def _checkunshelveuntrackedproblems(ui, repo, shelvectx):
            _('continue an incomplete unshelve operation')),
           ('k', 'keep', None,
            _('keep shelve after unshelving')),
+          ('n', 'name', '',
+           _('restore shelved change with given name'), _('NAME')),
           ('t', 'tool', '', _('specify merge tool')),
           ('', 'date', '',
            _('set date for temporary commits (DEPRECATED)'), _('DATE'))],
-         _('hg unshelve [SHELVED]'))
+         _('hg unshelve [[-n] SHELVED]'))
 def unshelve(ui, repo, *shelved, **opts):
     """restore a shelved change to the working directory
 
@@ -795,6 +799,9 @@ def _dounshelve(ui, repo, *shelved, **opts):
     continuef = opts.get('continue')
     if not abortf and not continuef:
         cmdutil.checkunfinished(repo)
+    shelved = list(shelved)
+    if opts.get("name"):
+        shelved.append(opts["name"])
 
     if abortf or continuef:
         if abortf and continuef:

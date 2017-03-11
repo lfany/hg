@@ -20,6 +20,7 @@ from . import (
     pycompat,
     registrar,
     revset as revsetmod,
+    revsetlang,
     templatefilters,
     templatekw,
     util,
@@ -543,6 +544,19 @@ def fill(context, mapping, args):
 
     return templatefilters.fill(text, width, initindent, hangindent)
 
+@templatefunc('formatnode(node)')
+def formatnode(context, mapping, args):
+    """Obtain the preferred form of a changeset hash. (DEPRECATED)"""
+    if len(args) != 1:
+        # i18n: "formatnode" is a keyword
+        raise error.ParseError(_("formatnode expects one argument"))
+
+    ui = mapping['ui']
+    node = evalstring(context, mapping, args[0])
+    if ui.debugflag:
+        return node
+    return templatefilters.short(node)
+
 @templatefunc('pad(text, width[, fillchar=\' \'[, left=False]])')
 def pad(context, mapping, args):
     """Pad text with a
@@ -778,7 +792,7 @@ def revset(context, mapping, args):
 
     if len(args) > 1:
         formatargs = [evalfuncarg(context, mapping, a) for a in args[1:]]
-        revs = query(revsetmod.formatspec(raw, *formatargs))
+        revs = query(revsetlang.formatspec(raw, *formatargs))
         revs = list(revs)
     else:
         revsetcache = mapping['cache'].setdefault("revsetcache", {})

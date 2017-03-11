@@ -8,6 +8,7 @@
 from __future__ import absolute_import
 
 import imp
+import inspect
 import os
 
 from .i18n import (
@@ -150,7 +151,7 @@ def _runextsetup(name, ui):
         try:
             extsetup(ui)
         except TypeError:
-            if extsetup.func_code.co_argcount != 0:
+            if inspect.getargspec(extsetup).args:
                 raise
             extsetup() # old extsetup with no ui argument
 
@@ -159,7 +160,7 @@ def loadall(ui):
     newindex = len(_order)
     for (name, path) in result:
         if path:
-            if path[0] == '!':
+            if path[0:1] == '!':
                 _disabledextensions[name] = path[1:]
                 continue
         try:
@@ -362,7 +363,8 @@ def _disabledpaths(strip_init=False):
     '''find paths of disabled extensions. returns a dict of {name: path}
     removes /__init__.py from packages if strip_init is True'''
     import hgext
-    extpath = os.path.dirname(os.path.abspath(hgext.__file__))
+    extpath = os.path.dirname(
+        os.path.abspath(pycompat.fsencode(hgext.__file__)))
     try: # might not be a filesystem path
         files = os.listdir(extpath)
     except OSError:

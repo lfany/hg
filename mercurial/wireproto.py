@@ -26,6 +26,7 @@ from . import (
     exchange,
     peer,
     pushkey as pushkeymod,
+    pycompat,
     streamclone,
     util,
 )
@@ -735,7 +736,7 @@ def clonebundles(repo, proto):
     depending on the request. e.g. you could advertise URLs for the closest
     data center given the client's IP address.
     """
-    return repo.opener.tryread('clonebundles.manifest')
+    return repo.vfs.tryread('clonebundles.manifest')
 
 wireprotocaps = ['lookup', 'changegroupsubset', 'branchmap', 'pushkey',
                  'known', 'getbundle', 'unbundlehash', 'batch']
@@ -839,7 +840,6 @@ def getbundle(repo, proto, others):
             raise error.Abort(bundle2requiredmain,
                               hint=bundle2requiredhint)
 
-    #chunks = exchange.getbundlechunks(repo, 'serve', **opts)
     try:
         chunks = exchange.getbundlechunks(repo, 'serve', **opts)
     except error.Abort as exc:
@@ -961,7 +961,7 @@ def unbundle(repo, proto, heads):
 
         # write bundle data to temporary file because it can be big
         fd, tempname = tempfile.mkstemp(prefix='hg-unbundle-')
-        fp = os.fdopen(fd, 'wb+')
+        fp = os.fdopen(fd, pycompat.sysstr('wb+'))
         r = 0
         try:
             proto.getfile(fp)

@@ -72,6 +72,9 @@ if ispy3:
     if getattr(sys, 'argv', None) is not None:
         sysargv = list(map(os.fsencode, sys.argv))
 
+    def bytechr(i):
+        return bytes([i])
+
     def sysstr(s):
         """Return a keyword str to be passed to Python functions such as
         getattr() and str.encode()
@@ -96,6 +99,9 @@ if ispy3:
     hasattr = _wrapattrfunc(builtins.hasattr)
     setattr = _wrapattrfunc(builtins.setattr)
     xrange = builtins.range
+
+    def open(name, mode='r', buffering=-1):
+        return builtins.open(name, sysstr(mode), buffering)
 
     # getopt.getopt() on Python 3 deals with unicodes internally so we cannot
     # pass bytes there. Passing unicodes will result in unicodes as return
@@ -132,6 +138,8 @@ if ispy3:
         return [a.encode('latin-1') for a in ret]
 
 else:
+    bytechr = chr
+
     def sysstr(s):
         return s
 

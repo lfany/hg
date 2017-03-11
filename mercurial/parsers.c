@@ -560,11 +560,11 @@ quit:
 }
 
 /*
- * Build a set of non-normal entries from the dirstate dmap
+ * Build a set of non-normal and other parent entries from the dirstate dmap
 */
-static PyObject *nonnormalentries(PyObject *self, PyObject *args)
-{
-	PyObject *dmap, *nonnset = NULL, *fname, *v;
+static PyObject *nonnormalotherparententries(PyObject *self, PyObject *args) {
+	PyObject *dmap, *fname, *v;
+	PyObject *nonnset = NULL, *otherpset = NULL, *result = NULL;
 	Py_ssize_t pos;
 
 	if (!PyArg_ParseTuple(args, "O!:nonnormalentries",
@@ -573,6 +573,10 @@ static PyObject *nonnormalentries(PyObject *self, PyObject *args)
 
 	nonnset = PySet_New(NULL);
 	if (nonnset == NULL)
+		goto bail;
+
+	otherpset = PySet_New(NULL);
+	if (otherpset == NULL)
 		goto bail;
 
 	pos = 0;
@@ -585,15 +589,28 @@ static PyObject *nonnormalentries(PyObject *self, PyObject *args)
 		}
 		t = (dirstateTupleObject *)v;
 
+		if (t->state == 'n' && t->size == -2) {
+			if (PySet_Add(otherpset, fname) == -1) {
+				goto bail;
+			}
+		}
+
 		if (t->state == 'n' && t->mtime != -1)
 			continue;
 		if (PySet_Add(nonnset, fname) == -1)
 			goto bail;
 	}
 
-	return nonnset;
+	result = Py_BuildValue("(OO)", nonnset, otherpset);
+	if (result == NULL)
+		goto bail;
+	Py_DECREF(nonnset);
+	Py_DECREF(otherpset);
+	return result;
 bail:
 	Py_XDECREF(nonnset);
+	Py_XDECREF(otherpset);
+	Py_XDECREF(result);
 	return NULL;
 }
 
@@ -2814,8 +2831,9 @@ PyObject *lowerencode(PyObject *self, PyObject *args);
 
 static PyMethodDef methods[] = {
 	{"pack_dirstate", pack_dirstate, METH_VARARGS, "pack a dirstate\n"},
-	{"nonnormalentries", nonnormalentries, METH_VARARGS,
-	"create a set containing non-normal entries of given dirstate\n"},
+	{"nonnormalotherparententries", nonnormalotherparententries, METH_VARARGS,
+	"create a set containing non-normal and other parent entries of given "
+	"dirstate\n"},
 	{"parse_manifest", parse_manifest, METH_VARARGS, "parse a manifest\n"},
 	{"parse_dirstate", parse_dirstate, METH_VARARGS, "parse a dirstate\n"},
 	{"parse_index2", parse_index2, METH_VARARGS, "parse a revlog index\n"},

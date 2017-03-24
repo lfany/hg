@@ -72,6 +72,8 @@ class revnav(object):
         """return True if any revision to navigate over"""
         return self._first() is not None
 
+    __bool__ = __nonzero__
+
     def _first(self):
         """return the minimum non-filtered changeset or None"""
         try:
@@ -142,7 +144,9 @@ class filerevnav(revnav):
         return hex(self._changelog.node(self._revlog.linkrev(rev)))
 
 class _siblings(object):
-    def __init__(self, siblings=[], hiderev=None):
+    def __init__(self, siblings=None, hiderev=None):
+        if siblings is None:
+            siblings = []
         self.siblings = [s for s in siblings if s.node() != nullid]
         if len(self.siblings) == 1 and self.siblings[0].rev() == hiderev:
             self.siblings = []
@@ -412,16 +416,9 @@ def listfilediffs(tmpl, files, node, max):
 
 def diffs(repo, tmpl, ctx, basectx, files, parity, style):
 
-    def countgen():
-        start = 1
-        while True:
-            yield start
-            start += 1
-
-    blockcount = countgen()
-    def prettyprintlines(diff, blockno):
-        for lineno, l in enumerate(diff.splitlines(True)):
-            difflineno = "%d.%d" % (blockno, lineno + 1)
+    def prettyprintlines(lines, blockno):
+        for lineno, l in enumerate(lines, 1):
+            difflineno = "%d.%d" % (blockno, lineno)
             if l.startswith('+'):
                 ltype = "difflineplus"
             elif l.startswith('-'):
@@ -432,7 +429,7 @@ def diffs(repo, tmpl, ctx, basectx, files, parity, style):
                 ltype = "diffline"
             yield tmpl(ltype,
                        line=l,
-                       lineno=lineno + 1,
+                       lineno=lineno,
                        lineid="l%s" % difflineno,
                        linenumber="% 8s" % difflineno)
 
@@ -442,29 +439,19 @@ def diffs(repo, tmpl, ctx, basectx, files, parity, style):
         m = match.always(repo.root, repo.getcwd())
 
     diffopts = patch.diffopts(repo.ui, untrusted=True)
-    if basectx is None:
-        parents = ctx.parents()
-        if parents:
-            node1 = parents[0].node()
-        else:
-            node1 = nullid
-    else:
-        node1 = basectx.node()
+    node1 = basectx.node()
     node2 = ctx.node()
 
-    block = []
-    for chunk in patch.diff(repo, node1, node2, m, opts=diffopts):
-        if chunk.startswith('diff') and block:
-            blockno = next(blockcount)
+    diffhunks = patch.diffhunks(repo, node1, node2, m, opts=diffopts)
+    for blockno, (header, hunks) in enumerate(diffhunks, 1):
+        if style != 'raw':
+            header = header[1:]
+        lines = [h + '\n' for h in header]
+        for hunkrange, hunklines in hunks:
+            lines.extend(hunklines)
+        if lines:
             yield tmpl('diffblock', parity=next(parity), blockno=blockno,
-                       lines=prettyprintlines(''.join(block), blockno))
-            block = []
-        if chunk.startswith('diff') and style != 'raw':
-            chunk = ''.join(chunk.splitlines(True)[1:])
-        block.append(chunk)
-    blockno = next(blockcount)
-    yield tmpl('diffblock', parity=next(parity), blockno=blockno,
-               lines=prettyprintlines(''.join(block), blockno))
+                       lines=prettyprintlines(lines, blockno))
 
 def compare(tmpl, context, leftlines, rightlines):
     '''Generator function that provides side-by-side comparison data.'''

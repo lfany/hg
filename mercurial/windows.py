@@ -385,19 +385,6 @@ def removedirs(name):
             break
         head, tail = os.path.split(head)
 
-def unlinkpath(f, ignoremissing=False):
-    """unlink and remove the directory if it is empty"""
-    try:
-        unlink(f)
-    except OSError as e:
-        if not (ignoremissing and e.errno == errno.ENOENT):
-            raise
-    # try removing directories that might now be empty
-    try:
-        removedirs(os.path.dirname(f))
-    except OSError:
-        pass
-
 def rename(src, dst):
     '''atomically rename file src to dst, replacing dst if it exists'''
     try:
@@ -442,7 +429,7 @@ def lookupreg(key, valname=None, scope=None):
         try:
             val = winreg.QueryValueEx(winreg.OpenKey(s, key), valname)[0]
             # never let a Unicode string escape into the wild
-            return encoding.tolocal(val.encode('UTF-8'))
+            return encoding.unitolocal(val)
         except EnvironmentError:
             pass
 

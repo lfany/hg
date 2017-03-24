@@ -166,7 +166,7 @@ Push to repo r1 should break up most hardlinks in r2:
   1 r2/.hg/store/00manifest.i
   1 r2/.hg/store/data/d1/f2.i
   2 r2/.hg/store/data/f1.i
-  1 r2/.hg/store/fncache
+  [12] r2/\.hg/store/fncache (re)
 
   $ hg -R r2 verify
   checking changesets
@@ -191,7 +191,7 @@ Committing a change to f1 in r1 must break up hardlink f1.i in r2:
   1 r2/.hg/store/00manifest.i
   1 r2/.hg/store/data/d1/f2.i
   1 r2/.hg/store/data/f1.i
-  1 r2/.hg/store/fncache
+  [12] r2/\.hg/store/fncache (re)
 
 
   $ cd r3
@@ -233,11 +233,11 @@ r4 has hardlinks in the working dir (not just inside .hg):
   2 r4/.hg/store/undo.backup.phaseroots
   2 r4/.hg/store/undo.backupfiles
   2 r4/.hg/store/undo.phaseroots
-  2 r4/.hg/undo.backup.dirstate
+  [24] r4/\.hg/undo\.backup\.dirstate (re)
   2 r4/.hg/undo.bookmarks
   2 r4/.hg/undo.branch
   2 r4/.hg/undo.desc
-  2 r4/.hg/undo.dirstate
+  [24] r4/\.hg/undo\.dirstate (re)
   2 r4/d1/data1
   2 r4/d1/f2
   2 r4/f1
@@ -272,11 +272,11 @@ Update back to revision 11 in r4 should break hardlink of file f1:
   2 r4/.hg/store/undo.backup.phaseroots
   2 r4/.hg/store/undo.backupfiles
   2 r4/.hg/store/undo.phaseroots
-  2 r4/.hg/undo.backup.dirstate
+  [24] r4/\.hg/undo\.backup\.dirstate (re)
   2 r4/.hg/undo.bookmarks
   2 r4/.hg/undo.branch
   2 r4/.hg/undo.desc
-  2 r4/.hg/undo.dirstate
+  [24] r4/\.hg/undo\.dirstate (re)
   2 r4/d1/data1
   2 r4/d1/f2
   1 r4/f1

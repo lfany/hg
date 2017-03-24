@@ -12,6 +12,7 @@ functions should be used in place of ui.write():
 
 - fm.write() for unconditional output
 - fm.condwrite() to show some extra data conditionally in plain output
+- fm.context() to provide changectx to template output
 - fm.data() to provide extra data to JSON or template output
 - fm.plain() to show raw text that isn't provided to JSON or template output
 
@@ -171,6 +172,9 @@ class baseformatter(object):
         # name is mandatory argument for now, but it could be optional if
         # we have default template keyword, e.g. {item}
         return self._converter.formatlist(data, name, fmt, sep)
+    def context(self, **ctxs):
+        '''insert context objects to be used to render template keywords'''
+        pass
     def data(self, **data):
         '''insert data into item that's not shown in default output'''
         self._item.update(data)
@@ -257,24 +261,26 @@ class plainformatter(baseformatter):
         pass
 
 class debugformatter(baseformatter):
-    def __init__(self, ui, topic, opts):
+    def __init__(self, ui, out, topic, opts):
         baseformatter.__init__(self, ui, topic, opts, _nullconverter)
-        self._ui.write("%s = [\n" % self._topic)
+        self._out = out
+        self._out.write("%s = [\n" % self._topic)
     def _showitem(self):
-        self._ui.write("    " + repr(self._item) + ",\n")
+        self._out.write("    " + repr(self._item) + ",\n")
     def end(self):
         baseformatter.end(self)
-        self._ui.write("]\n")
+        self._out.write("]\n")
 
 class pickleformatter(baseformatter):
-    def __init__(self, ui, topic, opts):
+    def __init__(self, ui, out, topic, opts):
         baseformatter.__init__(self, ui, topic, opts, _nullconverter)
+        self._out = out
         self._data = []
     def _showitem(self):
         self._data.append(self._item)
     def end(self):
         baseformatter.end(self)
-        self._ui.write(pickle.dumps(self._data))
+        self._out.write(pickle.dumps(self._data))
 
 def _jsonifyobj(v):
     if isinstance(v, dict):
@@ -289,34 +295,35 @@ def _jsonifyobj(v):
         return 'true'
     elif v is False:
         return 'false'
-    elif isinstance(v, (int, float)):
+    elif isinstance(v, (int, long, float)):
         return str(v)
     else:
         return '"%s"' % encoding.jsonescape(v)
 
 class jsonformatter(baseformatter):
-    def __init__(self, ui, topic, opts):
+    def __init__(self, ui, out, topic, opts):
         baseformatter.__init__(self, ui, topic, opts, _nullconverter)
-        self._ui.write("[")
-        self._ui._first = True
+        self._out = out
+        self._out.write("[")
+        self._first = True
     def _showitem(self):
-        if self._ui._first:
-            self._ui._first = False
+        if self._first:
+            self._first = False
         else:
-            self._ui.write(",")
+            self._out.write(",")
 
-        self._ui.write("\n {\n")
+        self._out.write("\n {\n")
         first = True
         for k, v in sorted(self._item.items()):
             if first:
                 first = False
             else:
-                self._ui.write(",\n")
-            self._ui.write('  "%s": %s' % (k, _jsonifyobj(v)))
-        self._ui.write("\n }")
+                self._out.write(",\n")
+            self._out.write('  "%s": %s' % (k, _jsonifyobj(v)))
+        self._out.write("\n }")
     def end(self):
         baseformatter.end(self)
-        self._ui.write("\n]\n")
+        self._out.write("\n]\n")
 
 class _templateconverter(object):
     '''convert non-primitive data types to be processed by templater'''
@@ -342,13 +349,33 @@ class _templateconverter(object):
                                   lambda d: fmt % d[name])
 
 class templateformatter(baseformatter):
-    def __init__(self, ui, topic, opts):
+    def __init__(self, ui, out, topic, opts):
         baseformatter.__init__(self, ui, topic, opts, _templateconverter)
+        self._out = out
         self._topic = topic
-        self._t = gettemplater(ui, topic, opts.get('template', ''))
+        self._t = gettemplater(ui, topic, opts.get('template', ''),
+                               cache=templatekw.defaulttempl)
+        self._cache = {}  # for templatekw/funcs to store reusable data
+    def context(self, **ctxs):
+        '''insert context objects to be used to render template keywords'''
+        assert all(k == 'ctx' for k in ctxs)
+        self._item.update(ctxs)
     def _showitem(self):
-        g = self._t(self._topic, ui=self._ui, **self._item)
-        self._ui.write(templater.stringify(g))
+        # TODO: add support for filectx. probably each template keyword or
+        # function will have to declare dependent resources. e.g.
+        # @templatekeyword(..., requires=('ctx',))
+        if 'ctx' in self._item:
+            props = templatekw.keywords.copy()
+            # explicitly-defined fields precede templatekw
+            props.update(self._item)
+            # but template resources must be always available
+            props['templ'] = self._t
+            props['repo'] = props['ctx'].repo()
+            props['revcache'] = {}
+        else:
+            props = self._item
+        g = self._t(self._topic, ui=self._ui, cache=self._cache, **props)
+        self._out.write(templater.stringify(g))
 
 def lookuptemplate(ui, topic, tmpl):
     # looks like a literal template?
@@ -382,17 +409,17 @@ def lookuptemplate(ui, topic, tmpl):
     # constant string?
     return tmpl, None
 
-def gettemplater(ui, topic, spec):
+def gettemplater(ui, topic, spec, cache=None):
     tmpl, mapfile = lookuptemplate(ui, topic, spec)
     assert not (tmpl and mapfile)
     if mapfile:
-        return templater.templater.frommapfile(mapfile)
-    return maketemplater(ui, topic, tmpl)
+        return templater.templater.frommapfile(mapfile, cache=cache)
+    return maketemplater(ui, topic, tmpl, cache=cache)
 
-def maketemplater(ui, topic, tmpl, filters=None, cache=None):
+def maketemplater(ui, topic, tmpl, cache=None):
     """Create a templater from a string template 'tmpl'"""
     aliases = ui.configitems('templatealias')
-    t = templater.templater(filters=filters, cache=cache, aliases=aliases)
+    t = templater.templater(cache=cache, aliases=aliases)
     if tmpl:
         t.cache[topic] = tmpl
     return t
@@ -400,17 +427,17 @@ def maketemplater(ui, topic, tmpl, filters=None, cache=None):
 def formatter(ui, topic, opts):
     template = opts.get("template", "")
     if template == "json":
-        return jsonformatter(ui, topic, opts)
+        return jsonformatter(ui, ui, topic, opts)
     elif template == "pickle":
-        return pickleformatter(ui, topic, opts)
+        return pickleformatter(ui, ui, topic, opts)
     elif template == "debug":
-        return debugformatter(ui, topic, opts)
+        return debugformatter(ui, ui, topic, opts)
     elif template != "":
-        return templateformatter(ui, topic, opts)
+        return templateformatter(ui, ui, topic, opts)
     # developer config: ui.formatdebug
     elif ui.configbool('ui', 'formatdebug'):
-        return debugformatter(ui, topic, opts)
+        return debugformatter(ui, ui, topic, opts)
     # deprecated config: ui.formatjson
     elif ui.configbool('ui', 'formatjson'):
-        return jsonformatter(ui, topic, opts)
+        return jsonformatter(ui, ui, topic, opts)
     return plainformatter(ui, topic, opts)

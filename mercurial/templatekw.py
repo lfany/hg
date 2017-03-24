@@ -204,6 +204,17 @@ def getrenamedfn(repo, endrev=None):
 
     return getrenamed
 
+# default templates internally used for rendering of lists
+defaulttempl = {
+    'parent': '{rev}:{node|formatnode} ',
+    'manifest': '{rev}:{node|formatnode}',
+    'file_copy': '{name} ({source})',
+    'envvar': '{key}={value}',
+    'extra': '{key}={value|stringescape}'
+}
+# filecopy is preserved for compatibility reasons
+defaulttempl['filecopy'] = defaulttempl['file_copy']
+
 # keywords are callables like:
 # fn(repo, ctx, templ, cache, revcache, **args)
 # with:
@@ -325,7 +336,7 @@ def showextras(**args):
     c = [makemap(k) for k in extras]
     f = _showlist('extra', c, plural='extras', **args)
     return _hybrid(f, extras, makemap,
-                   lambda x: '%s=%s' % (x['key'], x['value']))
+                   lambda x: '%s=%s' % (x['key'], util.escapestr(x['value'])))
 
 @templatekeyword('file_adds')
 def showfileadds(**args):

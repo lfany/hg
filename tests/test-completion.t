@@ -73,6 +73,7 @@ Show debug commands if there are no other candidates
   debugbuilddag
   debugbundle
   debugcheckstate
+  debugcolor
   debugcommands
   debugcomplete
   debugconfig
@@ -129,6 +130,7 @@ Show the alias of a debug command if there are no other candidates
 
 Show the global options
   $ hg debugcomplete --options | sort
+  --color
   --config
   --cwd
   --debug
@@ -138,6 +140,7 @@ Show the global options
   --help
   --hidden
   --noninteractive
+  --pager
   --profile
   --quiet
   --repository
@@ -157,6 +160,7 @@ Show the options for the "serve" command
   --address
   --certificate
   --cmdserver
+  --color
   --config
   --cwd
   --daemon
@@ -171,6 +175,7 @@ Show the options for the "serve" command
   --ipv6
   --name
   --noninteractive
+  --pager
   --pid-file
   --port
   --prefix
@@ -223,7 +228,7 @@ Show all commands + options
   serve: accesslog, daemon, daemon-postexec, errorlog, port, address, prefix, name, web-conf, webdir-conf, pid-file, stdio, cmdserver, templates, style, ipv6, certificate
   status: all, modified, added, removed, deleted, clean, unknown, ignored, no-status, copies, print0, rev, change, include, exclude, subrepos, template
   summary: remote
-  update: clean, check, date, rev, tool
+  update: clean, check, merge, date, rev, tool
   addremove: similarity, subrepos, include, exclude, dry-run
   archive: no-decode, prefix, rev, type, subrepos, include, exclude
   backout: merge, commit, no-commit, parent, rev, edit, tool, include, exclude, message, logfile, date, user
@@ -240,6 +245,7 @@ Show all commands + options
   debugbuilddag: mergeable-file, overwritten-file, new-file
   debugbundle: all, spec
   debugcheckstate: 
+  debugcolor: style
   debugcommands: 
   debugcomplete: options
   debugcreatestreamclonebundle: 
@@ -349,6 +355,21 @@ Test debugnamecomplete
   fo
   tip
   $ hg debugnamecomplete f
+  fee
+  fie
+  fo
+
+Test debuglabelcomplete, a deprecated name for debugnamecomplete that is still
+used for completions in some shells.
+
+  $ hg debuglabelcomplete
+  Fum
+  default
+  fee
+  fie
+  fo
+  tip
+  $ hg debuglabelcomplete f
   fee
   fie
   fo

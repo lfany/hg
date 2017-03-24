@@ -720,7 +720,8 @@ def _defaultcacerts(ui):
     # to load the system CA store. If we're running on Apple Python, use this
     # trick.
     if _plainapplepython():
-        dummycert = os.path.join(os.path.dirname(__file__), 'dummycert.pem')
+        dummycert = os.path.join(
+            os.path.dirname(pycompat.fsencode(__file__)), 'dummycert.pem')
         if os.path.exists(dummycert):
             return dummycert
 
@@ -814,6 +815,16 @@ def validatesocket(sock):
             if peerfingerprints[hash].lower() == fingerprint:
                 ui.debug('%s certificate matched fingerprint %s:%s\n' %
                          (host, hash, fmtfingerprint(fingerprint)))
+                if settings['legacyfingerprint']:
+                    ui.warn(_('(SHA-1 fingerprint for %s found in legacy '
+                              '[hostfingerprints] section; '
+                              'if you trust this fingerprint, set the '
+                              'following config value in [hostsecurity] and '
+                              'remove the old one from [hostfingerprints] '
+                              'to upgrade to a more secure SHA-256 '
+                              'fingerprint: '
+                              '%s.fingerprints=%s)\n') % (
+                                  host, host, nicefingerprint))
                 return
 
         # Pinned fingerprint didn't match. This is a fatal error.

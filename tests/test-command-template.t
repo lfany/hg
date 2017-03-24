@@ -3348,6 +3348,18 @@ color effect can be specified without quoting:
   $ hg log --color=always -l 1 --template '{label(red, "text\n")}'
   \x1b[0;31mtext\x1b[0m (esc)
 
+color effects can be nested (issue5413)
+
+  $ hg debugtemplate --color=always \
+  > '{label(red, "red{label(magenta, "ma{label(cyan, "cyan")}{label(yellow, "yellow")}genta")}")}\n'
+  \x1b[0;31mred\x1b[0;35mma\x1b[0;36mcyan\x1b[0m\x1b[0;31m\x1b[0;35m\x1b[0;33myellow\x1b[0m\x1b[0;31m\x1b[0;35mgenta\x1b[0m (esc)
+
+pad() should interact well with color codes (issue5416)
+
+  $ hg debugtemplate --color=always \
+  > '{pad(label(red, "red"), 5, label(cyan, "-"))}\n'
+  \x1b[0;31mred\x1b[0m\x1b[0;36m-\x1b[0m\x1b[0;36m-\x1b[0m (esc)
+
 label should be no-op if color is disabled:
 
   $ hg log --color=never -l 1 --template '{label(red, "text\n")}'
@@ -3513,6 +3525,15 @@ Test width argument passed to pad function
   0          test
   $ hg log -r 0 -T '{pad(rev, "not an int")}\n'
   hg: parse error: pad() expects an integer width
+  [255]
+
+Test invalid fillchar passed to pad function
+
+  $ hg log -r 0 -T '{pad(rev, 10, "")}\n'
+  hg: parse error: pad() expects a single fill character
+  [255]
+  $ hg log -r 0 -T '{pad(rev, 10, "--")}\n'
+  hg: parse error: pad() expects a single fill character
   [255]
 
 Test boolean argument passed to pad function
@@ -4099,6 +4120,11 @@ utf8 filter:
   $ hg log -T "invalid type: {rev|utf8}\n" -r0
   abort: template filter 'utf8' is not compatible with keyword 'rev'
   [255]
+
+pad width:
+
+  $ HGENCODING=utf-8 hg debugtemplate "{pad('`cat utf-8`', 2, '-')}\n"
+  \xc3\xa9- (esc)
 
   $ cd ..
 

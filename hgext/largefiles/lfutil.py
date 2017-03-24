@@ -27,6 +27,7 @@ from mercurial import (
     pycompat,
     scmutil,
     util,
+    vfs as vfsmod,
 )
 
 shortname = '.hglf'
@@ -144,7 +145,7 @@ def openlfdirstate(ui, repo, create=True):
     '''
     vfs = repo.vfs
     lfstoredir = longname
-    opener = scmutil.opener(vfs.join(lfstoredir))
+    opener = vfsmod.vfs(vfs.join(lfstoredir))
     lfdirstate = largefilesdirstate(opener, ui, repo.root,
                                      repo.dirstate._validate)
 
@@ -201,7 +202,7 @@ def storepath(repo, hash, forcelocal=False):
     file with the given hash.'''
     if not forcelocal and repo.shared():
         return repo.vfs.reljoin(repo.sharedpath, longname, hash)
-    return repo.join(longname, hash)
+    return repo.vfs.join(longname, hash)
 
 def findstorepath(repo, hash):
     '''Search through the local store path(s) to find the file for the given

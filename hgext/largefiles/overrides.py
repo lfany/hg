@@ -22,8 +22,8 @@ from mercurial import (
     match as matchmod,
     pathutil,
     registrar,
-    revset,
     scmutil,
+    smartset,
     util,
 )
 
@@ -223,7 +223,7 @@ def removelargefiles(ui, repo, isaddremove, matcher, **opts):
 
             if not opts.get('dry_run'):
                 if not after:
-                    util.unlinkpath(repo.wjoin(f), ignoremissing=True)
+                    repo.wvfs.unlinkpath(f, ignoremissing=True)
 
         if opts.get('dry_run'):
             return result
@@ -233,7 +233,7 @@ def removelargefiles(ui, repo, isaddremove, matcher, **opts):
         # function handle this.
         if not isaddremove:
             for f in remove:
-                util.unlinkpath(repo.wjoin(f), ignoremissing=True)
+                repo.wvfs.unlinkpath(f, ignoremissing=True)
         repo[None].forget(remove)
 
         for f in remove:
@@ -694,7 +694,7 @@ def overridecopy(orig, ui, repo, pats, opts, rename=False):
 
                     # The file is gone, but this deletes any empty parent
                     # directories as a side-effect.
-                    util.unlinkpath(repo.wjoin(srclfile), True)
+                    repo.wvfs.unlinkpath(srclfile, ignoremissing=True)
                     lfdirstate.remove(srclfile)
                 else:
                     util.copyfile(repo.wjoin(srclfile),
@@ -855,7 +855,7 @@ def pulledrevsetsymbol(repo, subset, x):
         firstpulled = repo.firstpulled
     except AttributeError:
         raise error.Abort(_("pulled() only available in --lfrev"))
-    return revset.baseset([r for r in subset if r >= firstpulled])
+    return smartset.baseset([r for r in subset if r >= firstpulled])
 
 def overrideclone(orig, ui, source, dest=None, **opts):
     d = dest
@@ -993,9 +993,9 @@ def overridearchive(orig, repo, dest, node, kind, decode=True, matchfn=None,
 
     archiver.done()
 
-def hgsubrepoarchive(orig, repo, archiver, prefix, match=None):
+def hgsubrepoarchive(orig, repo, archiver, prefix, match=None, decode=True):
     if not repo._repo.lfstatus:
-        return orig(repo, archiver, prefix, match)
+        return orig(repo, archiver, prefix, match, decode)
 
     repo._get(repo._state + ('hg',))
     rev = repo._state[1]
@@ -1010,6 +1010,8 @@ def hgsubrepoarchive(orig, repo, archiver, prefix, match=None):
         if match and not match(f):
             return
         data = getdata()
+        if decode:
+            data = repo._repo.wwritedata(name, data)
 
         archiver.addfile(prefix + repo._path + '/' + name, mode, islink, data)
 
@@ -1037,7 +1039,7 @@ def hgsubrepoarchive(orig, repo, archiver, prefix, match=None):
         sub = ctx.workingsub(subpath)
         submatch = matchmod.subdirmatcher(subpath, match)
         sub._repo.lfstatus = True
-        sub.archive(archiver, prefix + repo._path + '/', submatch)
+        sub.archive(archiver, prefix + repo._path + '/', submatch, decode)
 
 # If a largefile is modified, the change is not reflected in its
 # standin until a commit. cmdutil.bailifchanged() raises an exception
@@ -1094,7 +1096,7 @@ def cmdutilforget(orig, ui, repo, match, prefix, explicitonly):
         lfdirstate.write()
         standins = [lfutil.standin(f) for f in forget]
         for f in standins:
-            util.unlinkpath(repo.wjoin(f), ignoremissing=True)
+            repo.wvfs.unlinkpath(f, ignoremissing=True)
         rejected = repo[None].forget(standins)
 
     bad.extend(f for f in rejected if f in m.files())

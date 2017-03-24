@@ -346,6 +346,12 @@ def has_hardlink():
     finally:
         os.unlink(fn)
 
+@check("hardlink-whitelisted", "hardlinks on whitelisted filesystems")
+def has_hardlink_whitelisted():
+    from mercurial import osutil, util
+    fstype = getattr(osutil, 'getfstype', lambda x: None)('.')
+    return fstype in util._hardlinkfswhitelist
+
 @check("rmcwd", "can remove current working directory")
 def has_rmcwd():
     ocwd = os.getcwd()
@@ -411,6 +417,12 @@ def has_root():
 def has_pyflakes():
     return matchoutput("sh -c \"echo 'import re' 2>&1 | pyflakes\"",
                        br"<stdin>:1: 're' imported but unused",
+                       True)
+
+@check("pylint", "Pylint python linter")
+def has_pylint():
+    return matchoutput("pylint --help",
+                       br"Usage:  pylint",
                        True)
 
 @check("pygments", "Pygments source highlighting library")

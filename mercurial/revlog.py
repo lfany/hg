@@ -33,6 +33,7 @@ from . import (
     error,
     mdiff,
     parsers,
+    pycompat,
     templatefilters,
     util,
 )
@@ -117,7 +118,7 @@ def gettype(q):
 def offset_type(offset, type):
     if (type & ~REVIDX_KNOWN_FLAGS) != 0:
         raise ValueError('unknown revlog index flags')
-    return long(long(offset) << 16 | type)
+    return int(int(offset) << 16 | type)
 
 _nullhash = hashlib.sha1(nullid)
 
@@ -943,7 +944,7 @@ class revlog(object):
             ancs = self.index.commonancestorsheads(a, b)
         except (AttributeError, OverflowError): # C implementation failed
             ancs = ancestor.commonancestorsheads(self.parentrevs, a, b)
-        return map(self.node, ancs)
+        return pycompat.maplist(self.node, ancs)
 
     def isancestor(self, a, b):
         """return True if node a is an ancestor of node b
@@ -1234,7 +1235,7 @@ class revlog(object):
     def revdiff(self, rev1, rev2):
         """return or calculate a delta between two revisions"""
         if rev1 != nullrev and self.deltaparent(rev2) == rev1:
-            return str(self._chunk(rev2))
+            return bytes(self._chunk(rev2))
 
         return mdiff.textdiff(self.revision(rev1),
                               self.revision(rev2))
@@ -1277,7 +1278,7 @@ class revlog(object):
 
         bins = self._chunks(chain, df=_df)
         if text is None:
-            text = str(bins[0])
+            text = bytes(bins[0])
             bins = bins[1:]
 
         text = mdiff.patches(text, bins)
@@ -1521,7 +1522,7 @@ class revlog(object):
         #
         # According to `hg perfrevlogchunks`, this is ~0.5% faster for zlib
         # compressed chunks. And this matters for changelog and manifest reads.
-        t = data[0]
+        t = data[0:1]
 
         if t == 'x':
             try:

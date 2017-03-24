@@ -13,13 +13,16 @@ import types
 
 from .i18n import _
 from . import (
+    color,
     config,
+    encoding,
     error,
     minirst,
     parser,
     pycompat,
     registrar,
     revset as revsetmod,
+    revsetlang,
     templatefilters,
     templatekw,
     util,
@@ -543,6 +546,19 @@ def fill(context, mapping, args):
 
     return templatefilters.fill(text, width, initindent, hangindent)
 
+@templatefunc('formatnode(node)')
+def formatnode(context, mapping, args):
+    """Obtain the preferred form of a changeset hash. (DEPRECATED)"""
+    if len(args) != 1:
+        # i18n: "formatnode" is a keyword
+        raise error.ParseError(_("formatnode expects one argument"))
+
+    ui = mapping['ui']
+    node = evalstring(context, mapping, args[0])
+    if ui.debugflag:
+        return node
+    return templatefilters.short(node)
+
 @templatefunc('pad(text, width[, fillchar=\' \'[, left=False]])')
 def pad(context, mapping, args):
     """Pad text with a
@@ -561,13 +577,19 @@ def pad(context, mapping, args):
     fillchar = ' '
     if len(args) > 2:
         fillchar = evalstring(context, mapping, args[2])
+        if len(color.stripeffects(fillchar)) != 1:
+            # i18n: "pad" is a keyword
+            raise error.ParseError(_("pad() expects a single fill character"))
     if len(args) > 3:
         left = evalboolean(context, mapping, args[3])
 
+    fillwidth = width - encoding.colwidth(color.stripeffects(text))
+    if fillwidth <= 0:
+        return text
     if left:
-        return text.rjust(width, fillchar)
+        return fillchar * fillwidth + text
     else:
-        return text.ljust(width, fillchar)
+        return text + fillchar * fillwidth
 
 @templatefunc('indent(text, indentchars[, firstline])')
 def indent(context, mapping, args):
@@ -778,7 +800,7 @@ def revset(context, mapping, args):
 
     if len(args) > 1:
         formatargs = [evalfuncarg(context, mapping, a) for a in args[1:]]
-        revs = query(revsetmod.formatspec(raw, *formatargs))
+        revs = query(revsetlang.formatspec(raw, *formatargs))
         revs = list(revs)
     else:
         revsetcache = mapping['cache'].setdefault("revsetcache", {})

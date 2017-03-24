@@ -28,6 +28,7 @@ from . import (
     bundle2,
     changegroup,
     changelog,
+    color,
     context,
     dirstate,
     dirstateguard,
@@ -48,14 +49,18 @@ from . import (
     peer,
     phases,
     pushkey,
+    pycompat,
     repoview,
     revset,
+    revsetlang,
     scmutil,
     store,
     subrepo,
     tags as tagsmod,
     transaction,
+    txnutil,
     util,
+    vfs as vfsmod,
 )
 
 release = lockmod.release
@@ -66,6 +71,8 @@ class repofilecache(scmutil.filecache):
     """All filecache usage on repo are done for logic that should be unfiltered
     """
 
+    def join(self, obj, fname):
+        return obj.vfs.join(fname)
     def __get__(self, repo, type=None):
         if repo is None:
             return self
@@ -113,7 +120,9 @@ legacycaps = moderncaps.union(set(['changegroupsubset']))
 class localpeer(peer.peerrepository):
     '''peer for a local repo; reflects only the most recent API'''
 
-    def __init__(self, repo, caps=moderncaps):
+    def __init__(self, repo, caps=None):
+        if caps is None:
+            caps = moderncaps.copy()
         peer.peerrepository.__init__(self)
         self._repo = repo.filtered('served')
         self.ui = repo.ui
@@ -241,7 +250,7 @@ class localrepository(object):
     supportedformats = set(('revlogv1', 'generaldelta', 'treemanifest',
                             'manifestv2'))
     _basesupported = supportedformats | set(('store', 'fncache', 'shared',
-                                             'dotencode'))
+                                             'relshared', 'dotencode'))
     openerreqs = set(('revlogv1', 'generaldelta', 'treemanifest', 'manifestv2'))
     filtername = None
 
@@ -251,16 +260,21 @@ class localrepository(object):
 
     def __init__(self, baseui, path, create=False):
         self.requirements = set()
-        self.wvfs = scmutil.vfs(path, expandpath=True, realpath=True)
-        self.wopener = self.wvfs
+        # wvfs: rooted at the repository root, used to access the working copy
+        self.wvfs = vfsmod.vfs(path, expandpath=True, realpath=True)
+        # vfs: rooted at .hg, used to access repo files outside of .hg/store
+        self.vfs = None
+        # svfs: usually rooted at .hg/store, used to access repository history
+        # If this is a shared repository, this vfs may point to another
+        # repository's .hg/store directory.
+        self.svfs = None
         self.root = self.wvfs.base
         self.path = self.wvfs.join(".hg")
         self.origroot = path
         self.auditor = pathutil.pathauditor(self.root, self._checknested)
         self.nofsauditor = pathutil.pathauditor(self.root, self._checknested,
                                                 realfs=False)
-        self.vfs = scmutil.vfs(self.path)
-        self.opener = self.vfs
+        self.vfs = vfsmod.vfs(self.path)
         self.baseui = baseui
         self.ui = baseui.copy()
         self.ui.copy = baseui.copy # prevent copying repo configuration
@@ -269,8 +283,8 @@ class localrepository(object):
         # This list it to be filled by extension during repo setup
         self._phasedefaults = []
         try:
-            self.ui.readconfig(self.join("hgrc"), self.root)
-            extensions.loadall(self.ui)
+            self.ui.readconfig(self.vfs.join("hgrc"), self.root)
+            self._loadextensions()
         except IOError:
             pass
 
@@ -283,6 +297,7 @@ class localrepository(object):
                     setupfunc(self.ui, self.supported)
         else:
             self.supported = self._basesupported
+        color.setup(self.ui)
 
         # Add compression engines.
         for name in util.compengines:
@@ -321,8 +336,10 @@ class localrepository(object):
 
         self.sharedpath = self.path
         try:
-            vfs = scmutil.vfs(self.vfs.read("sharedpath").rstrip('\n'),
-                              realpath=True)
+            sharedpath = self.vfs.read("sharedpath").rstrip('\n')
+            if 'relshared' in self.requirements:
+                sharedpath = self.vfs.join(sharedpath)
+            vfs = vfsmod.vfs(sharedpath, realpath=True)
             s = vfs.base
             if not vfs.exists():
                 raise error.RepoError(
@@ -333,7 +350,7 @@ class localrepository(object):
                 raise
 
         self.store = store.store(
-                self.requirements, self.sharedpath, scmutil.vfs)
+                self.requirements, self.sharedpath, vfsmod.vfs)
         self.spath = self.store.path
         self.svfs = self.store.vfs
         self.sjoin = self.store.join
@@ -368,8 +385,21 @@ class localrepository(object):
         # generic mapping between names and nodes
         self.names = namespaces.namespaces()
 
+    @property
+    def wopener(self):
+        self.ui.deprecwarn("use 'repo.wvfs' instead of 'repo.wopener'", '4.2')
+        return self.wvfs
+
+    @property
+    def opener(self):
+        self.ui.deprecwarn("use 'repo.vfs' instead of 'repo.opener'", '4.2')
+        return self.vfs
+
     def close(self):
         self._writecaches()
+
+    def _loadextensions(self):
+        extensions.loadall(self.ui)
 
     def _writecaches(self):
         if self._revbranchcache:
@@ -461,9 +491,9 @@ class localrepository(object):
         """Return a filtered version of a repository"""
         # build a new class with the mixin and the current class
         # (possibly subclass of the repo)
-        class proxycls(repoview.repoview, self.unfiltered().__class__):
+        class filteredrepo(repoview.repoview, self.unfiltered().__class__):
             pass
-        return proxycls(self, name)
+        return filteredrepo(self, name)
 
     @repofilecache('bookmarks', 'bookmarks.current')
     def _bookmarks(self):
@@ -509,10 +539,8 @@ class localrepository(object):
     @storecache('00changelog.i')
     def changelog(self):
         c = changelog.changelog(self.svfs)
-        if 'HG_PENDING' in encoding.environ:
-            p = encoding.environ['HG_PENDING']
-            if p.startswith(self.root):
-                c.readpending('00changelog.i.a')
+        if txnutil.mayhavepending(self.root):
+            c.readpending('00changelog.i.a')
         return c
 
     def _constructmanifest(self):
@@ -560,6 +588,8 @@ class localrepository(object):
     def __nonzero__(self):
         return True
 
+    __bool__ = __nonzero__
+
     def __len__(self):
         return len(self.changelog)
 
@@ -570,15 +600,16 @@ class localrepository(object):
         '''Find revisions matching a revset.
 
         The revset is specified as a string ``expr`` that may contain
-        %-formatting to escape certain types. See ``revset.formatspec``.
+        %-formatting to escape certain types. See ``revsetlang.formatspec``.
 
         Revset aliases from the configuration are not expanded. To expand
-        user aliases, consider calling ``scmutil.revrange()``.
+        user aliases, consider calling ``scmutil.revrange()`` or
+        ``repo.anyrevs([expr], user=True)``.
 
         Returns a revset.abstractsmartset, which is a list-like interface
         that contains integer revisions.
         '''
-        expr = revset.formatspec(expr, *args)
+        expr = revsetlang.formatspec(expr, *args)
         m = revset.match(None, expr)
         return m(self)
 
@@ -593,6 +624,18 @@ class localrepository(object):
         '''
         for r in self.revs(expr, *args):
             yield self[r]
+
+    def anyrevs(self, specs, user=False):
+        '''Find revisions matching one of the given revsets.
+
+        Revset aliases from the configuration are not expanded by default. To
+        expand user aliases, specify ``user=True``.
+        '''
+        if user:
+            m = revset.matchany(self.ui, specs, repo=self)
+        else:
+            m = revset.matchany(None, specs)
+        return m(self)
 
     def url(self):
         return 'file:' + self.root
@@ -653,11 +696,11 @@ class localrepository(object):
             return
 
         try:
-            fp = self.wfile('.hgtags', 'rb+')
+            fp = self.wvfs('.hgtags', 'rb+')
         except IOError as e:
             if e.errno != errno.ENOENT:
                 raise
-            fp = self.wfile('.hgtags', 'ab')
+            fp = self.wvfs('.hgtags', 'ab')
         else:
             prevtags = fp.read()
 
@@ -896,6 +939,7 @@ class localrepository(object):
         return None
 
     def join(self, f, *insidef):
+        self.ui.deprecwarn("use 'repo.vfs.join' instead of 'repo.join'", '4.0')
         return self.vfs.join(os.path.join(f, *insidef))
 
     def wjoin(self, f, *insidef):
@@ -938,9 +982,12 @@ class localrepository(object):
         return self.dirstate.pathto(f, cwd)
 
     def wfile(self, f, mode='r'):
+        self.ui.deprecwarn("use 'repo.wvfs' instead of 'repo.wfile'", '4.2')
         return self.wvfs(f, mode)
 
     def _link(self, f):
+        self.ui.deprecwarn("use 'repo.wvfs.islink' instead of 'repo._link'",
+                           '4.0')
         return self.wvfs.islink(f)
 
     def _loadfilter(self, filter):
@@ -988,7 +1035,7 @@ class localrepository(object):
         self._datafilters[name] = filter
 
     def wread(self, filename):
-        if self._link(filename):
+        if self.wvfs.islink(filename):
             data = self.wvfs.readlink(filename)
         else:
             data = self.wvfs.read(filename)
@@ -1038,7 +1085,8 @@ class localrepository(object):
                 hint=_("run 'hg recover' to clean up transaction"))
 
         idbase = "%.40f#%f" % (random.random(), time.time())
-        txnid = 'TXN:' + hashlib.sha1(idbase).hexdigest()
+        ha = hex(hashlib.sha1(idbase).digest())
+        txnid = 'TXN:' + ha
         self.hook('pretxnopen', throw=True, txnname=desc, txnid=txnid)
 
         self._writejournal(desc)
@@ -1053,7 +1101,7 @@ class localrepository(object):
         def validate(tr):
             """will run pre-closing hooks"""
             reporef().hook('pretxnclose', throw=True,
-                           txnname=desc, **tr.hookargs)
+                           txnname=desc, **pycompat.strkwargs(tr.hookargs))
         def releasefn(tr, success):
             repo = reporef()
             if success:
@@ -1094,7 +1142,7 @@ class localrepository(object):
 
             def hook():
                 reporef().hook('txnclose', throw=False, txnname=desc,
-                               **hookargs)
+                               **pycompat.strkwargs(hookargs))
             reporef()._afterlock(hook)
         tr.addfinalize('txnclose-hook', txnclosehook)
         def txnaborthook(tr2):
@@ -1270,7 +1318,7 @@ class localrepository(object):
         redundant one doesn't).
         '''
         unfiltered = self.unfiltered() # all file caches are stored unfiltered
-        for k in self._filecache.keys():
+        for k in list(self._filecache.keys()):
             # dirstate is invalidated separately in invalidatedirstate()
             if k == 'dirstate':
                 continue
@@ -1852,6 +1900,11 @@ class localrepository(object):
                                   listsubrepos)
 
     def heads(self, start=None):
+        if start is None:
+            cl = self.changelog
+            headrevs = reversed(cl.headrevs())
+            return [cl.node(rev) for rev in headrevs]
+
         heads = self.changelog.heads(start)
         # sort the output in rev descending order
         return sorted(heads, key=self.changelog.rev, reverse=True)
@@ -1972,6 +2025,10 @@ def aftertrans(files):
     renamefiles = [tuple(t) for t in files]
     def a():
         for vfs, src, dest in renamefiles:
+            # if src and dest refer to a same file, vfs.rename is a no-op,
+            # leaving both src and dest on disk. delete dest to make sure
+            # the rename couldn't be such a no-op.
+            vfs.tryunlink(dest)
             try:
                 vfs.rename(src, dest)
             except OSError: # journal file does not yet exist

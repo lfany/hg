@@ -46,6 +46,7 @@ from mercurial import (
     scmutil,
     templatefilters,
     util,
+    vfs as vfsmod,
 )
 
 from . import (
@@ -62,7 +63,7 @@ testedwith = 'ships-with-hg-core'
 
 backupdir = 'shelve-backup'
 shelvedir = 'shelved'
-shelvefileextensions = ['hg', 'patch']
+shelvefileextensions = ['hg', 'patch', 'oshelve']
 # universal extension is present in all types of shelves
 patchextension = 'patch'
 
@@ -78,8 +79,8 @@ class shelvedfile(object):
     def __init__(self, repo, name, filetype=None):
         self.repo = repo
         self.name = name
-        self.vfs = scmutil.vfs(repo.join(shelvedir))
-        self.backupvfs = scmutil.vfs(repo.join(backupdir))
+        self.vfs = vfsmod.vfs(repo.vfs.join(shelvedir))
+        self.backupvfs = vfsmod.vfs(repo.vfs.join(backupdir))
         self.ui = self.repo.ui
         if filetype:
             self.fname = name + '.' + filetype
@@ -153,6 +154,12 @@ class shelvedfile(object):
         bundle2.writebundle(self.ui, cg, self.fname, btype, self.vfs,
                                 compression=compression)
 
+    def writeobsshelveinfo(self, info):
+        scmutil.simplekeyvaluefile(self.vfs, self.fname).write(info)
+
+    def readobsshelveinfo(self):
+        return scmutil.simplekeyvaluefile(self.vfs, self.fname).read()
+
 class shelvedstate(object):
     """Handle persistence during unshelving operations.
 
@@ -177,7 +184,7 @@ class shelvedstate(object):
             wctx = nodemod.bin(fp.readline().strip())
             pendingctx = nodemod.bin(fp.readline().strip())
             parents = [nodemod.bin(h) for h in fp.readline().split()]
-            stripnodes = [nodemod.bin(h) for h in fp.readline().split()]
+            nodestoprune = [nodemod.bin(h) for h in fp.readline().split()]
             branchtorestore = fp.readline().strip()
             keep = fp.readline().strip() == cls._keep
         except (ValueError, TypeError) as err:
@@ -191,7 +198,7 @@ class shelvedstate(object):
             obj.wctx = repo[wctx]
             obj.pendingctx = repo[pendingctx]
             obj.parents = parents
-            obj.stripnodes = stripnodes
+            obj.nodestoprune = nodestoprune
             obj.branchtorestore = branchtorestore
             obj.keep = keep
         except error.RepoLookupError as err:
@@ -200,7 +207,7 @@ class shelvedstate(object):
         return obj
 
     @classmethod
-    def save(cls, repo, name, originalwctx, pendingctx, stripnodes,
+    def save(cls, repo, name, originalwctx, pendingctx, nodestoprune,
              branchtorestore, keep=False):
         fp = repo.vfs(cls._filename, 'wb')
         fp.write('%i\n' % cls._version)
@@ -210,17 +217,17 @@ class shelvedstate(object):
         fp.write('%s\n' %
                  ' '.join([nodemod.hex(p) for p in repo.dirstate.parents()]))
         fp.write('%s\n' %
-                 ' '.join([nodemod.hex(n) for n in stripnodes]))
+                 ' '.join([nodemod.hex(n) for n in nodestoprune]))
         fp.write('%s\n' % branchtorestore)
         fp.write('%s\n' % (cls._keep if keep else cls._nokeep))
         fp.close()
 
     @classmethod
     def clear(cls, repo):
-        util.unlinkpath(repo.join(cls._filename), ignoremissing=True)
+        repo.vfs.unlinkpath(cls._filename, ignoremissing=True)
 
 def cleanupoldbackups(repo):
-    vfs = scmutil.vfs(repo.join(backupdir))
+    vfs = vfsmod.vfs(repo.vfs.join(backupdir))
     maxbackups = repo.ui.configint('shelve', 'maxbackups', 10)
     hgfiles = [f for f in vfs.listdir()
                if f.endswith('.' + patchextension)]
@@ -235,11 +242,7 @@ def cleanupoldbackups(repo):
             continue
         base = f[:-(1 + len(patchextension))]
         for ext in shelvefileextensions:
-            try:
-                vfs.unlink(base + '.' + ext)
-            except OSError as err:
-                if err.errno != errno.ENOENT:
-                    raise
+            vfs.tryunlink(base + '.' + ext)
 
 def _aborttransaction(repo):
     '''Abort current transaction for shelve/unshelve, but keep dirstate
@@ -313,17 +316,16 @@ def getcommitfunc(extra, interactive, editor=False):
         hasmq = util.safehasattr(repo, 'mq')
         if hasmq:
             saved, repo.mq.checkapplied = repo.mq.checkapplied, False
-        backup = repo.ui.backupconfig('phases', 'new-commit')
+        overrides = {('phases', 'new-commit'): phases.secret}
         try:
-            repo.ui.setconfig('phases', 'new-commit', phases.secret)
             editor_ = False
             if editor:
                 editor_ = cmdutil.getcommiteditor(editform='shelve.shelve',
                                                   **opts)
-            return repo.commit(message, shelveuser, opts.get('date'), match,
-                               editor=editor_, extra=extra)
+            with repo.ui.configoverride(overrides):
+                return repo.commit(message, shelveuser, opts.get('date'),
+                                   match, editor=editor_, extra=extra)
         finally:
-            repo.ui.restoreconfig(backup)
             if hasmq:
                 repo.mq.checkapplied = saved
 
@@ -485,6 +487,7 @@ def listcmd(ui, repo, pats, opts):
     if not ui.plain():
         width = ui.termwidth()
     namelabel = 'shelve.newest'
+    ui.pager('shelve')
     for mtime, name in listshelves(repo):
         sname = util.split(name)[1]
         if pats and sname not in pats:
@@ -549,19 +552,17 @@ def unshelveabort(ui, repo, state, opts):
         try:
             checkparents(repo, state)
 
-            util.rename(repo.join('unshelverebasestate'),
-                        repo.join('rebasestate'))
+            repo.vfs.rename('unshelverebasestate', 'rebasestate')
             try:
                 rebase.rebase(ui, repo, **{
                     'abort' : True
                 })
             except Exception:
-                util.rename(repo.join('rebasestate'),
-                            repo.join('unshelverebasestate'))
+                repo.vfs.rename('rebasestate', 'unshelverebasestate')
                 raise
 
             mergefiles(ui, repo, state.wctx, state.pendingctx)
-            repair.strip(ui, repo, state.stripnodes, backup=False,
+            repair.strip(ui, repo, state.nodestoprune, backup=False,
                          topic='shelve')
         finally:
             shelvedstate.clear(repo)
@@ -617,15 +618,13 @@ def unshelvecontinue(ui, repo, state, opts):
                 _("unresolved conflicts, can't continue"),
                 hint=_("see 'hg resolve', then 'hg unshelve --continue'"))
 
-        util.rename(repo.join('unshelverebasestate'),
-                    repo.join('rebasestate'))
+        repo.vfs.rename('unshelverebasestate', 'rebasestate')
         try:
             rebase.rebase(ui, repo, **{
                 'continue' : True
             })
         except Exception:
-            util.rename(repo.join('rebasestate'),
-                        repo.join('unshelverebasestate'))
+            repo.vfs.rename('rebasestate', 'unshelverebasestate')
             raise
 
         shelvectx = repo['tip']
@@ -634,12 +633,12 @@ def unshelvecontinue(ui, repo, state, opts):
             shelvectx = state.pendingctx
         else:
             # only strip the shelvectx if the rebase produced it
-            state.stripnodes.append(shelvectx.node())
+            state.nodestoprune.append(shelvectx.node())
 
         mergefiles(ui, repo, state.wctx, shelvectx)
         restorebranch(ui, repo, state.branchtorestore)
 
-        repair.strip(ui, repo, state.stripnodes, backup=False, topic='shelve')
+        repair.strip(ui, repo, state.nodestoprune, backup=False, topic='shelve')
         shelvedstate.clear(repo)
         unshelvecleanup(ui, repo, state.name, opts)
         ui.status(_("unshelve of '%s' complete\n") % state.name)
@@ -691,13 +690,12 @@ def _rebaserestoredcommit(ui, repo, opts, tr, oldtiprev, basename, pctx,
     except error.InterventionRequired:
         tr.close()
 
-        stripnodes = [repo.changelog.node(rev)
-                      for rev in xrange(oldtiprev, len(repo))]
-        shelvedstate.save(repo, basename, pctx, tmpwctx, stripnodes,
+        nodestoprune = [repo.changelog.node(rev)
+                        for rev in xrange(oldtiprev, len(repo))]
+        shelvedstate.save(repo, basename, pctx, tmpwctx, nodestoprune,
                           branchtorestore, opts.get('keep'))
 
-        util.rename(repo.join('rebasestate'),
-                    repo.join('unshelverebasestate'))
+        repo.vfs.rename('rebasestate', 'unshelverebasestate')
         raise error.InterventionRequired(
             _("unresolved conflicts (see 'hg resolve', then "
               "'hg unshelve --continue')"))
@@ -747,10 +745,12 @@ def _checkunshelveuntrackedproblems(ui, repo, shelvectx):
            _('continue an incomplete unshelve operation')),
           ('k', 'keep', None,
            _('keep shelve after unshelving')),
+          ('n', 'name', '',
+           _('restore shelved change with given name'), _('NAME')),
           ('t', 'tool', '', _('specify merge tool')),
           ('', 'date', '',
            _('set date for temporary commits (DEPRECATED)'), _('DATE'))],
-         _('hg unshelve [SHELVED]'))
+         _('hg unshelve [[-n] SHELVED]'))
 def unshelve(ui, repo, *shelved, **opts):
     """restore a shelved change to the working directory
 
@@ -795,6 +795,9 @@ def _dounshelve(ui, repo, *shelved, **opts):
     continuef = opts.get('continue')
     if not abortf and not continuef:
         cmdutil.checkunfinished(repo)
+    shelved = list(shelved)
+    if opts.get("name"):
+        shelved.append(opts["name"])
 
     if abortf or continuef:
         if abortf and continuef:
@@ -848,9 +851,7 @@ def _dounshelve(ui, repo, *shelved, **opts):
 
     oldquiet = ui.quiet
     lock = tr = None
-    forcemerge = ui.backupconfig('ui', 'forcemerge')
     try:
-        ui.setconfig('ui', 'forcemerge', opts.get('tool', ''), 'unshelve')
         lock = repo.lock()
 
         tr = repo.transaction('unshelve', report=lambda x: None)
@@ -864,31 +865,33 @@ def _dounshelve(ui, repo, *shelved, **opts):
         # and shelvectx is the unshelved changes. Then we merge it all down
         # to the original pctx.
 
-        tmpwctx, addedbefore = _commitworkingcopychanges(ui, repo, opts,
-                                                         tmpwctx)
+        overrides = {('ui', 'forcemerge'): opts.get('tool', '')}
+        with ui.configoverride(overrides, 'unshelve'):
+            tmpwctx, addedbefore = _commitworkingcopychanges(ui, repo, opts,
+                                                             tmpwctx)
 
-        repo, shelvectx = _unshelverestorecommit(ui, repo, basename, oldquiet)
-        _checkunshelveuntrackedproblems(ui, repo, shelvectx)
-        branchtorestore = ''
-        if shelvectx.branch() != shelvectx.p1().branch():
-            branchtorestore = shelvectx.branch()
+            repo, shelvectx = _unshelverestorecommit(ui, repo, basename,
+                                                     oldquiet)
+            _checkunshelveuntrackedproblems(ui, repo, shelvectx)
+            branchtorestore = ''
+            if shelvectx.branch() != shelvectx.p1().branch():
+                branchtorestore = shelvectx.branch()
 
-        shelvectx = _rebaserestoredcommit(ui, repo, opts, tr, oldtiprev,
-                                          basename, pctx, tmpwctx, shelvectx,
-                                          branchtorestore)
-        mergefiles(ui, repo, pctx, shelvectx)
-        restorebranch(ui, repo, branchtorestore)
-        _forgetunknownfiles(repo, shelvectx, addedbefore)
+            shelvectx = _rebaserestoredcommit(ui, repo, opts, tr, oldtiprev,
+                                              basename, pctx, tmpwctx,
+                                              shelvectx, branchtorestore)
+            mergefiles(ui, repo, pctx, shelvectx)
+            restorebranch(ui, repo, branchtorestore)
+            _forgetunknownfiles(repo, shelvectx, addedbefore)
 
-        shelvedstate.clear(repo)
-        _finishunshelve(repo, oldtiprev, tr)
-        unshelvecleanup(ui, repo, basename, opts)
+            shelvedstate.clear(repo)
+            _finishunshelve(repo, oldtiprev, tr)
+            unshelvecleanup(ui, repo, basename, opts)
     finally:
         ui.quiet = oldquiet
         if tr:
             tr.release()
         lockmod.release(lock)
-        ui.restoreconfig(forcemerge)
 
 @command('shelve',
          [('A', 'addremove', None,

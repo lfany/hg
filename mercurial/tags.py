@@ -12,9 +12,7 @@
 
 from __future__ import absolute_import
 
-import array
 import errno
-import time
 
 from .node import (
     bin,
@@ -25,10 +23,9 @@ from .node import (
 from . import (
     encoding,
     error,
+    scmutil,
     util,
 )
-
-array = array.array
 
 # Tags computation can be expensive and caches exist to make it fast in
 # the common case.
@@ -278,8 +275,6 @@ def _readtagcache(ui, repo):
     If the cache is not up to date, the caller is responsible for reading tag
     info from each returned head. (See findglobaltags().)
     '''
-    from . import scmutil  # avoid cycle
-
     try:
         cachefile = repo.vfs(_filename(repo), 'r')
         # force reading the file for static-http
@@ -344,7 +339,7 @@ def _readtagcache(ui, repo):
         # potentially expensive search.
         return ([], {}, valid, None, True)
 
-    starttime = time.time()
+    starttime = util.timer()
 
     # Now we have to lookup the .hgtags filenode for every new head.
     # This is the most expensive part of finding tags, so performance
@@ -359,7 +354,7 @@ def _readtagcache(ui, repo):
 
     fnodescache.write()
 
-    duration = time.time() - starttime
+    duration = util.timer() - starttime
     ui.log('tagscache',
            '%d/%d cache hits/lookups in %0.4f '
            'seconds\n',
@@ -430,13 +425,12 @@ class hgtagsfnodescache(object):
         self.lookupcount = 0
         self.hitcount = 0
 
-        self._raw = array('c')
 
         try:
             data = repo.vfs.read(_fnodescachefile)
         except (OSError, IOError):
             data = ""
-        self._raw.fromstring(data)
+        self._raw = bytearray(data)
 
         # The end state of self._raw is an array that is of the exact length
         # required to hold a record for every revision in the repository.
@@ -477,7 +471,7 @@ class hgtagsfnodescache(object):
         self.lookupcount += 1
 
         offset = rev * _fnodesrecsize
-        record = self._raw[offset:offset + _fnodesrecsize].tostring()
+        record = '%s' % self._raw[offset:offset + _fnodesrecsize]
         properprefix = node[0:4]
 
         # Validate and return existing entry.
@@ -518,7 +512,7 @@ class hgtagsfnodescache(object):
 
     def _writeentry(self, offset, prefix, fnode):
         # Slices on array instances only accept other array.
-        entry = array('c', prefix + fnode)
+        entry = bytearray(prefix + fnode)
         self._raw[offset:offset + _fnodesrecsize] = entry
         # self._dirtyoffset could be None.
         self._dirtyoffset = min(self._dirtyoffset, offset) or 0

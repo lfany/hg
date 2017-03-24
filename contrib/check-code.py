@@ -237,7 +237,7 @@ pypats = [
     (r'lambda\s*\(.*,.*\)',
      "tuple parameter unpacking not available in Python 3+"),
     (r'(?<!def)\s+(cmp)\(', "cmp is not available in Python 3+"),
-    (r'\breduce\s*\(.*', "reduce is not available in Python 3+"),
+    (r'(?<!\.)\breduce\s*\(.*', "reduce is not available in Python 3+"),
     (r'\bdict\(.*=', 'dict() is different in Py2 and 3 and is slower than {}',
      'dict-from-generator'),
     (r'\.has_key\b', "dict.has_key is not available in Python 3+"),
@@ -318,7 +318,7 @@ pypats = [
      'legacy exception syntax; use "as" instead of ","'),
     (r':\n(    )*( ){1,3}[^ ]', "must indent 4 spaces"),
     (r'release\(.*wlock, .*lock\)', "wrong lock release order"),
-    (r'\b__bool__\b', "__bool__ should be __nonzero__ in Python 2"),
+    (r'\bdef\s+__bool__\b', "__bool__ should be __nonzero__ in Python 2"),
     (r'os\.path\.join\(.*, *(""|\'\')\)',
      "use pathutil.normasprefix(path) instead of os.path.join(path, '')"),
     (r'\s0[0-7]+\b', 'legacy octal syntax; use "0o" prefix instead of "0"'),
@@ -330,7 +330,7 @@ pypats = [
     (r'^import cStringIO', "don't use cStringIO.StringIO, use util.stringio"),
     (r'^import urllib', "don't use urllib, use util.urlreq/util.urlerr"),
     (r'^import SocketServer', "don't use SockerServer, use util.socketserver"),
-    (r'^import urlparse', "don't use urlparse, use util.urlparse"),
+    (r'^import urlparse', "don't use urlparse, use util.urlreq"),
     (r'^import xmlrpclib', "don't use xmlrpclib, use util.xmlrpclib"),
     (r'^import cPickle', "don't use cPickle, use util.pickle"),
     (r'^import pickle', "don't use pickle, use util.pickle"),
@@ -369,6 +369,13 @@ pyfilters = [
          ((?P<quote>('''|\"\"\"|(?<!')'(?!')|(?<!")"(?!")))
           (?P<text>(([^\\]|\\.)*?))
           (?P=quote))""", reppython),
+]
+
+# extension non-filter patterns
+pyextnfpats = [
+    [(r'^"""\n?[A-Z]', "don't capitalize docstring title")],
+    # warnings
+    [],
 ]
 
 txtfilters = []
@@ -480,6 +487,7 @@ py3pats = [
 
 checks = [
     ('python', r'.*\.(py|cgi)$', r'^#!.*python', pyfilters, pypats),
+    ('python', r'.*hgext.*\.py$', '', [], pyextnfpats),
     ('python 3', r'.*(hgext|mercurial).*(?<!pycompat)\.py', '',
             pyfilters, py3pats),
     ('test script', r'(.*/)?test-[^.~]*$', '', testfilters, testpats),

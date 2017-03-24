@@ -1549,6 +1549,10 @@ help/ shows help topics
     ],
     "topics": [
       {
+        "summary": "Colorizing Outputs",
+        "topic": "color"
+      },
+      {
         "summary": "Configuration Files",
         "topic": "config"
       },
@@ -1591,6 +1595,10 @@ help/ shows help topics
       {
         "summary": "Merge Tools",
         "topic": "merge-tools"
+      },
+      {
+        "summary": "Pager Support",
+        "topic": "pager"
       },
       {
         "summary": "File Name Patterns",

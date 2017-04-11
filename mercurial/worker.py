@@ -133,6 +133,7 @@ def _posixworker(ui, func, staticargs, args):
         if problem[0]:
             killworkers()
     oldchldhandler = signal.signal(signal.SIGCHLD, sigchldhandler)
+    ui.flush()
     for pargs in partition(args, workers):
         pid = os.fork()
         if pid == 0:
@@ -164,7 +165,7 @@ def _posixworker(ui, func, staticargs, args):
                 os._exit(0)
         pids.add(pid)
     os.close(wfd)
-    fp = os.fdopen(rfd, 'rb', 0)
+    fp = os.fdopen(rfd, pycompat.sysstr('rb'), 0)
     def cleanup():
         signal.signal(signal.SIGINT, oldhandler)
         waitforworkers()

@@ -271,6 +271,8 @@ class unbundlerecords(object):
     def __nonzero__(self):
         return bool(self._sequences)
 
+    __bool__ = __nonzero__
+
 class bundleoperation(object):
     """an object that represents a single bundling process
 
@@ -319,9 +321,6 @@ def processbundle(repo, unbundler, transactiongetter=None, op=None):
 
     It iterates over each part then searches for and uses the proper handling
     code to process the part. Parts are processed in order.
-
-    This is very early version of this function that will be strongly reworked
-    before final usage.
 
     Unknown Mandatory part will abort the process.
 
@@ -622,12 +621,24 @@ class unpackermixin(object):
                           util.safehasattr(fp, 'tell'))
 
     def _unpack(self, format):
-        """unpack this struct format from the stream"""
+        """unpack this struct format from the stream
+
+        This method is meant for internal usage by the bundle2 protocol only.
+        They directly manipulate the low level stream including bundle2 level
+        instruction.
+
+        Do not use it to implement higher-level logic or methods."""
         data = self._readexact(struct.calcsize(format))
         return _unpack(format, data)
 
     def _readexact(self, size):
-        """read exactly <size> bytes from the stream"""
+        """read exactly <size> bytes from the stream
+
+        This method is meant for internal usage by the bundle2 protocol only.
+        They directly manipulate the low level stream including bundle2 level
+        instruction.
+
+        Do not use it to implement higher-level logic or methods."""
         return changegroup.readexactly(self._fp, size)
 
     def seek(self, offset, whence=0):
@@ -648,11 +659,6 @@ class unpackermixin(object):
                 else:
                     raise
         return None
-
-    def close(self):
-        """close underlying file"""
-        if util.safehasattr(self._fp, 'close'):
-            return self._fp.close()
 
 def getunbundler(ui, fp, magicstring=None):
     """return a valid unbundler object for a given magicstring"""
@@ -806,6 +812,11 @@ class unbundle20(unpackermixin):
         self.params # load params
         return self._compressed
 
+    def close(self):
+        """close underlying file"""
+        if util.safehasattr(self._fp, 'close'):
+            return self._fp.close()
+
 formatmap = {'20': unbundle20}
 
 b2streamparamsmap = {}
@@ -856,7 +867,7 @@ class bundlepart(object):
         self._seenparams = set()
         for pname, __ in self._mandatoryparams + self._advisoryparams:
             if pname in self._seenparams:
-                raise RuntimeError('duplicated params: %s' % pname)
+                raise error.ProgrammingError('duplicated params: %s' % pname)
             self._seenparams.add(pname)
         # status of the part's generation:
         # - None: not started,
@@ -864,6 +875,11 @@ class bundlepart(object):
         # - True: generation done.
         self._generated = None
         self.mandatory = mandatory
+
+    def __repr__(self):
+        cls = "%s.%s" % (self.__class__.__module__, self.__class__.__name__)
+        return ('<%s object at %x; id: %s; type: %s; mandatory: %s>'
+                % (cls, id(self), self.id, self.type, self.mandatory))
 
     def copy(self):
         """return a copy of the part
@@ -896,6 +912,13 @@ class bundlepart(object):
         return tuple(self._advisoryparams)
 
     def addparam(self, name, value='', mandatory=True):
+        """add a parameter to the part
+
+        If 'mandatory' is set to True, the remote handler must claim support
+        for this parameter or the unbundling will be aborted.
+
+        The 'name' and 'value' cannot exceed 255 bytes each.
+        """
         if self._generated is not None:
             raise error.ReadOnlyPartError('part is being generated')
         if name in self._seenparams:
@@ -909,7 +932,7 @@ class bundlepart(object):
     # methods used to generates the bundle2 stream
     def getchunks(self, ui):
         if self._generated is not None:
-            raise RuntimeError('part can only be consumed once')
+            raise error.ProgrammingError('part can only be consumed once')
         self._generated = False
 
         if ui.debugflag:
@@ -1078,7 +1101,7 @@ class interruptoperation(object):
 
     @property
     def repo(self):
-        raise RuntimeError('no repo access from stream interruption')
+        raise error.ProgrammingError('no repo access from stream interruption')
 
     def gettransaction(self):
         raise TransactionUnavailable('no repo access from stream interruption')

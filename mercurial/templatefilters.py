@@ -218,26 +218,24 @@ def indent(text, prefix):
     return "".join(indenter())
 
 @templatefilter('json')
-def json(obj):
-    if obj is None or obj is False or obj is True:
-        return {None: 'null', False: 'false', True: 'true'}[obj]
-    elif isinstance(obj, int) or isinstance(obj, float):
+def json(obj, paranoid=True):
+    if obj is None:
+        return 'null'
+    elif obj is False:
+        return 'false'
+    elif obj is True:
+        return 'true'
+    elif isinstance(obj, (int, long, float)):
         return str(obj)
     elif isinstance(obj, str):
-        return '"%s"' % encoding.jsonescape(obj, paranoid=True)
+        return '"%s"' % encoding.jsonescape(obj, paranoid=paranoid)
     elif util.safehasattr(obj, 'keys'):
-        out = []
-        for k, v in sorted(obj.iteritems()):
-            s = '%s: %s' % (json(k), json(v))
-            out.append(s)
+        out = ['%s: %s' % (json(k), json(v))
+               for k, v in sorted(obj.iteritems())]
         return '{' + ', '.join(out) + '}'
     elif util.safehasattr(obj, '__iter__'):
-        out = []
-        for i in obj:
-            out.append(json(i))
+        out = [json(i) for i in obj]
         return '[' + ', '.join(out) + ']'
-    elif util.safehasattr(obj, '__call__'):
-        return json(obj())
     else:
         raise TypeError('cannot encode type %s' % obj.__class__.__name__)
 
@@ -345,7 +343,7 @@ def splitlines(text):
 
 @templatefilter('stringescape')
 def stringescape(text):
-    return text.encode('string_escape')
+    return util.escapestr(text)
 
 @templatefilter('stringify')
 def stringify(thing):

@@ -19,7 +19,10 @@
 from __future__ import absolute_import
 
 from .i18n import _
-from . import error
+from . import (
+    error,
+    util,
+)
 
 class parser(object):
     def __init__(self, elements, methods=None):
@@ -164,7 +167,7 @@ def buildargsdict(trees, funcname, argspec, keyvaluenode, keynode):
 
 def unescapestr(s):
     try:
-        return s.decode("string_escape")
+        return util.unescapestr(s)
     except ValueError as e:
         # mangle Python's exception into our format
         raise error.ParseError(str(e).lower())
@@ -265,7 +268,7 @@ def parseerrordetail(inst):
     """Compose error message from specified ParseError object
     """
     if len(inst.args) > 1:
-        return _('at %s: %s') % (inst.args[1], inst.args[0])
+        return _('at %d: %s') % (inst.args[1], inst.args[0])
     else:
         return inst.args[0]
 

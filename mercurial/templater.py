@@ -13,13 +13,16 @@ import types
 
 from .i18n import _
 from . import (
+    color,
     config,
+    encoding,
     error,
     minirst,
     parser,
     pycompat,
     registrar,
     revset as revsetmod,
+    revsetlang,
     templatefilters,
     templatekw,
     util,
@@ -408,17 +411,18 @@ def runmap(context, mapping, data):
             else:
                 raise error.ParseError(_("%r is not iterable") % d)
 
-    for i in diter:
+    for i, v in enumerate(diter):
         lm = mapping.copy()
-        if isinstance(i, dict):
-            lm.update(i)
+        lm['index'] = i
+        if isinstance(v, dict):
+            lm.update(v)
             lm['originalnode'] = mapping.get('node')
             yield tfunc(context, lm, tdata)
         else:
             # v is not an iterable of dicts, this happen when 'key'
             # has been fully expanded already and format is useless.
             # If so, return the expanded value.
-            yield i
+            yield v
 
 def buildnegate(exp, context):
     arg = compileexp(exp[1], context, exprmethods)
@@ -543,6 +547,19 @@ def fill(context, mapping, args):
 
     return templatefilters.fill(text, width, initindent, hangindent)
 
+@templatefunc('formatnode(node)')
+def formatnode(context, mapping, args):
+    """Obtain the preferred form of a changeset hash. (DEPRECATED)"""
+    if len(args) != 1:
+        # i18n: "formatnode" is a keyword
+        raise error.ParseError(_("formatnode expects one argument"))
+
+    ui = mapping['ui']
+    node = evalstring(context, mapping, args[0])
+    if ui.debugflag:
+        return node
+    return templatefilters.short(node)
+
 @templatefunc('pad(text, width[, fillchar=\' \'[, left=False]])')
 def pad(context, mapping, args):
     """Pad text with a
@@ -561,13 +578,19 @@ def pad(context, mapping, args):
     fillchar = ' '
     if len(args) > 2:
         fillchar = evalstring(context, mapping, args[2])
+        if len(color.stripeffects(fillchar)) != 1:
+            # i18n: "pad" is a keyword
+            raise error.ParseError(_("pad() expects a single fill character"))
     if len(args) > 3:
         left = evalboolean(context, mapping, args[3])
 
+    fillwidth = width - encoding.colwidth(color.stripeffects(text))
+    if fillwidth <= 0:
+        return text
     if left:
-        return text.rjust(width, fillchar)
+        return fillchar * fillwidth + text
     else:
-        return text.ljust(width, fillchar)
+        return text + fillchar * fillwidth
 
 @templatefunc('indent(text, indentchars[, firstline])')
 def indent(context, mapping, args):
@@ -696,7 +719,9 @@ def label(context, mapping, args):
 @templatefunc('latesttag([pattern])')
 def latesttag(context, mapping, args):
     """The global tags matching the given pattern on the
-    most recent globally tagged ancestor of this changeset."""
+    most recent globally tagged ancestor of this changeset.
+    If no such tags exist, the "{tag}" template resolves to
+    the string "null"."""
     if len(args) > 1:
         # i18n: "latesttag" is a keyword
         raise error.ParseError(_("latesttag expects at most one argument"))
@@ -778,7 +803,7 @@ def revset(context, mapping, args):
 
     if len(args) > 1:
         formatargs = [evalfuncarg(context, mapping, a) for a in args[1:]]
-        revs = query(revsetmod.formatspec(raw, *formatargs))
+        revs = query(revsetlang.formatspec(raw, *formatargs))
         revs = list(revs)
     else:
         revsetcache = mapping['cache'].setdefault("revsetcache", {})

@@ -7,6 +7,7 @@
 
 from __future__ import absolute_import
 
+from .i18n import _
 from .node import hex, nullid
 from . import (
     encoding,
@@ -204,6 +205,17 @@ def getrenamedfn(repo, endrev=None):
 
     return getrenamed
 
+# default templates internally used for rendering of lists
+defaulttempl = {
+    'parent': '{rev}:{node|formatnode} ',
+    'manifest': '{rev}:{node|formatnode}',
+    'file_copy': '{name} ({source})',
+    'envvar': '{key}={value}',
+    'extra': '{key}={value|stringescape}'
+}
+# filecopy is preserved for compatibility reasons
+defaulttempl['filecopy'] = defaulttempl['file_copy']
+
 # keywords are callables like:
 # fn(repo, ctx, templ, cache, revcache, **args)
 # with:
@@ -325,7 +337,7 @@ def showextras(**args):
     c = [makemap(k) for k in extras]
     f = _showlist('extra', c, plural='extras', **args)
     return _hybrid(f, extras, makemap,
-                   lambda x: '%s=%s' % (x['key'], x['value']))
+                   lambda x: '%s=%s' % (x['key'], util.escapestr(x['value'])))
 
 @templatekeyword('file_adds')
 def showfileadds(**args):
@@ -411,10 +423,17 @@ def showgraphnode(repo, ctx, **args):
     else:
         return 'o'
 
+@templatekeyword('index')
+def showindex(**args):
+    """Integer. The current iteration of the loop. (0 indexed)"""
+    # just hosts documentation; should be overridden by template mapping
+    raise error.Abort(_("can't use index in this context"))
+
 @templatekeyword('latesttag')
 def showlatesttag(**args):
     """List of strings. The global tags on the most recent globally
-    tagged ancestor of this changeset.
+    tagged ancestor of this changeset.  If no such tags exist, the list
+    consists of the single string "null".
     """
     return showlatesttags(None, **args)
 
@@ -502,6 +521,14 @@ def shownode(repo, ctx, templ, **args):
     digit string.
     """
     return ctx.hex()
+
+@templatekeyword('obsolete')
+def showobsolete(repo, ctx, templ, **args):
+    """String. Whether the changeset is obsolete.
+    """
+    if ctx.obsolete():
+        return 'obsolete'
+    return ''
 
 @templatekeyword('p1rev')
 def showp1rev(repo, ctx, templ, **args):

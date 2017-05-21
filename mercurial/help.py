@@ -23,6 +23,7 @@ from . import (
     filemerge,
     fileset,
     minirst,
+    pycompat,
     revset,
     templatefilters,
     templatekw,
@@ -33,7 +34,7 @@ from .hgweb import (
     webcommands,
 )
 
-_exclkeywords = set([
+_exclkeywords = {
     "(ADVANCED)",
     "(DEPRECATED)",
     "(EXPERIMENTAL)",
@@ -43,7 +44,7 @@ _exclkeywords = set([
     _("(DEPRECATED)"),
     # i18n: "(EXPERIMENTAL)" is a keyword, must be translated consistently
     _("(EXPERIMENTAL)"),
-    ])
+}
 
 def listexts(header, exts, indent=1, showdeprecated=False):
     '''return a text listing of the given extensions'''
@@ -304,6 +305,7 @@ def help_(ui, name, unknowncmd=False, full=True, subtopic=None, **opts):
     '''
 
     from . import commands # avoid cycle
+    opts = pycompat.byteskwargs(opts)
 
     def helpcmd(name, subtopic=None):
         try:

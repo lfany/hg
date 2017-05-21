@@ -96,6 +96,47 @@ class _funcregistrarbase(object):
         """
         pass
 
+class command(_funcregistrarbase):
+    """Decorator to register a command function to table
+
+    This class receives a command table as its argument. The table should
+    be a dict.
+
+    The created object can be used as a decorator for adding commands to
+    that command table. This accepts multiple arguments to define a command.
+
+    The first argument is the command name.
+
+    The options argument is an iterable of tuples defining command arguments.
+    See ``mercurial.fancyopts.fancyopts()`` for the format of each tuple.
+
+    The synopsis argument defines a short, one line summary of how to use the
+    command. This shows up in the help output.
+
+    The norepo argument defines whether the command does not require a
+    local repository. Most commands operate against a repository, thus the
+    default is False.
+
+    The optionalrepo argument defines whether the command optionally requires
+    a local repository.
+
+    The inferrepo argument defines whether to try to find a repository from the
+    command line arguments. If True, arguments will be examined for potential
+    repository locations. See ``findrepo()``. If a repository is found, it
+    will be used.
+    """
+
+    def _doregister(self, func, name, options=(), synopsis=None,
+                    norepo=False, optionalrepo=False, inferrepo=False):
+        func.norepo = norepo
+        func.optionalrepo = optionalrepo
+        func.inferrepo = inferrepo
+        if synopsis:
+            self._table[name] = func, list(options), synopsis
+        else:
+            self._table[name] = func, list(options)
+        return func
+
 class revsetpredicate(_funcregistrarbase):
     """Decorator to register revset predicate
 

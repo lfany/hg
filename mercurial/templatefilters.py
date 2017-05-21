@@ -16,6 +16,7 @@ from . import (
     encoding,
     hbisect,
     node,
+    pycompat,
     registrar,
     templatekw,
     util,
@@ -23,6 +24,9 @@ from . import (
 
 urlerr = util.urlerr
 urlreq = util.urlreq
+
+if pycompat.ispy3:
+    long = int
 
 # filters are callables like:
 #   fn(obj)
@@ -226,8 +230,8 @@ def json(obj, paranoid=True):
     elif obj is True:
         return 'true'
     elif isinstance(obj, (int, long, float)):
-        return str(obj)
-    elif isinstance(obj, str):
+        return pycompat.bytestr(obj)
+    elif isinstance(obj, bytes):
         return '"%s"' % encoding.jsonescape(obj, paranoid=paranoid)
     elif util.safehasattr(obj, 'keys'):
         out = ['%s: %s' % (json(k), json(v))
@@ -351,11 +355,11 @@ def stringify(thing):
     text and concatenating them.
     """
     thing = templatekw.unwraphybrid(thing)
-    if util.safehasattr(thing, '__iter__') and not isinstance(thing, str):
+    if util.safehasattr(thing, '__iter__') and not isinstance(thing, bytes):
         return "".join([stringify(t) for t in thing if t is not None])
     if thing is None:
         return ""
-    return str(thing)
+    return pycompat.bytestr(thing)
 
 @templatefilter('stripdir')
 def stripdir(text):

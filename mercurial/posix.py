@@ -474,7 +474,7 @@ def findexe(command):
 def setsignalhandler():
     pass
 
-_wantedkinds = set([stat.S_IFREG, stat.S_IFLNK])
+_wantedkinds = {stat.S_IFREG, stat.S_IFLNK}
 
 def statfiles(files):
     '''Stat each file in files. Yield each stat, or None if a file does not
@@ -494,7 +494,7 @@ def statfiles(files):
 
 def getuser():
     '''return name of current user'''
-    return getpass.getuser()
+    return pycompat.fsencode(getpass.getuser())
 
 def username(uid=None):
     """Return the name of the user with the given uid.

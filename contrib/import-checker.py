@@ -55,13 +55,11 @@ def walklocal(root):
             todo.extend(ast.iter_child_nodes(node))
         yield node, newscope
 
-def dotted_name_of_path(path, trimpure=False):
+def dotted_name_of_path(path):
     """Given a relative path to a source file, return its dotted module name.
 
     >>> dotted_name_of_path('mercurial/error.py')
     'mercurial.error'
-    >>> dotted_name_of_path('mercurial/pure/parsers.py', trimpure=True)
-    'mercurial.parsers'
     >>> dotted_name_of_path('zlibmodule.so')
     'zlib'
     """
@@ -69,8 +67,6 @@ def dotted_name_of_path(path, trimpure=False):
     parts[-1] = parts[-1].split('.', 1)[0] # remove .py and .so and .ARCH.so
     if parts[-1].endswith('module'):
         parts[-1] = parts[-1][:-6]
-    if trimpure:
-        return '.'.join(p for p in parts if p != 'pure')
     return '.'.join(parts)
 
 def fromlocalfunc(modulename, localmods):
@@ -203,7 +199,7 @@ def list_stdlib_modules():
         yield m
     for m in ['cffi']:
         yield m
-    stdlib_prefixes = set([sys.prefix, sys.exec_prefix])
+    stdlib_prefixes = {sys.prefix, sys.exec_prefix}
     # We need to supplement the list of prefixes for the search to work
     # when run from within a virtualenv.
     for mod in (BaseHTTPServer, zlib):
@@ -691,7 +687,7 @@ def main(argv):
     used_imports = {}
     any_errors = False
     for source_path in argv[1:]:
-        modname = dotted_name_of_path(source_path, trimpure=True)
+        modname = dotted_name_of_path(source_path)
         localmods[modname] = source_path
     for localmodname, source_path in sorted(localmods.items()):
         for src, modname, name, line in sources(source_path, localmodname):

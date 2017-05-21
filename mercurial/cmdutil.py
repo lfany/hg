@@ -38,6 +38,7 @@ from . import (
     pathutil,
     phases,
     pycompat,
+    registrar,
     repair,
     revlog,
     revset,
@@ -49,6 +50,113 @@ from . import (
     vfs as vfsmod,
 )
 stringio = util.stringio
+
+# templates of common command options
+
+dryrunopts = [
+    ('n', 'dry-run', None,
+     _('do not perform actions, just print output')),
+]
+
+remoteopts = [
+    ('e', 'ssh', '',
+     _('specify ssh command to use'), _('CMD')),
+    ('', 'remotecmd', '',
+     _('specify hg command to run on the remote side'), _('CMD')),
+    ('', 'insecure', None,
+     _('do not verify server certificate (ignoring web.cacerts config)')),
+]
+
+walkopts = [
+    ('I', 'include', [],
+     _('include names matching the given patterns'), _('PATTERN')),
+    ('X', 'exclude', [],
+     _('exclude names matching the given patterns'), _('PATTERN')),
+]
+
+commitopts = [
+    ('m', 'message', '',
+     _('use text as commit message'), _('TEXT')),
+    ('l', 'logfile', '',
+     _('read commit message from file'), _('FILE')),
+]
+
+commitopts2 = [
+    ('d', 'date', '',
+     _('record the specified date as commit date'), _('DATE')),
+    ('u', 'user', '',
+     _('record the specified user as committer'), _('USER')),
+]
+
+# hidden for now
+formatteropts = [
+    ('T', 'template', '',
+     _('display with template (EXPERIMENTAL)'), _('TEMPLATE')),
+]
+
+templateopts = [
+    ('', 'style', '',
+     _('display using template map file (DEPRECATED)'), _('STYLE')),
+    ('T', 'template', '',
+     _('display with template'), _('TEMPLATE')),
+]
+
+logopts = [
+    ('p', 'patch', None, _('show patch')),
+    ('g', 'git', None, _('use git extended diff format')),
+    ('l', 'limit', '',
+     _('limit number of changes displayed'), _('NUM')),
+    ('M', 'no-merges', None, _('do not show merges')),
+    ('', 'stat', None, _('output diffstat-style summary of changes')),
+    ('G', 'graph', None, _("show the revision DAG")),
+] + templateopts
+
+diffopts = [
+    ('a', 'text', None, _('treat all files as text')),
+    ('g', 'git', None, _('use git extended diff format')),
+    ('', 'binary', None, _('generate binary diffs in git mode (default)')),
+    ('', 'nodates', None, _('omit dates from diff headers'))
+]
+
+diffwsopts = [
+    ('w', 'ignore-all-space', None,
+     _('ignore white space when comparing lines')),
+    ('b', 'ignore-space-change', None,
+     _('ignore changes in the amount of white space')),
+    ('B', 'ignore-blank-lines', None,
+     _('ignore changes whose lines are all blank')),
+]
+
+diffopts2 = [
+    ('', 'noprefix', None, _('omit a/ and b/ prefixes from filenames')),
+    ('p', 'show-function', None, _('show which function each change is in')),
+    ('', 'reverse', None, _('produce a diff that undoes the changes')),
+] + diffwsopts + [
+    ('U', 'unified', '',
+     _('number of lines of context to show'), _('NUM')),
+    ('', 'stat', None, _('output diffstat-style summary of changes')),
+    ('', 'root', '', _('produce diffs relative to subdirectory'), _('DIR')),
+]
+
+mergetoolopts = [
+    ('t', 'tool', '', _('specify merge tool')),
+]
+
+similarityopts = [
+    ('s', 'similarity', '',
+     _('guess renamed files by similarity (0<=s<=100)'), _('SIMILARITY'))
+]
+
+subrepoopts = [
+    ('S', 'subrepos', None,
+     _('recurse into subrepositories'))
+]
+
+debugrevlogopts = [
+    ('c', 'changelog', False, _('open changelog')),
+    ('m', 'manifest', False, _('open manifest')),
+    ('', 'dir', '', _('open directory manifest')),
+]
 
 # special string such that everything below this line will be ingored in the
 # editor text
@@ -115,6 +223,7 @@ def recordfilter(ui, originalhunks, operation=None):
 def dorecord(ui, repo, commitfunc, cmdsuggest, backupall,
             filterfn, *pats, **opts):
     from . import merge as mergemod
+    opts = pycompat.byteskwargs(opts)
     if not ui.interactive():
         if cmdsuggest:
             msg = _('running non-interactively, use %s instead') % cmdsuggest
@@ -490,10 +599,10 @@ def makefilename(repo, pat, node, desc=None,
         patlen = len(pat)
         i = 0
         while i < patlen:
-            c = pat[i]
+            c = pat[i:i + 1]
             if c == '%':
                 i += 1
-                c = pat[i]
+                c = pat[i:i + 1]
                 c = expander[c]()
             newname.append(c)
             i += 1
@@ -606,8 +715,8 @@ def copy(ui, repo, pats, opts, rename=False):
             badstates = '?'
         else:
             badstates = '?r'
-        m = scmutil.match(repo[None], [pat], opts, globbed=True)
-        for abs in repo.walk(m):
+        m = scmutil.match(wctx, [pat], opts, globbed=True)
+        for abs in wctx.walk(m):
             state = repo.dirstate[abs]
             rel = m.rel(abs)
             exact = m.exact(abs)
@@ -1360,7 +1469,7 @@ class jsonchangeset(changeset_printer):
         if rev is None:
             jrev = jnode = 'null'
         else:
-            jrev = str(rev)
+            jrev = '%d' % rev
             jnode = '"%s"' % hex(ctx.node())
         j = encoding.jsonescape
 
@@ -1495,6 +1604,7 @@ class changeset_templater(changeset_printer):
         props['index'] = next(self._counter)
         props['revcache'] = {'copies': copies}
         props['cache'] = self.cache
+        props = pycompat.strkwargs(props)
 
         # write header
         if self._parts['header']:
@@ -1607,7 +1717,7 @@ def finddate(ui, repo, date):
         if rev in results:
             ui.status(_("found revision %s from %s\n") %
                       (rev, util.datestr(results[rev])))
-            return str(rev)
+            return '%d' % rev
 
     raise error.Abort(_("revision matching date not found"))
 
@@ -1691,7 +1801,7 @@ def walkfilerevs(repo, match, follow, revs, fncache):
             last = filelog.rev(node)
 
         # keep track of all ancestors of the file
-        ancestors = set([filelog.linkrev(last)])
+        ancestors = {filelog.linkrev(last)}
 
         # iterate from latest to oldest revision
         for rev, flparentlinkrevs, copied in filerevgen(filelog, last):
@@ -2278,7 +2388,7 @@ def add(ui, repo, match, prefix, explicitonly, **opts):
         sub = wctx.sub(subpath)
         try:
             submatch = matchmod.subdirmatcher(subpath, match)
-            if opts.get('subrepos'):
+            if opts.get(r'subrepos'):
                 bad.extend(sub.add(ui, submatch, prefix, False, **opts))
             else:
                 bad.extend(sub.add(ui, submatch, prefix, True, **opts))
@@ -2286,7 +2396,7 @@ def add(ui, repo, match, prefix, explicitonly, **opts):
             ui.status(_("skipping missing subrepository: %s\n")
                            % join(subpath))
 
-    if not opts.get('dry_run'):
+    if not opts.get(r'dry_run'):
         rejected = wctx.add(names, prefix)
         bad.extend(f for f in rejected if f in match.files())
     return bad
@@ -2308,7 +2418,7 @@ def forget(ui, repo, match, prefix, explicitonly):
     forgot = []
 
     s = repo.status(match=matchmod.badmatch(match, badfn), clean=True)
-    forget = sorted(s[0] + s[1] + s[3] + s[6])
+    forget = sorted(s.modified + s.added + s.deleted + s.clean)
     if explicitonly:
         forget = [f for f in forget if match.exact(f)]
 
@@ -2739,7 +2849,7 @@ def amend(ui, repo, commitfunc, old, extra, pats, opts):
                     if node:
                         obs.append((ctx, ()))
 
-                    obsolete.createmarkers(repo, obs)
+                    obsolete.createmarkers(repo, obs, operation='amend')
         if not createmarkers and newid != old.node():
             # Strip the intermediate commit (if there was one) and the amended
             # commit
@@ -2938,7 +3048,8 @@ def revert(ui, repo, ctx, parents, *pats, **opts):
         targetsubs = sorted(s for s in wctx.substate if m(s))
 
         if not m.always():
-            for abs in repo.walk(matchmod.badmatch(m, lambda x, y: False)):
+            matcher = matchmod.badmatch(m, lambda x, y: False)
+            for abs in wctx.walk(matcher):
                 names[abs] = m.rel(abs), m.exact(abs)
 
             # walk target manifest to fill `names`
@@ -3332,50 +3443,10 @@ def _performrevert(repo, parents, ctx, actions, interactive=False,
         if f in copied:
             repo.dirstate.copy(copied[f], f)
 
-def command(table):
-    """Returns a function object to be used as a decorator for making commands.
-
-    This function receives a command table as its argument. The table should
-    be a dict.
-
-    The returned function can be used as a decorator for adding commands
-    to that command table. This function accepts multiple arguments to define
-    a command.
-
-    The first argument is the command name.
-
-    The options argument is an iterable of tuples defining command arguments.
-    See ``mercurial.fancyopts.fancyopts()`` for the format of each tuple.
-
-    The synopsis argument defines a short, one line summary of how to use the
-    command. This shows up in the help output.
-
-    The norepo argument defines whether the command does not require a
-    local repository. Most commands operate against a repository, thus the
-    default is False.
-
-    The optionalrepo argument defines whether the command optionally requires
-    a local repository.
-
-    The inferrepo argument defines whether to try to find a repository from the
-    command line arguments. If True, arguments will be examined for potential
-    repository locations. See ``findrepo()``. If a repository is found, it
-    will be used.
-    """
-    def cmd(name, options=(), synopsis=None, norepo=False, optionalrepo=False,
-            inferrepo=False):
-        def decorator(func):
-            func.norepo = norepo
-            func.optionalrepo = optionalrepo
-            func.inferrepo = inferrepo
-            if synopsis:
-                table[name] = func, list(options), synopsis
-            else:
-                table[name] = func, list(options)
-            return func
-        return decorator
-
-    return cmd
+class command(registrar.command):
+    def _doregister(self, func, name, *args, **kwargs):
+        func._deprecatedregistrar = True  # flag for deprecwarn in extensions.py
+        return super(command, self)._doregister(func, name, *args, **kwargs)
 
 # a list of (ui, repo, otherpeer, opts, missing) functions called by
 # commands.outgoing.  "missing" is "missing" of the result of

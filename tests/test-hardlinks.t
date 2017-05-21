@@ -10,7 +10,7 @@
 
   $ nlinksdir()
   > {
-  >     find $1 -type f | python $TESTTMP/nlinks.py
+  >     find "$@" -type f | python $TESTTMP/nlinks.py
   > }
 
 Some implementations of cp can't create hardlinks (replaces 'cp -al' on Linux):
@@ -168,6 +168,11 @@ Push to repo r1 should break up most hardlinks in r2:
   2 r2/.hg/store/data/f1.i
   [12] r2/\.hg/store/fncache (re)
 
+#if hardlink-whitelisted
+  $ nlinksdir r2/.hg/store/fncache
+  2 r2/.hg/store/fncache
+#endif
+
   $ hg -R r2 verify
   checking changesets
   checking manifests
@@ -193,6 +198,10 @@ Committing a change to f1 in r1 must break up hardlink f1.i in r2:
   1 r2/.hg/store/data/f1.i
   [12] r2/\.hg/store/fncache (re)
 
+#if hardlink-whitelisted
+  $ nlinksdir r2/.hg/store/fncache
+  2 r2/.hg/store/fncache
+#endif
 
   $ cd r3
   $ hg tip --template '{rev}:{node|short}\n'
@@ -205,14 +214,20 @@ Create hardlinked copy r4 of r3 (on Linux, we would call 'cp -al'):
 
   $ linkcp r3 r4
 
+'checklink' is produced by hardlinking a symlink, which is undefined whether
+the symlink should be followed or not. It does behave differently on Linux and
+BSD. Just remove it so the test pass on both platforms.
+
+  $ rm -f r4/.hg/cache/checklink
+
 r4 has hardlinks in the working dir (not just inside .hg):
 
   $ nlinksdir r4
   2 r4/.hg/00changelog.i
   2 r4/.hg/branch
+  2 r4/.hg/cache/branch2-base
   2 r4/.hg/cache/branch2-served
   2 r4/.hg/cache/checkisexec (execbit !)
-  3 r4/.hg/cache/checklink (?)
   ? r4/.hg/cache/checklink-target (glob) (symlink !)
   2 r4/.hg/cache/checknoexec (execbit !)
   2 r4/.hg/cache/rbc-names-v1
@@ -242,6 +257,12 @@ r4 has hardlinks in the working dir (not just inside .hg):
   2 r4/d1/f2
   2 r4/f1
 
+#if hardlink-whitelisted
+  $ nlinksdir r4/.hg/undo.backup.dirstate r4/.hg/undo.dirstate
+  4 r4/.hg/undo.backup.dirstate
+  4 r4/.hg/undo.dirstate
+#endif
+
 Update back to revision 11 in r4 should break hardlink of file f1:
 
   $ hg -R r4 up 11
@@ -250,6 +271,7 @@ Update back to revision 11 in r4 should break hardlink of file f1:
   $ nlinksdir r4
   2 r4/.hg/00changelog.i
   1 r4/.hg/branch
+  2 r4/.hg/cache/branch2-base
   2 r4/.hg/cache/branch2-served
   2 r4/.hg/cache/checkisexec (execbit !)
   2 r4/.hg/cache/checklink-target (symlink !)
@@ -281,6 +303,11 @@ Update back to revision 11 in r4 should break hardlink of file f1:
   2 r4/d1/f2
   1 r4/f1
 
+#if hardlink-whitelisted
+  $ nlinksdir r4/.hg/undo.backup.dirstate r4/.hg/undo.dirstate
+  4 r4/.hg/undo.backup.dirstate
+  4 r4/.hg/undo.dirstate
+#endif
 
 Test hardlinking outside hg:
 

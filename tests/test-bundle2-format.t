@@ -14,7 +14,6 @@ Create an extension to test bundle2 API
   > """
   > 
   > import sys, os, gc
-  > from mercurial import cmdutil
   > from mercurial import util
   > from mercurial import bundle2
   > from mercurial import scmutil
@@ -22,6 +21,7 @@ Create an extension to test bundle2 API
   > from mercurial import changegroup
   > from mercurial import error
   > from mercurial import obsolete
+  > from mercurial import registrar
   > 
   > 
   > try:
@@ -33,7 +33,7 @@ Create an extension to test bundle2 API
   >     pass
   > 
   > cmdtable = {}
-  > command = cmdutil.command(cmdtable)
+  > command = registrar.command(cmdtable)
   > 
   > ELEPHANTSSONG = """Patali Dirapata, Cromda Cromda Ripalo, Pata Pata, Ko Ko Ko
   > Bokoro Dipoulito, Rondi Rondi Pepino, Pata Pata, Ko Ko Ko
@@ -113,7 +113,7 @@ Create an extension to test bundle2 API
   >             headmissing = [c.node() for c in repo.set('heads(%ld)', revs)]
   >             headcommon  = [c.node() for c in repo.set('parents(%ld) - %ld', revs, revs)]
   >             outgoing = discovery.outgoing(repo, headcommon, headmissing)
-  >             cg = changegroup.getlocalchangegroup(repo, 'test:bundle2', outgoing, None)
+  >             cg = changegroup.getchangegroup(repo, 'test:bundle2', outgoing, None)
   >             bundler.newpart('changegroup', data=cg.getchunks(),
   >                             mandatory=False)
   > 

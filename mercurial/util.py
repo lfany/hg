@@ -45,10 +45,16 @@ from . import (
     encoding,
     error,
     i18n,
-    osutil,
-    parsers,
+    policy,
     pycompat,
 )
+
+base85 = policy.importmod(r'base85')
+osutil = policy.importmod(r'osutil')
+parsers = policy.importmod(r'parsers')
+
+b85decode = base85.b85decode
+b85encode = base85.b85encode
 
 cookielib = pycompat.cookielib
 empty = pycompat.empty
@@ -102,6 +108,7 @@ groupname = platform.groupname
 hidewindow = platform.hidewindow
 isexec = platform.isexec
 isowner = platform.isowner
+listdir = osutil.listdir
 localpath = platform.localpath
 lookupreg = platform.lookupreg
 makedir = platform.makedir
@@ -138,6 +145,15 @@ testpid = platform.testpid
 umask = platform.umask
 unlink = platform.unlink
 username = platform.username
+
+try:
+    recvfds = osutil.recvfds
+except AttributeError:
+    pass
+try:
+    setprocname = osutil.setprocname
+except AttributeError:
+    pass
 
 # Python compatibility
 
@@ -553,54 +569,22 @@ def cachefunc(func):
 
     return f
 
-class sortdict(dict):
-    '''a simple sorted dictionary'''
-    def __init__(self, data=None):
-        self._list = []
-        if data:
-            self.update(data)
-    def copy(self):
-        return sortdict(self)
-    def __setitem__(self, key, val):
+class sortdict(collections.OrderedDict):
+    '''a simple sorted dictionary
+
+    >>> d1 = sortdict([('a', 0), ('b', 1)])
+    >>> d2 = d1.copy()
+    >>> d2
+    sortdict([('a', 0), ('b', 1)])
+    >>> d2.update([('a', 2)])
+    >>> d2.keys() # should still be in last-set order
+    ['b', 'a']
+    '''
+
+    def __setitem__(self, key, value):
         if key in self:
-            self._list.remove(key)
-        self._list.append(key)
-        dict.__setitem__(self, key, val)
-    def __iter__(self):
-        return self._list.__iter__()
-    def update(self, src):
-        if isinstance(src, dict):
-            src = src.iteritems()
-        for k, v in src:
-            self[k] = v
-    def clear(self):
-        dict.clear(self)
-        self._list = []
-    def items(self):
-        return [(k, self[k]) for k in self._list]
-    def __delitem__(self, key):
-        dict.__delitem__(self, key)
-        self._list.remove(key)
-    def pop(self, key, *args, **kwargs):
-        try:
-            self._list.remove(key)
-        except ValueError:
-            pass
-        return dict.pop(self, key, *args, **kwargs)
-    def keys(self):
-        return self._list[:]
-    def iterkeys(self):
-        return self._list.__iter__()
-    def iteritems(self):
-        for k in self._list:
-            yield k, self[k]
-    def insert(self, index, key, val):
-        self._list.insert(index, key)
-        dict.__setitem__(self, key, val)
-    def __repr__(self):
-        if not self:
-            return '%s()' % self.__class__.__name__
-        return '%s(%r)' % (self.__class__.__name__, self.items())
+            del self[key]
+        super(sortdict, self).__setitem__(key, value)
 
 class _lrucachenode(object):
     """A node in a doubly linked list.
@@ -1083,7 +1067,7 @@ def checksignature(func):
     return check
 
 # a whilelist of known filesystems where hardlink works reliably
-_hardlinkfswhitelist = set([
+_hardlinkfswhitelist = {
     'btrfs',
     'ext2',
     'ext3',
@@ -1095,7 +1079,7 @@ _hardlinkfswhitelist = set([
     'ufs',
     'xfs',
     'zfs',
-])
+}
 
 def copyfile(src, dest, hardlink=False, copystat=False, checkambig=False):
     '''copy a file, preserving mode and optionally other stat info like
@@ -1161,7 +1145,7 @@ def copyfiles(src, dst, hardlink=None, progress=lambda t, pos: None):
                         os.stat(os.path.dirname(dst)).st_dev)
         topic = gettopic()
         os.mkdir(dst)
-        for name, kind in osutil.listdir(src):
+        for name, kind in listdir(src):
             srcname = os.path.join(src, name)
             dstname = os.path.join(dst, name)
             def nprog(t, pos):
@@ -1724,8 +1708,7 @@ class chunkbuffer(object):
     iterator over chunks of arbitrary size."""
 
     def __init__(self, in_iter):
-        """in_iter is the iterator that's iterating over the input chunks.
-        targetsize is how big a buffer to try to maintain."""
+        """in_iter is the iterator that's iterating over the input chunks."""
         def splitbig(chunks):
             for chunk in chunks:
                 if len(chunk) > 2**20:
@@ -1914,6 +1897,7 @@ def strdate(string, format, defaults=None):
     # add missing elements from defaults
     usenow = False # default to using biased defaults
     for part in ("S", "M", "HI", "d", "mb", "yY"): # decreasing specificity
+        part = pycompat.bytestr(part)
         found = [True for p in part if ("%"+p) in format]
         if not found:
             date += "@" + defaults[part][usenow]
@@ -1923,7 +1907,8 @@ def strdate(string, format, defaults=None):
             # elements are relative to today
             usenow = True
 
-    timetuple = time.strptime(date, format)
+    timetuple = time.strptime(encoding.strfromlocal(date),
+                              encoding.strfromlocal(format))
     localunixtime = int(calendar.timegm(timetuple))
     if offset is None:
         # local timezone
@@ -1981,13 +1966,13 @@ def parsedate(date, formats=None, bias=None):
             # this piece is for rounding the specific end of unknowns
             b = bias.get(part)
             if b is None:
-                if part[0] in "HMS":
+                if part[0:1] in "HMS":
                     b = "00"
                 else:
                     b = "0"
 
             # this piece is for matching the generic end to today's date
-            n = datestr(now, "%" + part[0])
+            n = datestr(now, "%" + part[0:1])
 
             defaults[part] = (b, n)
 

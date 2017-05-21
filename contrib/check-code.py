@@ -116,6 +116,7 @@ testpats = [
     (r'printf.*[^\\]\\x', "don't use printf \\x, use Python"),
     (r'\$\(.*\)', "don't use $(expr), use `expr`"),
     (r'rm -rf \*', "don't use naked rm -rf, target a directory"),
+    (r'\[[^\]]+==', '[ foo == bar ] is a bashism, use [ foo = bar ] instead'),
     (r'(^|\|\s*)grep (-\w\s+)*[^|]*[(|]\w',
      "use egrep for extended grep syntax"),
     (r'/bin/', "don't use explicit paths for tools"),
@@ -474,7 +475,7 @@ allfilespats = [
 
 py3pats = [
   [
-    (r'os\.environ', "use encoding.environ instead (py3)"),
+    (r'os\.environ', "use encoding.environ instead (py3)", r'#.*re-exports'),
     (r'os\.name', "use pycompat.osname instead (py3)"),
     (r'os\.getcwd', "use pycompat.getcwd instead (py3)"),
     (r'os\.sep', "use pycompat.ossep instead (py3)"),
@@ -492,8 +493,8 @@ py3pats = [
 checks = [
     ('python', r'.*\.(py|cgi)$', r'^#!.*python', pyfilters, pypats),
     ('python', r'.*hgext.*\.py$', '', [], pyextnfpats),
-    ('python 3', r'.*(hgext|mercurial).*(?<!pycompat)\.py', '',
-            pyfilters, py3pats),
+    ('python 3', r'.*(hgext|mercurial)/(?!demandimport|policy|pycompat).*\.py',
+     '', pyfilters, py3pats),
     ('test script', r'(.*/)?test-[^.~]*$', '', testfilters, testpats),
     ('c', r'.*\.[ch]$', '', cfilters, cpats),
     ('unified test', r'.*\.t$', '', utestfilters, utestpats),

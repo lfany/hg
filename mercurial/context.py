@@ -257,13 +257,13 @@ class basectx(object):
         return changectx(self._repo, nullrev)
 
     def _fileinfo(self, path):
-        if '_manifest' in self.__dict__:
+        if r'_manifest' in self.__dict__:
             try:
                 return self._manifest[path], self._manifest.flags(path)
             except KeyError:
                 raise error.ManifestLookupError(self._node, path,
                                                 _('not found in manifest'))
-        if '_manifestdelta' in self.__dict__ or path in self.files():
+        if r'_manifestdelta' in self.__dict__ or path in self.files():
             if path in self._manifestdelta:
                 return (self._manifestdelta[path],
                         self._manifestdelta.flags(path))
@@ -687,21 +687,20 @@ class basefilectx(object):
              in the repo,
     workingfilectx: a filecontext that represents files from the working
                     directory,
-    memfilectx: a filecontext that represents files in-memory."""
-    def __new__(cls, repo, path, *args, **kwargs):
-        return super(basefilectx, cls).__new__(cls)
-
+    memfilectx: a filecontext that represents files in-memory,
+    overlayfilectx: duplicate another filecontext with some fields overridden.
+    """
     @propertycache
     def _filelog(self):
         return self._repo.file(self._path)
 
     @propertycache
     def _changeid(self):
-        if '_changeid' in self.__dict__:
+        if r'_changeid' in self.__dict__:
             return self._changeid
-        elif '_changectx' in self.__dict__:
+        elif r'_changectx' in self.__dict__:
             return self._changectx.rev()
-        elif '_descendantrev' in self.__dict__:
+        elif r'_descendantrev' in self.__dict__:
             # this file context was created from a revision with a known
             # descendant, we can (lazily) correct for linkrev aliases
             return self._adjustlinkrev(self._descendantrev)
@@ -710,7 +709,7 @@ class basefilectx(object):
 
     @propertycache
     def _filenode(self):
-        if '_fileid' in self.__dict__:
+        if r'_fileid' in self.__dict__:
             return self._filelog.lookup(self._fileid)
         else:
             return self._changectx.filenode(self._path)
@@ -762,8 +761,11 @@ class basefilectx(object):
         return self._filerev
     def filenode(self):
         return self._filenode
-    def flags(self):
+    @propertycache
+    def _flags(self):
         return self._changectx.flags(self._path)
+    def flags(self):
+        return self._flags
     def filelog(self):
         return self._filelog
     def rev(self):
@@ -794,8 +796,12 @@ class basefilectx(object):
         return self._changectx.manifest()
     def changectx(self):
         return self._changectx
+    def renamed(self):
+        return self._copied
     def repo(self):
         return self._repo
+    def size(self):
+        return len(self.data())
 
     def path(self):
         return self._path
@@ -1134,6 +1140,10 @@ class filectx(basefilectx):
     def rawdata(self):
         return self._filelog.revision(self._filenode, raw=True)
 
+    def rawflags(self):
+        """low-level revlog flags"""
+        return self._filelog.flags(self._filerev)
+
     def data(self):
         try:
             return self._filelog.read(self._filenode)
@@ -1146,7 +1156,8 @@ class filectx(basefilectx):
     def size(self):
         return self._filelog.size(self._filerev)
 
-    def renamed(self):
+    @propertycache
+    def _copied(self):
         """check if file was actually renamed in this changeset revision
 
         If rename logged in file revision, we report copy for changeset only
@@ -1396,7 +1407,7 @@ class committablectx(basectx):
         return []
 
     def flags(self, path):
-        if '_manifest' in self.__dict__:
+        if r'_manifest' in self.__dict__:
             try:
                 return self._manifest.flags(path)
             except KeyError:
@@ -1436,13 +1447,12 @@ class committablectx(basectx):
 
         """
 
-        self._repo.dirstate.beginparentchange()
-        for f in self.modified() + self.added():
-            self._repo.dirstate.normal(f)
-        for f in self.removed():
-            self._repo.dirstate.drop(f)
-        self._repo.dirstate.setparents(node)
-        self._repo.dirstate.endparentchange()
+        with self._repo.dirstate.parentchange():
+            for f in self.modified() + self.added():
+                self._repo.dirstate.normal(f)
+            for f in self.removed():
+                self._repo.dirstate.drop(f)
+            self._repo.dirstate.setparents(node)
 
         # write changes out explicitly, because nesting wlock at
         # runtime may prevent 'wlock.release()' in 'repo.commit()'
@@ -2059,12 +2069,6 @@ class memfilectx(committablefilectx):
 
     def data(self):
         return self._data
-    def size(self):
-        return len(self.data())
-    def flags(self):
-        return self._flags
-    def renamed(self):
-        return self._copied
 
     def remove(self, ignoremissing=False):
         """wraps unlink for a repo's working directory"""
@@ -2074,6 +2078,77 @@ class memfilectx(committablefilectx):
     def write(self, data, flags):
         """wraps repo.wwrite"""
         self._data = data
+
+class overlayfilectx(committablefilectx):
+    """Like memfilectx but take an original filectx and optional parameters to
+    override parts of it. This is useful when fctx.data() is expensive (i.e.
+    flag processor is expensive) and raw data, flags, and filenode could be
+    reused (ex. rebase or mode-only amend a REVIDX_EXTSTORED file).
+    """
+
+    def __init__(self, originalfctx, datafunc=None, path=None, flags=None,
+                 copied=None, ctx=None):
+        """originalfctx: filecontext to duplicate
+
+        datafunc: None or a function to override data (file content). It is a
+        function to be lazy. path, flags, copied, ctx: None or overridden value
+
+        copied could be (path, rev), or False. copied could also be just path,
+        and will be converted to (path, nullid). This simplifies some callers.
+        """
+
+        if path is None:
+            path = originalfctx.path()
+        if ctx is None:
+            ctx = originalfctx.changectx()
+            ctxmatch = lambda: True
+        else:
+            ctxmatch = lambda: ctx == originalfctx.changectx()
+
+        repo = originalfctx.repo()
+        flog = originalfctx.filelog()
+        super(overlayfilectx, self).__init__(repo, path, flog, ctx)
+
+        if copied is None:
+            copied = originalfctx.renamed()
+            copiedmatch = lambda: True
+        else:
+            if copied and not isinstance(copied, tuple):
+                # repo._filecommit will recalculate copyrev so nullid is okay
+                copied = (copied, nullid)
+            copiedmatch = lambda: copied == originalfctx.renamed()
+
+        # When data, copied (could affect data), ctx (could affect filelog
+        # parents) are not overridden, rawdata, rawflags, and filenode may be
+        # reused (repo._filecommit should double check filelog parents).
+        #
+        # path, flags are not hashed in filelog (but in manifestlog) so they do
+        # not affect reusable here.
+        #
+        # If ctx or copied is overridden to a same value with originalfctx,
+        # still consider it's reusable. originalfctx.renamed() may be a bit
+        # expensive so it's not called unless necessary. Assuming datafunc is
+        # always expensive, do not call it for this "reusable" test.
+        reusable = datafunc is None and ctxmatch() and copiedmatch()
+
+        if datafunc is None:
+            datafunc = originalfctx.data
+        if flags is None:
+            flags = originalfctx.flags()
+
+        self._datafunc = datafunc
+        self._flags = flags
+        self._copied = copied
+
+        if reusable:
+            # copy extra fields from originalfctx
+            attrs = ['rawdata', 'rawflags', '_filenode', '_filerev']
+            for attr in attrs:
+                if util.safehasattr(originalfctx, attr):
+                    setattr(self, attr, getattr(originalfctx, attr))
+
+    def data(self):
+        return self._datafunc()
 
 class metadataonlyctx(committablectx):
     """Like memctx but it's reusing the manifest of different commit.

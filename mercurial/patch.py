@@ -26,20 +26,21 @@ from .node import (
     short,
 )
 from . import (
-    base85,
     copies,
-    diffhelpers,
     encoding,
     error,
     mail,
     mdiff,
     pathutil,
+    policy,
     pycompat,
     scmutil,
     similar,
     util,
     vfs as vfsmod,
 )
+
+diffhelpers = policy.importmod(r'diffhelpers')
 stringio = util.stringio
 
 gitre = re.compile(br'diff --git a/(.*) b/(.*)')
@@ -1430,7 +1431,7 @@ class binhunk(object):
             else:
                 l = ord(l) - ord('a') + 27
             try:
-                dec.append(base85.b85decode(line[1:])[:l])
+                dec.append(util.b85decode(line[1:])[:l])
             except ValueError as e:
                 raise PatchError(_('could not decode "%s" binary patch: %s')
                                  % (self._fname, str(e)))
@@ -2508,6 +2509,9 @@ def trydiff(repo, revs, ctx1, ctx2, modified, added, removed,
         revinfo = ' '.join(["-r %s" % rev for rev in revs])
         return 'diff %s %s' % (revinfo, f)
 
+    def isempty(fctx):
+        return fctx is None or fctx.size() == 0
+
     date1 = util.datestr(ctx1.date())
     date2 = util.datestr(ctx2.date())
 
@@ -2523,28 +2527,30 @@ def trydiff(repo, revs, ctx1, ctx2, modified, added, removed,
     for f1, f2, copyop in _filepairs(modified, added, removed, copy, opts):
         content1 = None
         content2 = None
+        fctx1 = None
+        fctx2 = None
         flag1 = None
         flag2 = None
         if f1:
-            content1 = getfilectx(f1, ctx1).data()
+            fctx1 = getfilectx(f1, ctx1)
             if opts.git or losedatafn:
                 flag1 = ctx1.flags(f1)
         if f2:
-            content2 = getfilectx(f2, ctx2).data()
+            fctx2 = getfilectx(f2, ctx2)
             if opts.git or losedatafn:
                 flag2 = ctx2.flags(f2)
-        binary = False
-        if opts.git or losedatafn:
-            binary = util.binary(content1) or util.binary(content2)
+        # if binary is True, output "summary" or "base85", but not "text diff"
+        binary = not opts.text and any(f.isbinary()
+                                       for f in [fctx1, fctx2] if f is not None)
 
         if losedatafn and not opts.git:
             if (binary or
                 # copy/rename
                 f2 in copy or
                 # empty file creation
-                (not f1 and not content2) or
+                (not f1 and isempty(fctx2)) or
                 # empty file deletion
-                (not content1 and not f2) or
+                (isempty(fctx1) and not f2) or
                 # create with flags
                 (not f1 and flag2) or
                 # change flags
@@ -2577,7 +2583,37 @@ def trydiff(repo, revs, ctx1, ctx2, modified, added, removed,
         elif revs and not repo.ui.quiet:
             header.append(diffline(path1, revs))
 
-        if binary and opts.git and not opts.nobinary and not opts.text:
+        #  fctx.is  | diffopts                | what to   | is fctx.data()
+        #  binary() | text nobinary git index | output?   | outputted?
+        # ------------------------------------|----------------------------
+        #  yes      | no   no       no  *     | summary   | no
+        #  yes      | no   no       yes *     | base85    | yes
+        #  yes      | no   yes      no  *     | summary   | no
+        #  yes      | no   yes      yes 0     | summary   | no
+        #  yes      | no   yes      yes >0    | summary   | semi [1]
+        #  yes      | yes  *        *   *     | text diff | yes
+        #  no       | *    *        *   *     | text diff | yes
+        # [1]: hash(fctx.data()) is outputted. so fctx.data() cannot be faked
+        if binary and (not opts.git or (opts.git and opts.nobinary and not
+                                        opts.index)):
+            # fast path: no binary content will be displayed, content1 and
+            # content2 are only used for equivalent test. cmp() could have a
+            # fast path.
+            if fctx1 is not None:
+                content1 = b'\0'
+            if fctx2 is not None:
+                if fctx1 is not None and not fctx1.cmp(fctx2):
+                    content2 = b'\0' # not different
+                else:
+                    content2 = b'\0\0'
+        else:
+            # normal path: load contents
+            if fctx1 is not None:
+                content1 = fctx1.data()
+            if fctx2 is not None:
+                content2 = fctx2.data()
+
+        if binary and opts.git and not opts.nobinary:
             text = mdiff.b85diff(content1, content2)
             if text:
                 header.append('index %s..%s' %
@@ -2620,19 +2656,28 @@ def diffstatdata(lines):
         if filename:
             results.append((filename, adds, removes, isbinary))
 
+    # inheader is used to track if a line is in the
+    # header portion of the diff.  This helps properly account
+    # for lines that start with '--' or '++'
+    inheader = False
+
     for line in lines:
         if line.startswith('diff'):
             addresult()
-            # set numbers to 0 anyway when starting new file
+            # starting a new file diff
+            # set numbers to 0 and reset inheader
+            inheader = True
             adds, removes, isbinary = 0, 0, False
             if line.startswith('diff --git a/'):
                 filename = gitre.search(line).group(2)
             elif line.startswith('diff -r'):
                 # format: "diff -r ... -r ... filename"
                 filename = diffre.search(line).group(1)
-        elif line.startswith('+') and not line.startswith('+++ '):
+        elif line.startswith('@@'):
+            inheader = False
+        elif line.startswith('+') and not inheader:
             adds += 1
-        elif line.startswith('-') and not line.startswith('--- '):
+        elif line.startswith('-') and not inheader:
             removes += 1
         elif (line.startswith('GIT binary patch') or
               line.startswith('Binary file')):

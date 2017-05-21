@@ -74,13 +74,14 @@ import struct
 
 from .i18n import _
 from . import (
-    base85,
     error,
     node,
-    parsers,
     phases,
+    policy,
     util,
 )
+
+parsers = policy.importmod(r'parsers')
 
 _pack = struct.pack
 _unpack = struct.unpack
@@ -95,6 +96,27 @@ _enabled = False
 createmarkersopt = 'createmarkers'
 allowunstableopt = 'allowunstable'
 exchangeopt = 'exchange'
+
+def isenabled(repo, option):
+    """Returns True if the given repository has the given obsolete option
+    enabled.
+    """
+    result = set(repo.ui.configlist('experimental', 'evolution'))
+    if 'all' in result:
+        return True
+
+    # For migration purposes, temporarily return true if the config hasn't been
+    # set but _enabled is true.
+    if len(result) == 0 and _enabled:
+        return True
+
+    # createmarkers must be enabled if other options are enabled
+    if ((allowunstableopt in result or exchangeopt in result) and
+        not createmarkersopt in result):
+        raise error.Abort(_("'createmarkers' obsolete option must be enabled "
+                           "if other obsolete options are enabled"))
+
+    return option in result
 
 ### obsolescence marker flag
 
@@ -218,8 +240,8 @@ def _fm0encodeonemarker(marker):
         if not parents:
             # mark that we explicitly recorded no parents
             metadata['p0'] = ''
-        for i, p in enumerate(parents):
-            metadata['p%i' % (i + 1)] = node.hex(p)
+        for i, p in enumerate(parents, 1):
+            metadata['p%i' % i] = node.hex(p)
     metadata = _fm0encodemeta(metadata)
     numsuc = len(sucs)
     format = _fm0fixed + (_fm0node * numsuc)
@@ -744,7 +766,7 @@ def _pushkeyescape(markers):
         currentlen += len(nextdata)
     for idx, part in enumerate(reversed(parts)):
         data = ''.join([_pack('>B', _fm0version)] + part)
-        keys['dump%i' % idx] = base85.b85encode(data)
+        keys['dump%i' % idx] = util.b85encode(data)
     return keys
 
 def listmarkers(repo):
@@ -761,7 +783,7 @@ def pushmarker(repo, key, old, new):
     if old:
         repo.ui.warn(_('unexpected old value for %r') % key)
         return 0
-    data = base85.b85decode(new)
+    data = util.b85decode(new)
     lock = repo.lock()
     try:
         tr = repo.transaction('pushkey: obsolete markers')
@@ -1205,7 +1227,8 @@ def _computedivergentset(repo):
     return divergent
 
 
-def createmarkers(repo, relations, flag=0, date=None, metadata=None):
+def createmarkers(repo, relations, flag=0, date=None, metadata=None,
+                  operation=None):
     """Add obsolete markers between changesets in a repo
 
     <relations> must be an iterable of (<old>, (<new>, ...)[,{metadata}])
@@ -1226,6 +1249,11 @@ def createmarkers(repo, relations, flag=0, date=None, metadata=None):
         metadata = {}
     if 'user' not in metadata:
         metadata['user'] = repo.ui.username()
+    useoperation = repo.ui.configbool('experimental',
+                                      'evolution.track-operation',
+                                      False)
+    if useoperation and operation:
+        metadata['operation'] = operation
     tr = repo.transaction('add-obsolescence-marker')
     try:
         markerargs = []
@@ -1263,24 +1291,3 @@ def createmarkers(repo, relations, flag=0, date=None, metadata=None):
         tr.close()
     finally:
         tr.release()
-
-def isenabled(repo, option):
-    """Returns True if the given repository has the given obsolete option
-    enabled.
-    """
-    result = set(repo.ui.configlist('experimental', 'evolution'))
-    if 'all' in result:
-        return True
-
-    # For migration purposes, temporarily return true if the config hasn't been
-    # set but _enabled is true.
-    if len(result) == 0 and _enabled:
-        return True
-
-    # createmarkers must be enabled if other options are enabled
-    if ((allowunstableopt in result or exchangeopt in result) and
-        not createmarkersopt in result):
-        raise error.Abort(_("'createmarkers' obsolete option must be enabled "
-                           "if other obsolete options are enabled"))
-
-    return option in result

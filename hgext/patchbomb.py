@@ -89,6 +89,7 @@ from mercurial import (
     mail,
     node as nodemod,
     patch,
+    registrar,
     scmutil,
     templater,
     util,
@@ -96,7 +97,7 @@ from mercurial import (
 stringio = util.stringio
 
 cmdtable = {}
-command = cmdutil.command(cmdtable)
+command = registrar.command(cmdtable)
 # Note for extension authors: ONLY specify testedwith = 'ships-with-hg-core' for
 # extensions which SHIP WITH MERCURIAL. Non-mainline extensions should
 # be specifying the version(s) of Mercurial they are tested with, or
@@ -449,7 +450,7 @@ emailopts = [
     ('', 'base', [], _('a base changeset to specify instead of a destination '
        '(with -b/--bundle)'), _('REV')),
     ('', 'intro', None, _('send an introduction email for a single patch')),
-    ] + emailopts + commands.remoteopts,
+    ] + emailopts + cmdutil.remoteopts,
     _('hg email [OPTION]... [DEST]...'))
 def email(ui, repo, *revs, **opts):
     '''send changesets by email

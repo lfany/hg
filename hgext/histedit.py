@@ -201,6 +201,7 @@ from mercurial import (
     mergeutil,
     node,
     obsolete,
+    registrar,
     repair,
     scmutil,
     util,
@@ -209,7 +210,7 @@ from mercurial import (
 pickle = util.pickle
 release = lock.release
 cmdtable = {}
-command = cmdutil.command(cmdtable)
+command = registrar.command(cmdtable)
 
 # Note for extension authors: ONLY specify testedwith = 'ships-with-hg-core' for
 # extensions which SHIP WITH MERCURIAL. Non-mainline extensions should
@@ -1631,7 +1632,7 @@ def safecleanupnode(ui, repo, name, nodes):
                              key=repo.changelog.rev)
         markers = [getmarker(t) for t in sortednodes]
         if markers:
-            obsolete.createmarkers(repo, markers)
+            obsolete.createmarkers(repo, markers, operation='histedit')
     else:
         return cleanupnode(ui, repo, name, nodes)
 
@@ -1641,8 +1642,8 @@ def stripwrapper(orig, ui, repo, nodelist, *args, **kwargs):
     if os.path.exists(os.path.join(repo.path, 'histedit-state')):
         state = histeditstate(repo)
         state.read()
-        histedit_nodes = set([action.node for action
-                             in state.actions if action.node])
+        histedit_nodes = {action.node for action
+                          in state.actions if action.node}
         common_nodes = histedit_nodes & set(nodelist)
         if common_nodes:
             raise error.Abort(_("histedit in progress, can't strip %s")

@@ -8,6 +8,7 @@
 from __future__ import absolute_import
 
 import collections
+import contextlib
 import errno
 import os
 import stat
@@ -18,14 +19,15 @@ from . import (
     encoding,
     error,
     match as matchmod,
-    osutil,
-    parsers,
     pathutil,
+    policy,
     pycompat,
     scmutil,
     txnutil,
     util,
 )
+
+parsers = policy.importmod(r'parsers')
 
 propertycache = util.propertycache
 filecache = scmutil.filecache
@@ -100,6 +102,23 @@ class dirstate(object):
         # for consistent view between _pl() and _read() invocations
         self._pendingmode = None
 
+    @contextlib.contextmanager
+    def parentchange(self):
+        '''Context manager for handling dirstate parents.
+
+        If an exception occurs in the scope of the context manager,
+        the incoherent dirstate won't be written when wlock is
+        released.
+        '''
+        self._parentwriters += 1
+        yield
+        # Typically we want the "undo" step of a context manager in a
+        # finally block so it happens even when an exception
+        # occurs. In this case, however, we only want to decrement
+        # parentwriters if the code in the with statement exits
+        # normally, so we don't have a try/finally here on purpose.
+        self._parentwriters -= 1
+
     def beginparentchange(self):
         '''Marks the beginning of a set of changes that involve changing
         the dirstate parents. If there is an exception during this time,
@@ -107,6 +126,8 @@ class dirstate(object):
         prevents writing an incoherent dirstate where the parent doesn't
         match the contents.
         '''
+        self._ui.deprecwarn('beginparentchange is obsoleted by the '
+                            'parentchange context manager.', '4.3')
         self._parentwriters += 1
 
     def endparentchange(self):
@@ -114,6 +135,8 @@ class dirstate(object):
         dirstate parents. Once all parent changes have been marked done,
         the wlock will be free to write the dirstate on release.
         '''
+        self._ui.deprecwarn('endparentchange is obsoleted by the '
+                            'parentchange context manager.', '4.3')
         if self._parentwriters > 0:
             self._parentwriters -= 1
 
@@ -988,7 +1011,7 @@ class dirstate(object):
         matchalways = match.always()
         matchtdir = match.traversedir
         dmap = self._map
-        listdir = osutil.listdir
+        listdir = util.listdir
         lstat = os.lstat
         dirkind = stat.S_IFDIR
         regkind = stat.S_IFREG
@@ -1021,6 +1044,8 @@ class dirstate(object):
             wadd = work.append
             while work:
                 nd = work.pop()
+                if not match.visitdir(nd):
+                    continue
                 skip = None
                 if nd == '.':
                     nd = ''

@@ -1065,11 +1065,11 @@ Test issue 4506
 Test heads computation on pending index changes with obsolescence markers
   $ cd ..
   $ cat >$TESTTMP/test_extension.py  << EOF
-  > from mercurial import cmdutil
+  > from mercurial import cmdutil, registrar
   > from mercurial.i18n import _
   > 
   > cmdtable = {}
-  > command = cmdutil.command(cmdtable)
+  > command = registrar.command(cmdtable)
   > @command("amendtransient",[], _('hg amendtransient [rev]'))
   > def amend(ui, repo, *pats, **opts):
   >   def commitfunc(ui, repo, message, match, opts):
@@ -1245,10 +1245,10 @@ only a subset of those are displayed (because of --rev option)
   $ echo d > d
   $ hg ci -Am d
   adding d
-  $ hg ci --amend -m dd
+  $ hg ci --amend -m dd --config experimental.evolution.track-operation=1
   $ hg debugobsolete --index --rev "3+7"
   1 6fdef60fcbabbd3d50e9b9cbc2a240724b91a5e1 d27fb9b066076fd921277a4b9e8b9cb48c95bc6a 0 \(.*\) {'user': 'test'} (re)
-  3 4715cf767440ed891755448016c2b8cf70760c30 7ae79c5d60f049c7b0dd02f5f25b9d60aaf7b36d 0 \(.*\) {'user': 'test'} (re)
+  3 4715cf767440ed891755448016c2b8cf70760c30 7ae79c5d60f049c7b0dd02f5f25b9d60aaf7b36d 0 \(.*\) {'operation': 'amend', 'user': 'test'} (re)
   $ hg debugobsolete --index --rev "3+7" -Tjson
   [
    {
@@ -1263,7 +1263,7 @@ only a subset of those are displayed (because of --rev option)
     "date": *, (glob)
     "flag": 0,
     "index": 3,
-    "metadata": {"user": "test"},
+    "metadata": {"operation": "amend", "user": "test"},
     "precnode": "4715cf767440ed891755448016c2b8cf70760c30",
     "succnodes": ["7ae79c5d60f049c7b0dd02f5f25b9d60aaf7b36d"]
    }
@@ -1274,7 +1274,7 @@ Test the --delete option of debugobsolete command
   0 cb9a9f314b8b07ba71012fcdbc544b5a4d82ff5b f9bd49731b0b175e42992a3c8fa6c678b2bc11f1 0 \(.*\) {'user': 'test'} (re)
   1 6fdef60fcbabbd3d50e9b9cbc2a240724b91a5e1 d27fb9b066076fd921277a4b9e8b9cb48c95bc6a 0 \(.*\) {'user': 'test'} (re)
   2 1ab51af8f9b41ef8c7f6f3312d4706d870b1fb74 29346082e4a9e27042b62d2da0e2de211c027621 0 \(.*\) {'user': 'test'} (re)
-  3 4715cf767440ed891755448016c2b8cf70760c30 7ae79c5d60f049c7b0dd02f5f25b9d60aaf7b36d 0 \(.*\) {'user': 'test'} (re)
+  3 4715cf767440ed891755448016c2b8cf70760c30 7ae79c5d60f049c7b0dd02f5f25b9d60aaf7b36d 0 (*) {'operation': 'amend', 'user': 'test'} (glob)
   $ hg debugobsolete --delete 1 --delete 3
   deleted 2 obsolescence markers
   $ hg debugobsolete

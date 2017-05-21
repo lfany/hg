@@ -680,10 +680,10 @@ this is a section and erroring out weirdly.
 
   $ cat > helpext.py <<EOF
   > import os
-  > from mercurial import cmdutil, commands
+  > from mercurial import commands, registrar
   > 
   > cmdtable = {}
-  > command = cmdutil.command(cmdtable)
+  > command = registrar.command(cmdtable)
   > 
   > @command('nohelp',
   >     [('', 'longdesc', 3, 'x'*90),
@@ -912,6 +912,8 @@ Test list of internal help commands
    debugoptEXP   (no help text available)
    debugpathcomplete
                  complete part or all of a tracked path
+   debugpickmergetool
+                 examine which merge tool is chosen for specified file
    debugpushkey  access the pushkey key/value protocol
    debugpvec     (no help text available)
    debugrebuilddirstate
@@ -929,6 +931,8 @@ Test list of internal help commands
                  show set of successors for revision
    debugtemplate
                  parse and apply a template
+   debugupdatecaches
+                 warm all known caches in the repository
    debugupgraderepo
                  upgrade a repository to use different features
    debugwalk     show how files match on given patterns
@@ -1760,10 +1764,17 @@ Test dynamic list of merge tools only shows up once
         accordingly be named "a.txt.local", "a.txt.other" and "a.txt.base" and
         they will be placed in the same directory as "a.txt".
   
+        This implies permerge. Therefore, files aren't dumped, if premerge runs
+        successfully. Use :forcedump to forcibly write files out.
+  
       ":fail"
         Rather than attempting to merge files that were modified on both
         branches, it marks them as unresolved. The resolve command must be used
         to resolve these conflicts.
+  
+      ":forcedump"
+        Creates three versions of the files as same as :dump, but omits
+        premerge.
   
       ":local"
         Uses the local 'p1()' version of files as the merged version.

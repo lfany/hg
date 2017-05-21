@@ -26,10 +26,10 @@ version = 2
 # These are the file generators that should only be executed after the
 # finalizers are done, since they rely on the output of the finalizers (like
 # the changelog having been written).
-postfinalizegenerators = set([
+postfinalizegenerators = {
     'bookmarks',
     'dirstate'
-])
+}
 
 gengroupall='all'
 gengroupprefinalize='prefinalize'
@@ -136,6 +136,10 @@ class transaction(object):
         if releasefn is None:
             releasefn = lambda tr, success: None
         self.releasefn = releasefn
+
+        # A dict dedicated to precisely tracking the changes introduced in the
+        # transaction.
+        self.changes = {}
 
         # a dict of arguments to be passed to hooks
         self.hookargs = {}

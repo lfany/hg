@@ -52,7 +52,7 @@ def _expandsets(kindpats, ctx, listsubrepos):
     return fset, other
 
 def _expandsubinclude(kindpats, root):
-    '''Returns the list of subinclude matchers and the kindpats without the
+    '''Returns the list of subinclude matcher args and the kindpats without the
     subincludes in it.'''
     relmatchers = []
     other = []
@@ -64,12 +64,12 @@ def _expandsubinclude(kindpats, root):
             path = pathutil.join(sourceroot, pat)
 
             newroot = pathutil.dirname(path)
-            relmatcher = match(newroot, '', [], ['include:%s' % path])
+            matcherargs = (newroot, '', [], ['include:%s' % path])
 
             prefix = pathutil.canonpath(root, root, newroot)
             if prefix:
                 prefix += '/'
-            relmatchers.append((prefix, relmatcher))
+            relmatchers.append((prefix, matcherargs))
         else:
             other.append((kind, pat, source))
 
@@ -134,7 +134,7 @@ class match(object):
         self._includeroots = set()
         self._excluderoots = set()
         # dirs are directories which are non-recursively included.
-        self._includedirs = set(['.'])
+        self._includedirs = set()
 
         if badfn is not None:
             self.bad = badfn
@@ -188,7 +188,6 @@ class match(object):
                 return True
 
         self.matchfn = m
-        self._fileroots = set(self._files)
 
     def __call__(self, fn):
         return self.matchfn(fn)
@@ -235,8 +234,12 @@ class match(object):
         return self._files
 
     @propertycache
+    def _fileset(self):
+        return set(self._files)
+
+    @propertycache
     def _dirs(self):
-        return set(util.dirs(self._fileroots)) | set(['.'])
+        return set(util.dirs(self._fileset)) | {'.'}
 
     def visitdir(self, dir):
         '''Decides whether a directory should be visited based on whether it
@@ -250,27 +253,27 @@ class match(object):
         This function's behavior is undefined if it has returned False for
         one of the dir's parent directories.
         '''
-        if self.prefix() and dir in self._fileroots:
+        if self.prefix() and dir in self._fileset:
             return 'all'
         if dir in self._excluderoots:
             return False
-        if ((self._includeroots or self._includedirs != set(['.'])) and
+        if ((self._includeroots or self._includedirs) and
             '.' not in self._includeroots and
             dir not in self._includeroots and
             dir not in self._includedirs and
             not any(parent in self._includeroots
                     for parent in util.finddirs(dir))):
             return False
-        return (not self._fileroots or
-                '.' in self._fileroots or
-                dir in self._fileroots or
+        return (not self._fileset or
+                '.' in self._fileset or
+                dir in self._fileset or
                 dir in self._dirs or
-                any(parentdir in self._fileroots
+                any(parentdir in self._fileset
                     for parentdir in util.finddirs(dir)))
 
     def exact(self, f):
         '''Returns True if f is in .files().'''
-        return f in self._fileroots
+        return f in self._fileset
 
     def anypats(self):
         '''Matcher uses patterns or include/exclude.'''
@@ -280,14 +283,6 @@ class match(object):
         '''Matcher will match everything and .files() will be empty
         - optimization might be possible and necessary.'''
         return self._always
-
-    def ispartial(self):
-        '''True if the matcher won't always match.
-
-        Although it's just the inverse of _always in this implementation,
-        an extension such as narrowhg might make it return something
-        slightly different.'''
-        return not self._always
 
     def isexact(self):
         return self.matchfn == self.exact
@@ -386,14 +381,13 @@ class subdirmatcher(match):
         self._path = path
         self._matcher = matcher
         self._always = matcher._always
-        self._pathrestricted = matcher._pathrestricted
 
         self._files = [f[len(path) + 1:] for f in matcher._files
                        if f.startswith(path + "/")]
 
-        # If the parent repo had a path to this subrepo and no patterns are
-        # specified, this submatcher always matches.
-        if not self._always and not matcher._anypats:
+        # If the parent repo had a path to this subrepo and the matcher is
+        # a prefix matcher, this submatcher always matches.
+        if matcher.prefix():
             self._always = any(f == path for f in matcher._files)
 
         self._anypats = matcher._anypats
@@ -402,21 +396,25 @@ class subdirmatcher(match):
         # from the inputs. Instead, we override matchfn() and visitdir() to
         # call the original matcher with the subdirectory path prepended.
         self.matchfn = lambda fn: matcher.matchfn(self._path + "/" + fn)
-        def visitdir(dir):
-            if dir == '.':
-                return matcher.visitdir(self._path)
-            return matcher.visitdir(self._path + "/" + dir)
-        self.visitdir = visitdir
-        self._fileroots = set(self._files)
-
-    def abs(self, f):
-        return self._matcher.abs(self._path + "/" + f)
 
     def bad(self, f, msg):
         self._matcher.bad(self._path + "/" + f, msg)
 
+    def abs(self, f):
+        return self._matcher.abs(self._path + "/" + f)
+
     def rel(self, f):
         return self._matcher.rel(self._path + "/" + f)
+
+    def uipath(self, f):
+        return self._matcher.uipath(self._path + "/" + f)
+
+    def visitdir(self, dir):
+        if dir == '.':
+            dir = self._path
+        else:
+            dir = self._path + "/" + dir
+        return self._matcher.visitdir(dir)
 
 class icasefsmatcher(match):
     """A matcher for wdir on case insensitive filesystems, which normalizes the
@@ -436,8 +434,8 @@ class icasefsmatcher(match):
         # inexact case matches are treated as exact, and not noted without -v.
         if self._files:
             roots, dirs = _rootsanddirs(self._kp)
-            self._fileroots = set(roots)
-            self._fileroots.update(dirs)
+            self._fileset = set(roots)
+            self._fileset.update(dirs)
 
     def _normalize(self, patterns, default, root, cwd, auditor):
         self._kp = super(icasefsmatcher, self)._normalize(patterns, default,
@@ -584,10 +582,17 @@ def _buildmatch(ctx, kindpats, globsuffix, listsubrepos, root):
 
     subincludes, kindpats = _expandsubinclude(kindpats, root)
     if subincludes:
+        submatchers = {}
         def matchsubinclude(f):
-            for prefix, mf in subincludes:
-                if f.startswith(prefix) and mf(f[len(prefix):]):
-                    return True
+            for prefix, matcherargs in subincludes:
+                if f.startswith(prefix):
+                    mf = submatchers.get(prefix)
+                    if mf is None:
+                        mf = match(*matcherargs)
+                        submatchers[prefix] = mf
+
+                    if mf(f[len(prefix):]):
+                        return True
             return False
         matchfuncs.append(matchsubinclude)
 
@@ -677,16 +682,16 @@ def _rootsanddirs(kindpats):
 
     >>> _rootsanddirs(\
         [('glob', 'g/h/*', ''), ('glob', 'g/h', ''), ('glob', 'g*', '')])
-    (['g/h', 'g/h', '.'], ['g'])
+    (['g/h', 'g/h', '.'], ['g', '.'])
     >>> _rootsanddirs(\
         [('rootfilesin', 'g/h', ''), ('rootfilesin', '', '')])
-    ([], ['g/h', '.', 'g'])
+    ([], ['g/h', '.', 'g', '.'])
     >>> _rootsanddirs(\
         [('relpath', 'r', ''), ('path', 'p/p', ''), ('path', '', '')])
-    (['r', 'p/p', '.'], ['p'])
+    (['r', 'p/p', '.'], ['p', '.'])
     >>> _rootsanddirs(\
         [('relglob', 'rg*', ''), ('re', 're/', ''), ('relre', 'rr', '')])
-    (['.', '.', '.'], [])
+    (['.', '.', '.'], ['.'])
     '''
     r, d = _patternrootsanddirs(kindpats)
 
@@ -694,6 +699,8 @@ def _rootsanddirs(kindpats):
     # scanned to get to either the roots or the other exact directories.
     d.extend(util.dirs(d))
     d.extend(util.dirs(r))
+    # util.dirs() does not include the root directory, so add it manually
+    d.append('.')
 
     return r, d
 

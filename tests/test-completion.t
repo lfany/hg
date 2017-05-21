@@ -99,6 +99,7 @@ Show debug commands if there are no other candidates
   debugnamecomplete
   debugobsolete
   debugpathcomplete
+  debugpickmergetool
   debugpushkey
   debugpvec
   debugrebuilddirstate
@@ -110,6 +111,7 @@ Show debug commands if there are no other candidates
   debugsub
   debugsuccessorssets
   debugtemplate
+  debugupdatecaches
   debugupgraderepo
   debugwalk
   debugwireargs
@@ -272,6 +274,7 @@ Show all commands + options
   debugnamecomplete: 
   debugobsolete: flags, record-parents, rev, index, delete, date, user, template
   debugpathcomplete: full, normal, added, removed
+  debugpickmergetool: rev, changedelete, include, exclude, tool
   debugpushkey: 
   debugpvec: 
   debugrebuilddirstate: rev, minimal
@@ -283,6 +286,7 @@ Show all commands + options
   debugsub: rev
   debugsuccessorssets: 
   debugtemplate: rev, define
+  debugupdatecaches: 
   debugupgraderepo: optimize, run
   debugwalk: include, exclude
   debugwireargs: three, four, five, ssh, remotecmd, insecure

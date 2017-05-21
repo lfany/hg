@@ -26,7 +26,6 @@ import random
 import sys
 import time
 from mercurial import (
-    bdiff,
     changegroup,
     cmdutil,
     commands,
@@ -49,6 +48,11 @@ try:
     from mercurial import obsolete # since 2.3 (or ad0d6c2b3279)
 except ImportError:
     pass
+try:
+    from mercurial import registrar # since 3.7 (or 37d50250b696)
+    dir(registrar) # forcibly load it
+except ImportError:
+    registrar = None
 try:
     from mercurial import repoview # since 2.5 (or 3a6ddacb7198)
 except ImportError:
@@ -81,18 +85,20 @@ else:
 # available, because commands.formatteropts has been available since
 # 3.2 (or 7a7eed5176a4), even though formatting itself has been
 # available since 2.2 (or ae5f92e154d3)
-formatteropts = getattr(commands, "formatteropts", [])
+formatteropts = getattr(cmdutil, "formatteropts",
+                        getattr(commands, "formatteropts", []))
 
 # for "historical portability":
 # use locally defined option list, if debugrevlogopts isn't available,
 # because commands.debugrevlogopts has been available since 3.7 (or
 # 5606f7d0d063), even though cmdutil.openrevlog() has been available
 # since 1.9 (or a79fea6b3e77).
-revlogopts = getattr(commands, "debugrevlogopts", [
+revlogopts = getattr(cmdutil, "debugrevlogopts",
+                     getattr(commands, "debugrevlogopts", [
         ('c', 'changelog', False, ('open changelog')),
         ('m', 'manifest', False, ('open manifest')),
         ('', 'dir', False, ('open directory manifest')),
-        ])
+        ]))
 
 cmdtable = {}
 
@@ -102,7 +108,9 @@ cmdtable = {}
 def parsealiases(cmd):
     return cmd.lstrip("^").split("|")
 
-if safehasattr(cmdutil, 'command'):
+if safehasattr(registrar, 'command'):
+    command = registrar.command(cmdtable)
+elif safehasattr(cmdutil, 'command'):
     import inspect
     command = cmdutil.command(cmdtable)
     if 'norepo' not in inspect.getargspec(command)[0]:
@@ -812,7 +820,7 @@ def perfbdiff(ui, repo, file_, rev=None, count=None, **opts):
 
     def d():
         for pair in textpairs:
-            bdiff.bdiff(*pair)
+            mdiff.textdiff(*pair)
 
     timer, fm = gettimer(ui, opts)
     timer(d)
@@ -851,23 +859,26 @@ def perfrevlog(ui, repo, file_=None, startrev=0, reverse=False, **opts):
 
     The start revision can be defined via ``-s/--startrev``.
     """
-    timer, fm = gettimer(ui, opts)
-    _len = getlen(ui)
+    rl = cmdutil.openrevlog(repo, 'perfrevlog', file_, opts)
+    rllen = getlen(ui)(rl)
 
     def d():
-        r = cmdutil.openrevlog(repo, 'perfrevlog', file_, opts)
+        rl.clearcaches()
 
-        startrev = 0
-        endrev = _len(r)
+        beginrev = startrev
+        endrev = rllen
         dist = opts['dist']
 
         if reverse:
-            startrev, endrev = endrev, startrev
+            beginrev, endrev = endrev, beginrev
             dist = -1 * dist
 
-        for x in xrange(startrev, endrev, dist):
-            r.revision(r.node(x))
+        for x in xrange(beginrev, endrev, dist):
+            # Old revisions don't support passing int.
+            n = rl.node(x)
+            rl.revision(n)
 
+    timer, fm = gettimer(ui, opts)
     timer(d)
     fm.end()
 
@@ -888,6 +899,12 @@ def perfrevlogchunks(ui, repo, file_=None, engines=None, startrev=0, **opts):
     see ``perfrevlog`` and ``perfrevlogrevision``.
     """
     rl = cmdutil.openrevlog(repo, 'perfrevlogchunks', file_, opts)
+
+    # _chunkraw was renamed to _getsegmentforrevs.
+    try:
+        segmentforrevs = rl._getsegmentforrevs
+    except AttributeError:
+        segmentforrevs = rl._chunkraw
 
     # Verify engines argument.
     if engines:
@@ -919,22 +936,22 @@ def perfrevlogchunks(ui, repo, file_=None, engines=None, startrev=0, **opts):
     def doread():
         rl.clearcaches()
         for rev in revs:
-            rl._chunkraw(rev, rev)
+            segmentforrevs(rev, rev)
 
     def doreadcachedfh():
         rl.clearcaches()
         fh = rlfh(rl)
         for rev in revs:
-            rl._chunkraw(rev, rev, df=fh)
+            segmentforrevs(rev, rev, df=fh)
 
     def doreadbatch():
         rl.clearcaches()
-        rl._chunkraw(revs[0], revs[-1])
+        segmentforrevs(revs[0], revs[-1])
 
     def doreadbatchcachedfh():
         rl.clearcaches()
         fh = rlfh(rl)
-        rl._chunkraw(revs[0], revs[-1], df=fh)
+        segmentforrevs(revs[0], revs[-1], df=fh)
 
     def dochunk():
         rl.clearcaches()
@@ -1003,6 +1020,13 @@ def perfrevlogrevision(ui, repo, file_, rev=None, cache=None, **opts):
         raise error.CommandError('perfrevlogrevision', 'invalid arguments')
 
     r = cmdutil.openrevlog(repo, 'perfrevlogrevision', file_, opts)
+
+    # _chunkraw was renamed to _getsegmentforrevs.
+    try:
+        segmentforrevs = r._getsegmentforrevs
+    except AttributeError:
+        segmentforrevs = r._chunkraw
+
     node = r.lookup(rev)
     rev = r.rev(node)
 
@@ -1034,7 +1058,7 @@ def perfrevlogrevision(ui, repo, file_, rev=None, cache=None, **opts):
     def doread(chain):
         if not cache:
             r.clearcaches()
-        r._chunkraw(chain[0], chain[-1])
+        segmentforrevs(chain[0], chain[-1])
 
     def dorawchunks(data, chain):
         if not cache:
@@ -1062,7 +1086,7 @@ def perfrevlogrevision(ui, repo, file_, rev=None, cache=None, **opts):
         r.revision(node)
 
     chain = r._deltachain(rev)[0]
-    data = r._chunkraw(chain[0], chain[-1])[1]
+    data = segmentforrevs(chain[0], chain[-1])[1]
     rawchunks = getrawchunks(data, chain)
     bins = r._chunks(chain)
     text = str(bins[0])

@@ -26,7 +26,6 @@ from . import (
     revsetlang,
     similar,
     util,
-    vfs as vfsmod,
 )
 
 if pycompat.osname == 'nt':
@@ -121,10 +120,6 @@ def nochangesfound(ui, repo, excluded=None):
     secretlist = []
     if excluded:
         for n in excluded:
-            if n not in repo:
-                # discovery should not have included the filtered revision,
-                # we have to explicitly exclude it until discovery is cleanup.
-                continue
             ctx = repo[n]
             if ctx.phase() >= phases.secret and not ctx.extinct():
                 secretlist.append(n)
@@ -186,8 +181,6 @@ def callcatch(ui, func):
         ui.warn(_("abort: file censored %s!\n") % inst)
     except error.RevlogError as inst:
         ui.warn(_("abort: %s!\n") % inst)
-    except error.SignalInterrupt:
-        ui.warn(_("killed!\n"))
     except error.InterventionRequired as inst:
         ui.warn("%s\n" % inst)
         if inst.hint:
@@ -215,7 +208,7 @@ def callcatch(ui, func):
                 reason = inst.reason
             if isinstance(reason, unicode):
                 # SSLError of Python 2.7.9 contains a unicode
-                reason = reason.encode(encoding.encoding, 'replace')
+                reason = encoding.unitolocal(reason)
             ui.warn(_("abort: error: %s\n") % reason)
         elif (util.safehasattr(inst, "args")
               and inst.args and inst.args[0] == errno.EPIPE):
@@ -334,27 +327,6 @@ def filteredhash(repo, maxrev):
             s.update('%d;' % rev)
         key = s.digest()
     return key
-
-def _deprecated(old, new, func):
-    msg = ('class at mercurial.scmutil.%s moved to mercurial.vfs.%s'
-           % (old, new))
-    def wrapper(*args, **kwargs):
-        util.nouideprecwarn(msg, '4.2')
-        return func(*args, **kwargs)
-    return wrapper
-
-# compatibility layer since all 'vfs' code moved to 'mercurial.vfs'
-#
-# This is hard to instal deprecation warning to this since we do not have
-# access to a 'ui' object.
-opener = _deprecated('opener', 'vfs', vfsmod.vfs)
-vfs = _deprecated('vfs', 'vfs', vfsmod.vfs)
-filteropener = _deprecated('filteropener', 'filtervfs', vfsmod.filtervfs)
-filtervfs = _deprecated('filtervfs', 'filtervfs', vfsmod.filtervfs)
-abstractvfs = _deprecated('abstractvfs', 'abstractvfs', vfsmod.abstractvfs)
-readonlyvfs = _deprecated('readonlyvfs', 'readonlyvfs', vfsmod.readonlyvfs)
-auditvfs = _deprecated('auditvfs', 'auditvfs', vfsmod.auditvfs)
-checkambigatclosing = vfsmod.checkambigatclosing
 
 def walkrepos(path, followsym=False, seen_dirs=None, recurse=False):
     '''yield every hg repository under path, always recursively.
@@ -945,25 +917,57 @@ class simplekeyvaluefile(object):
 
     Keys must be alphanumerics and start with a letter, values must not
     contain '\n' characters"""
+    firstlinekey = '__firstline'
 
     def __init__(self, vfs, path, keys=None):
         self.vfs = vfs
         self.path = path
 
-    def read(self):
+    def read(self, firstlinenonkeyval=False):
+        """Read the contents of a simple key-value file
+
+        'firstlinenonkeyval' indicates whether the first line of file should
+        be treated as a key-value pair or reuturned fully under the
+        __firstline key."""
         lines = self.vfs.readlines(self.path)
+        d = {}
+        if firstlinenonkeyval:
+            if not lines:
+                e = _("empty simplekeyvalue file")
+                raise error.CorruptedState(e)
+            # we don't want to include '\n' in the __firstline
+            d[self.firstlinekey] = lines[0][:-1]
+            del lines[0]
+
         try:
-            d = dict(line[:-1].split('=', 1) for line in lines if line)
+            # the 'if line.strip()' part prevents us from failing on empty
+            # lines which only contain '\n' therefore are not skipped
+            # by 'if line'
+            updatedict = dict(line[:-1].split('=', 1) for line in lines
+                                                      if line.strip())
+            if self.firstlinekey in updatedict:
+                e = _("%r can't be used as a key")
+                raise error.CorruptedState(e % self.firstlinekey)
+            d.update(updatedict)
         except ValueError as e:
             raise error.CorruptedState(str(e))
         return d
 
-    def write(self, data):
+    def write(self, data, firstline=None):
         """Write key=>value mapping to a file
         data is a dict. Keys must be alphanumerical and start with a letter.
-        Values must not contain newline characters."""
+        Values must not contain newline characters.
+
+        If 'firstline' is not None, it is written to file before
+        everything else, as it is, not in a key=value form"""
         lines = []
+        if firstline is not None:
+            lines.append('%s\n' % firstline)
+
         for k, v in data.items():
+            if k == self.firstlinekey:
+                e = "key name '%s' is reserved" % self.firstlinekey
+                raise error.ProgrammingError(e)
             if not k[0].isalpha():
                 e = "keys must start with a letter in a key-value file"
                 raise error.ProgrammingError(e)

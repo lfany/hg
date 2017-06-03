@@ -555,7 +555,7 @@ timeouts
   > cat test-timeout.t >> test-slow-timeout.t
   $ rt --timeout=1 --slowtimeout=3 test-timeout.t test-slow-timeout.t
   st
-  Skipped test-slow-timeout.t: missing feature: allow slow tests
+  Skipped test-slow-timeout.t: missing feature: allow slow tests (use --allow-slow-tests)
   Failed test-timeout.t: timed out
   # Ran 1 tests, 1 skipped, 0 warned, 1 failed.
   python hash seed: * (glob)
@@ -852,7 +852,7 @@ test support for --allow-slow-tests
   > EOF
   $ rt test-very-slow-test.t
   s
-  Skipped test-very-slow-test.t: missing feature: allow slow tests
+  Skipped test-very-slow-test.t: missing feature: allow slow tests (use --allow-slow-tests)
   # Ran 0 tests, 1 skipped, 0 warned, 0 failed.
   $ rt $HGTEST_RUN_TESTS_PURE --allow-slow-tests test-very-slow-test.t
   .
@@ -898,5 +898,104 @@ support for bisecting failed tests automatically
   Failed test-bisect.t: output changed
   test-bisect.t broken by 72cbf122d116 (bad)
   # Ran 1 tests, 0 skipped, 0 warned, 1 failed.
+  python hash seed: * (glob)
+  [1]
+
+  $ cd ..
+
+Test a broken #if statement doesn't break run-tests threading.
+==============================================================
+  $ mkdir broken
+  $ cd broken
+  $ cat > test-broken.t <<EOF
+  > true
+  > #if notarealhghavefeature
+  >   $ false
+  > #endif
+  > EOF
+  $ for f in 1 2 3 4 ; do
+  > cat > test-works-$f.t <<EOF
+  > This is test case $f
+  >   $ sleep 1
+  > EOF
+  > done
+  $ rt -j 2
+  ....
+  # Ran 5 tests, 0 skipped, 0 warned, 0 failed.
+  skipped: unknown feature: notarealhghavefeature
+  
+  $ cd ..
+  $ rm -rf broken
+
+Test cases in .t files
+======================
+  $ mkdir cases
+  $ cd cases
+  $ cat > test-cases-abc.t <<'EOF'
+  > #testcases A B C
+  >   $ V=B
+  > #if A
+  >   $ V=A
+  > #endif
+  > #if C
+  >   $ V=C
+  > #endif
+  >   $ echo $V | sed 's/A/C/'
+  >   C
+  > #if C
+  >   $ [ $V = C ]
+  > #endif
+  > #if A
+  >   $ [ $V = C ]
+  >   [1]
+  > #endif
+  > #if no-C
+  >   $ [ $V = C ]
+  >   [1]
+  > #endif
+  >   $ [ $V = D ]
+  >   [1]
+  > EOF
+  $ rt
+  .
+  --- $TESTTMP/anothertests/cases/test-cases-abc.t
+  +++ $TESTTMP/anothertests/cases/test-cases-abc.t.B.err
+  @@ -7,7 +7,7 @@
+     $ V=C
+   #endif
+     $ echo $V | sed 's/A/C/'
+  -  C
+  +  B
+   #if C
+     $ [ $V = C ]
+   #endif
+  
+  ERROR: test-cases-abc.t (case B) output changed
+  !.
+  Failed test-cases-abc.t (case B): output changed
+  # Ran 3 tests, 0 skipped, 0 warned, 1 failed.
+  python hash seed: * (glob)
+  [1]
+
+--restart works
+
+  $ rt --restart
+  
+  --- $TESTTMP/anothertests/cases/test-cases-abc.t
+  +++ $TESTTMP/anothertests/cases/test-cases-abc.t.B.err
+  @@ -7,7 +7,7 @@
+     $ V=C
+   #endif
+     $ echo $V | sed 's/A/C/'
+  -  C
+  +  B
+   #if C
+     $ [ $V = C ]
+   #endif
+  
+  ERROR: test-cases-abc.t (case B) output changed
+  !.
+  Failed test-cases-abc.t (case B): output changed
+  # Ran 2 tests, 0 skipped, 0 warned, 1 failed.
   python hash seed: * (glob)
   [1]

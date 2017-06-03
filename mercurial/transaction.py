@@ -26,10 +26,10 @@ version = 2
 # These are the file generators that should only be executed after the
 # finalizers are done, since they rely on the output of the finalizers (like
 # the changelog having been written).
-postfinalizegenerators = set([
+postfinalizegenerators = {
     'bookmarks',
     'dirstate'
-])
+}
 
 gengroupall='all'
 gengroupprefinalize='prefinalize'
@@ -136,6 +136,10 @@ class transaction(object):
         if releasefn is None:
             releasefn = lambda tr, success: None
         self.releasefn = releasefn
+
+        # A dict dedicated to precisely tracking the changes introduced in the
+        # transaction.
+        self.changes = {}
 
         # a dict of arguments to be passed to hooks
         self.hookargs = {}
@@ -427,6 +431,7 @@ class transaction(object):
         '''commit the transaction'''
         if self.count == 1:
             self.validator(self)  # will raise exception if needed
+            self.validator = None # Help prevent cycles.
             self._generatefiles(group=gengroupprefinalize)
             categories = sorted(self._finalizecallback)
             for cat in categories:
@@ -460,6 +465,7 @@ class transaction(object):
         self._writeundo()
         if self.after:
             self.after()
+            self.after = None # Help prevent cycles.
         if self.opener.isfile(self._backupjournal):
             self.opener.unlink(self._backupjournal)
         if self.opener.isfile(self.journal):
@@ -483,6 +489,7 @@ class transaction(object):
         self.journal = None
 
         self.releasefn(self, True) # notify success of closing transaction
+        self.releasefn = None # Help prevent cycles.
 
         # run post close action
         categories = sorted(self._postclosecallback)
@@ -553,6 +560,7 @@ class transaction(object):
         finally:
             self.journal = None
             self.releasefn(self, False) # notify failure of transaction
+            self.releasefn = None # Help prevent cycles.
 
 def rollback(opener, vfsmap, file, report):
     """Rolls back the transaction contained in the given file

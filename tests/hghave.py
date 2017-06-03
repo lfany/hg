@@ -580,10 +580,6 @@ def has_absimport():
     from mercurial import util
     return util.safehasattr(__future__, "absolute_import")
 
-@check("py27+", "running with Python 2.7+")
-def has_python27ornewer():
-    return sys.version_info[0:2] >= (2, 7)
-
 @check("py3k", "running with Python 3.x")
 def has_py3k():
     return 3 == sys.version_info[0]
@@ -609,7 +605,7 @@ def has_pure():
         os.environ.get("HGTEST_RUN_TESTS_PURE") == "--pure",
     ])
 
-@check("slow", "allow slow tests")
+@check("slow", "allow slow tests (use --allow-slow-tests)")
 def has_slow():
     return os.environ.get('HGTEST_SLOW') == 'slow'
 

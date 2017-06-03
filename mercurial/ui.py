@@ -263,7 +263,7 @@ class ui(object):
                 (util.timer() - starttime) * 1000
 
     def formatter(self, topic, opts):
-        return formatter.formatter(self, topic, opts)
+        return formatter.formatter(self, self, topic, opts)
 
     def _trusted(self, fp, f):
         st = util.fstat(fp)
@@ -522,7 +522,7 @@ class ui(object):
             return default
         try:
             return convert(v)
-        except ValueError:
+        except (ValueError, error.ParseError):
             if desc is None:
                 desc = convert.__name__
             raise error.ConfigError(_("%s.%s is not a valid %s ('%s')")
@@ -597,6 +597,19 @@ class ui(object):
             default = config.parselist(default)
         return self.configwith(config.parselist, section, name, default or [],
                                'list', untrusted)
+
+    def configdate(self, section, name, default=None, untrusted=False):
+        """parse a configuration element as a tuple of ints
+
+        >>> u = ui(); s = 'foo'
+        >>> u.setconfig(s, 'date', '0 0')
+        >>> u.configdate(s, 'date')
+        (0, 0)
+        """
+        if self.config(section, name, default, untrusted):
+            return self.configwith(util.parsedate, section, name, default,
+                                   'date', untrusted)
+        return default
 
     def hasconfig(self, section, name, untrusted=False):
         return self._data(untrusted).hasitem(section, name)

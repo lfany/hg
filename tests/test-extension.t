@@ -2,9 +2,9 @@ Test basic extension support
 
   $ cat > foobar.py <<EOF
   > import os
-  > from mercurial import cmdutil, commands
+  > from mercurial import commands, registrar
   > cmdtable = {}
-  > command = cmdutil.command(cmdtable)
+  > command = registrar.command(cmdtable)
   > def uisetup(ui):
   >     ui.write("uisetup called\\n")
   >     ui.flush()
@@ -380,9 +380,9 @@ Setup main procedure of extension.
 
   $ cat > $TESTTMP/absextroot/__init__.py <<EOF
   > from __future__ import absolute_import
-  > from mercurial import cmdutil
+  > from mercurial import registrar
   > cmdtable = {}
-  > command = cmdutil.command(cmdtable)
+  > command = registrar.command(cmdtable)
   > 
   > # "absolute" and "relative" shouldn't be imported before actual
   > # command execution, because (1) they import same modules, and (2)
@@ -444,9 +444,9 @@ See also issue5208 for detail about example case on Python 3.x.
   > EOF
 
   $ cat > $TESTTMP/checkrelativity.py <<EOF
-  > from mercurial import cmdutil
+  > from mercurial import registrar
   > cmdtable = {}
-  > command = cmdutil.command(cmdtable)
+  > command = registrar.command(cmdtable)
   > 
   > # demand import avoids failure of importing notexist here
   > import extlibroot.lsub1.lsub2.notexist
@@ -487,9 +487,9 @@ hide outer repo
   $ cat > debugextension.py <<EOF
   > '''only debugcommands
   > '''
-  > from mercurial import cmdutil
+  > from mercurial import registrar
   > cmdtable = {}
-  > command = cmdutil.command(cmdtable)
+  > command = registrar.command(cmdtable)
   > @command('debugfoobar', [], 'hg debugfoobar')
   > def debugfoobar(ui, repo, *args, **opts):
   >     "yet another debug command"
@@ -726,9 +726,9 @@ Extension module help vs command help:
 Test help topic with same name as extension
 
   $ cat > multirevs.py <<EOF
-  > from mercurial import cmdutil, commands
+  > from mercurial import commands, registrar
   > cmdtable = {}
-  > command = cmdutil.command(cmdtable)
+  > command = registrar.command(cmdtable)
   > """multirevs extension
   > Big multi-line module docstring."""
   > @command('multirevs', [], 'ARG', norepo=True)
@@ -803,9 +803,9 @@ along with extension help itself
   > This is an awesome 'dodo' extension. It does nothing and
   > writes 'Foo foo'
   > """
-  > from mercurial import cmdutil, commands
+  > from mercurial import commands, registrar
   > cmdtable = {}
-  > command = cmdutil.command(cmdtable)
+  > command = registrar.command(cmdtable)
   > @command('dodo', [], 'hg dodo')
   > def dodo(ui, *args, **kwargs):
   >     """Does nothing"""
@@ -914,9 +914,9 @@ along with extension help
   > This is an awesome 'dudu' extension. It does something and
   > also writes 'Beep beep'
   > """
-  > from mercurial import cmdutil, commands
+  > from mercurial import commands, registrar
   > cmdtable = {}
-  > command = cmdutil.command(cmdtable)
+  > command = registrar.command(cmdtable)
   > @command('something', [], 'hg something')
   > def something(ui, *args, **kwargs):
   >     """Does something"""
@@ -1157,9 +1157,9 @@ Broken disabled extension and command:
   [255]
 
   $ cat > throw.py <<EOF
-  > from mercurial import cmdutil, commands, util
+  > from mercurial import commands, registrar, util
   > cmdtable = {}
-  > command = cmdutil.command(cmdtable)
+  > command = registrar.command(cmdtable)
   > class Bogon(Exception): pass
   > @command('throw', [], 'hg throw', norepo=True)
   > def throw(ui, **opts):
@@ -1534,6 +1534,40 @@ disabling in command line overlays with all configuration
 
   $ cd ..
 
+Prohibit registration of commands that don't use @command (issue5137)
+
+  $ hg init deprecated
+  $ cd deprecated
+
+  $ cat <<EOF > deprecatedcmd.py
+  > def deprecatedcmd(repo, ui):
+  >     pass
+  > cmdtable = {
+  >     'deprecatedcmd': (deprecatedcmd, [], ''),
+  > }
+  > EOF
+  $ cat <<EOF > .hg/hgrc
+  > [extensions]
+  > deprecatedcmd = `pwd`/deprecatedcmd.py
+  > mq = !
+  > hgext.mq = !
+  > hgext/mq = !
+  > EOF
+
+  $ hg deprecatedcmd > /dev/null
+  *** failed to import extension deprecatedcmd from $TESTTMP/deprecated/deprecatedcmd.py: missing attributes: norepo, optionalrepo, inferrepo
+  *** (use @command decorator to register 'deprecatedcmd')
+  hg: unknown command 'deprecatedcmd'
+  [255]
+
+ the extension shouldn't be loaded at all so the mq works:
+
+  $ hg qseries --config extensions.mq= > /dev/null
+  *** failed to import extension deprecatedcmd from $TESTTMP/deprecated/deprecatedcmd.py: missing attributes: norepo, optionalrepo, inferrepo
+  *** (use @command decorator to register 'deprecatedcmd')
+
+  $ cd ..
+
 Test synopsis and docstring extending
 
   $ hg init exthelp
@@ -1556,4 +1590,19 @@ Test synopsis and docstring extending
   $ hg help bookmarks | grep GREPME
   hg bookmarks [OPTIONS]... [NAME]... GREPME [--foo] [-x]
       GREPME make sure that this is in the help!
+  $ cd ..
 
+Show deprecation warning for the use of cmdutil.command
+
+  $ cat > nonregistrar.py <<EOF
+  > from mercurial import cmdutil
+  > cmdtable = {}
+  > command = cmdutil.command(cmdtable)
+  > @command('foo', [], norepo=True)
+  > def foo(ui):
+  >     pass
+  > EOF
+
+  $ hg --config extensions.nonregistrar=`pwd`/nonregistrar.py version > /dev/null
+  devel-warn: cmdutil.command is deprecated, use registrar.command to register 'foo'
+  (compatibility will be dropped after Mercurial-4.6, update your code.) * (glob)

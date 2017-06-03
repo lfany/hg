@@ -187,11 +187,8 @@ check that local configs for the cached repo aren't inherited when -R is used:
   ...     runcommand(server, ['-R', 'foo', 'showconfig', 'ui', 'defaults'])
   *** runcommand showconfig
   bundle.mainreporoot=$TESTTMP/repo
-  defaults.backout=-d "0 0"
-  defaults.commit=-d "0 0"
-  defaults.shelve=--date "0 0"
-  defaults.tag=-d "0 0"
   devel.all-warnings=true
+  devel.default-date=0 0
   largefiles.usercache=$TESTTMP/.cache/largefiles
   ui.slash=True
   ui.interactive=False
@@ -203,10 +200,6 @@ check that local configs for the cached repo aren't inherited when -R is used:
   web\.ipv6=(?:True|False) (re)
   *** runcommand init foo
   *** runcommand -R foo showconfig ui defaults
-  defaults.backout=-d "0 0"
-  defaults.commit=-d "0 0"
-  defaults.shelve=--date "0 0"
-  defaults.tag=-d "0 0"
   ui.slash=True
   ui.interactive=False
   ui.mergemarkers=detailed
@@ -579,9 +572,9 @@ changelog and manifest would have invalid node:
 
   $ cat <<EOF > dbgui.py
   > import os, sys
-  > from mercurial import cmdutil, commands
+  > from mercurial import commands, registrar
   > cmdtable = {}
-  > command = cmdutil.command(cmdtable)
+  > command = registrar.command(cmdtable)
   > @command("debuggetpass", norepo=True)
   > def debuggetpass(ui):
   >     ui.write("%s\\n" % ui.getpass())

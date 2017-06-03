@@ -44,13 +44,13 @@ from mercurial.i18n import _
 from mercurial.node import hex
 
 from mercurial import (
-    cmdutil,
+    registrar,
     ui as uimod,
     util,
 )
 
 cmdtable = {}
-command = cmdutil.command(cmdtable)
+command = registrar.command(cmdtable)
 # Note for extension authors: ONLY specify testedwith = 'ships-with-hg-core' for
 # extensions which SHIP WITH MERCURIAL. Non-mainline extensions should
 # be specifying the version(s) of Mercurial they are tested with, or
@@ -171,9 +171,10 @@ def wrapui(ui):
                 return
             try:
                 ui._bbinlog = True
-                date = util.datestr(None, '%Y/%m/%d %H:%M:%S')
+                default = self.configdate('devel', 'default-date')
+                date = util.datestr(default, '%Y/%m/%d %H:%M:%S')
                 user = util.getuser()
-                pid = str(util.getpid())
+                pid = '%d' % util.getpid()
                 formattedmsg = msg[0] % msg[1:]
                 rev = '(unknown)'
                 changed = ''

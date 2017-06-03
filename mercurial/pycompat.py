@@ -87,6 +87,14 @@ if ispy3:
         >>> s = bytestr(b'foo')
         >>> assert s is bytestr(s)
 
+        __bytes__() should be called if provided:
+
+        >>> class bytesable(object):
+        ...     def __bytes__(self):
+        ...         return b'bytes'
+        >>> bytestr(bytesable())
+        b'bytes'
+
         There's no implicit conversion from non-ascii str as its encoding is
         unknown:
 
@@ -127,7 +135,8 @@ if ispy3:
         def __new__(cls, s=b''):
             if isinstance(s, bytestr):
                 return s
-            if not isinstance(s, (bytes, bytearray)):
+            if (not isinstance(s, (bytes, bytearray))
+                and not hasattr(s, u'__bytes__')):  # hasattr-py3-only
                 s = str(s).encode(u'ascii')
             return bytes.__new__(cls, s)
 
@@ -163,6 +172,18 @@ if ispy3:
         if isinstance(s, builtins.str):
             return s
         return s.decode(u'latin-1')
+
+    def raisewithtb(exc, tb):
+        """Raise exception with the given traceback"""
+        raise exc.with_traceback(tb)
+
+    def getdoc(obj):
+        """Get docstring as bytes; may be None so gettext() won't confuse it
+        with _('')"""
+        doc = getattr(obj, u'__doc__', None)
+        if doc is None:
+            return doc
+        return sysbytes(doc)
 
     def _wrapattrfunc(f):
         @functools.wraps(f)
@@ -224,6 +245,10 @@ else:
     sysbytes = identity
     sysstr = identity
 
+    # this can't be parsed on Python 3
+    exec('def raisewithtb(exc, tb):\n'
+         '    raise exc, None, tb\n')
+
     # Partial backport from os.py in Python 3, which only accepts bytes.
     # In Python 2, our paths should only ever be bytes, a unicode path
     # indicates a bug.
@@ -237,6 +262,9 @@ else:
     # In Python 2, fsdecode() has a very chance to receive bytes. So it's
     # better not to touch Python 2 part as it's already working fine.
     fsdecode = identity
+
+    def getdoc(obj):
+        return getattr(obj, '__doc__', None)
 
     def getoptb(args, shortlist, namelist):
         return getopt.getopt(args, shortlist, namelist)

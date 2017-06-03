@@ -37,14 +37,14 @@ these predicates use '\0' as a separator:
   $ cat <<EOF > debugrevlistspec.py
   > from __future__ import absolute_import
   > from mercurial import (
-  >     cmdutil,
   >     node as nodemod,
+  >     registrar,
   >     revset,
   >     revsetlang,
   >     smartset,
   > )
   > cmdtable = {}
-  > command = cmdutil.command(cmdtable)
+  > command = registrar.command(cmdtable)
   > @command('debugrevlistspec',
   >     [('', 'optimize', None, 'print parsed tree after optimizing'),
   >      ('', 'bin', None, 'unhexlify arguments')])
@@ -413,7 +413,7 @@ quoting needed
   hg: parse error: invalid \x escape
   [255]
   $ log 'date(tip)'
-  abort: invalid date: 'tip'
+  hg: parse error: invalid date: 'tip'
   [255]
   $ log '0:date'
   abort: unknown revision 'date'!
@@ -1221,6 +1221,42 @@ BROKEN: should be '-1'
 Test working-directory revision
   $ hg debugrevspec 'wdir()'
   2147483647
+  $ hg debugrevspec 'wdir()^'
+  9
+  $ hg up 7
+  0 files updated, 0 files merged, 1 files removed, 0 files unresolved
+  $ hg debugrevspec 'wdir()^'
+  7
+  $ hg debugrevspec 'wdir()^0'
+  2147483647
+  $ hg debugrevspec 'wdir()~3'
+  5
+  $ hg debugrevspec 'ancestors(wdir())'
+  0
+  1
+  2
+  3
+  4
+  5
+  6
+  7
+  2147483647
+  $ hg debugrevspec 'wdir()~0'
+  2147483647
+  $ hg debugrevspec 'p1(wdir())'
+  7
+  $ hg debugrevspec 'p2(wdir())'
+  $ hg debugrevspec 'parents(wdir())'
+  7
+  $ hg debugrevspec 'wdir()^1'
+  7
+  $ hg debugrevspec 'wdir()^2'
+  $ hg debugrevspec 'wdir()^3'
+  hg: parse error: ^ expects a number 0, 1, or 2
+  [255]
+For tests consistency
+  $ hg up 9
+  1 files updated, 0 files merged, 0 files removed, 0 files unresolved
   $ hg debugrevspec 'tip or wdir()'
   9
   2147483647

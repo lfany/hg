@@ -1,6 +1,10 @@
   $ hg init ignorerepo
   $ cd ignorerepo
 
+debugignore with no hgignore should be deterministic:
+  $ hg debugignore
+  <nevermatcher>
+
 Issue562: .hgignore requires newline at end:
 
   $ touch foo
@@ -164,7 +168,7 @@ Test relative ignore path (issue4473):
   A b.o
 
   $ hg debugignore
-  (?:(?:|.*/)[^/]*(?:/|$))
+  <includematcher includes='(?:(?:|.*/)[^/]*(?:/|$))'>
 
   $ hg debugignore b.o
   b.o is ignored

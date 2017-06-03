@@ -5,8 +5,8 @@
 # 'python setup.py --help' for more options
 
 import sys, platform
-if getattr(sys, 'version_info', (0, 0, 0)) < (2, 6, 0, 'final'):
-    raise SystemExit("Mercurial requires Python 2.6 or later.")
+if sys.version_info < (2, 7, 0, 'final'):
+    raise SystemExit('Mercurial requires Python 2.7 or later.')
 
 if sys.version_info[0] >= 3:
     printf = eval('print')
@@ -77,6 +77,7 @@ from distutils.command.build import build
 from distutils.command.build_ext import build_ext
 from distutils.command.build_py import build_py
 from distutils.command.build_scripts import build_scripts
+from distutils.command.install import install
 from distutils.command.install_lib import install_lib
 from distutils.command.install_scripts import install_scripts
 from distutils.spawn import spawn, find_executable
@@ -353,15 +354,15 @@ class hgbuildpy(build_py):
             self.distribution.ext_modules = []
         elif self.distribution.cffi:
             from mercurial.cffi import (
-                bdiff,
-                mpatch,
+                bdiffbuild,
+                mpatchbuild,
             )
-            exts = [mpatch.ffi.distutils_extension(),
-                    bdiff.ffi.distutils_extension()]
+            exts = [mpatchbuild.ffi.distutils_extension(),
+                    bdiffbuild.ffi.distutils_extension()]
             # cffi modules go here
             if sys.platform == 'darwin':
-                from mercurial.cffi import osutil
-                exts.append(osutil.ffi.distutils_extension())
+                from mercurial.cffi import osutilbuild
+                exts.append(osutilbuild.ffi.distutils_extension())
             self.distribution.ext_modules = exts
         else:
             h = os.path.join(get_python_inc(), 'Python.h')
@@ -372,6 +373,9 @@ class hgbuildpy(build_py):
     def run(self):
         if self.distribution.pure:
             modulepolicy = 'py'
+        elif self.build_lib == '.':
+            # in-place build should run without rebuilding C extensions
+            modulepolicy = 'allow'
         else:
             modulepolicy = 'c'
         with open("mercurial/__modulepolicy__.py", "w") as f:
@@ -460,6 +464,14 @@ class buildhgexe(build_ext):
     def hgexepath(self):
         dir = os.path.dirname(self.get_ext_fullpath('dummy'))
         return os.path.join(self.build_temp, dir, 'hg.exe')
+
+class hginstall(install):
+    def get_sub_commands(self):
+        # Screen out egg related commands to prevent egg generation.  But allow
+        # mercurial.egg-info generation, since that is part of modern
+        # packaging.
+        excl = {'bdist_egg'}
+        return filter(lambda x: x not in excl, install.get_sub_commands(self))
 
 class hginstalllib(install_lib):
     '''
@@ -572,20 +584,27 @@ cmdclass = {'build': hgbuild,
             'build_py': hgbuildpy,
             'build_scripts': hgbuildscripts,
             'build_hgextindex': buildhgextindex,
+            'install': hginstall,
             'install_lib': hginstalllib,
             'install_scripts': hginstallscripts,
             'build_hgexe': buildhgexe,
             }
 
-packages = ['mercurial', 'mercurial.hgweb', 'mercurial.httpclient',
+packages = ['mercurial',
+            'mercurial.cext',
+            'mercurial.cffi',
+            'mercurial.hgweb',
+            'mercurial.httpclient',
             'mercurial.pure',
             'hgext', 'hgext.convert', 'hgext.fsmonitor',
             'hgext.fsmonitor.pywatchman', 'hgext.highlight',
-            'hgext.largefiles', 'hgext.zeroconf', 'hgext3rd']
+            'hgext.largefiles', 'hgext.zeroconf', 'hgext3rd',
+            'hgdemandimport']
 
 common_depends = ['mercurial/bitmanipulation.h',
                   'mercurial/compat.h',
-                  'mercurial/util.h']
+                  'mercurial/cext/util.h']
+common_include_dirs = ['mercurial']
 
 osutil_cflags = []
 osutil_ldflags = []
@@ -614,22 +633,29 @@ if sys.platform == 'darwin':
     osutil_ldflags += ['-framework', 'ApplicationServices']
 
 extmodules = [
-    Extension('mercurial.base85', ['mercurial/base85.c'],
+    Extension('mercurial.cext.base85', ['mercurial/cext/base85.c'],
+              include_dirs=common_include_dirs,
               depends=common_depends),
-    Extension('mercurial.bdiff', ['mercurial/bdiff.c',
-                                  'mercurial/bdiff_module.c'],
+    Extension('mercurial.cext.bdiff', ['mercurial/bdiff.c',
+                                       'mercurial/cext/bdiff.c'],
+              include_dirs=common_include_dirs,
               depends=common_depends + ['mercurial/bdiff.h']),
-    Extension('mercurial.diffhelpers', ['mercurial/diffhelpers.c'],
+    Extension('mercurial.cext.diffhelpers', ['mercurial/cext/diffhelpers.c'],
+              include_dirs=common_include_dirs,
               depends=common_depends),
-    Extension('mercurial.mpatch', ['mercurial/mpatch.c',
-                                   'mercurial/mpatch_module.c'],
+    Extension('mercurial.cext.mpatch', ['mercurial/mpatch.c',
+                                        'mercurial/cext/mpatch.c'],
+              include_dirs=common_include_dirs,
               depends=common_depends),
-    Extension('mercurial.parsers', ['mercurial/dirs.c',
-                                    'mercurial/manifest.c',
-                                    'mercurial/parsers.c',
-                                    'mercurial/pathencode.c'],
+    Extension('mercurial.cext.parsers', ['mercurial/cext/dirs.c',
+                                         'mercurial/cext/manifest.c',
+                                         'mercurial/cext/parsers.c',
+                                         'mercurial/cext/pathencode.c',
+                                         'mercurial/cext/revlog.c'],
+              include_dirs=common_include_dirs,
               depends=common_depends),
-    Extension('mercurial.osutil', ['mercurial/osutil.c'],
+    Extension('mercurial.cext.osutil', ['mercurial/cext/osutil.c'],
+              include_dirs=common_include_dirs,
               extra_compile_args=osutil_cflags,
               extra_link_args=osutil_ldflags,
               depends=common_depends),
@@ -779,7 +805,7 @@ setup(name='mercurial',
       package_data=packagedata,
       cmdclass=cmdclass,
       distclass=hgdist,
-      options={'py2exe': {'packages': ['hgext', 'email']},
+      options={'py2exe': {'packages': ['hgdemandimport', 'hgext', 'email']},
                'bdist_mpkg': {'zipdist': False,
                               'license': 'COPYING',
                               'readme': 'contrib/macosx/Readme.html',

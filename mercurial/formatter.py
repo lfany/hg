@@ -103,6 +103,7 @@ baz: foo, bar
 
 from __future__ import absolute_import
 
+import contextlib
 import itertools
 import os
 
@@ -114,6 +115,7 @@ from .node import (
 
 from . import (
     error,
+    pycompat,
     templatefilters,
     templatekw,
     templater,
@@ -178,6 +180,7 @@ class baseformatter(object):
         pass
     def data(self, **data):
         '''insert data into item that's not shown in default output'''
+        data = pycompat.byteskwargs(data)
         self._item.update(data)
     def write(self, fields, deftext, *fielddata, **opts):
         '''do default text output while assigning data to item'''
@@ -203,6 +206,10 @@ class baseformatter(object):
         '''end output for the formatter'''
         if self._item is not None:
             self._showitem()
+
+def nullformatter(ui, topic):
+    '''formatter that prints nothing'''
+    return baseformatter(ui, topic, opts={}, converter=_nullconverter)
 
 class _nestedformatter(baseformatter):
     '''build sub items and store them in the parent formatter'''
@@ -235,24 +242,28 @@ class _plainconverter(object):
 
 class plainformatter(baseformatter):
     '''the default text output scheme'''
-    def __init__(self, ui, topic, opts):
+    def __init__(self, ui, out, topic, opts):
         baseformatter.__init__(self, ui, topic, opts, _plainconverter)
         if ui.debugflag:
             self.hexfunc = hex
         else:
             self.hexfunc = short
+        if ui is out:
+            self._write = ui.write
+        else:
+            self._write = lambda s, **opts: out.write(s)
     def startitem(self):
         pass
     def data(self, **data):
         pass
     def write(self, fields, deftext, *fielddata, **opts):
-        self._ui.write(deftext % fielddata, **opts)
+        self._write(deftext % fielddata, **opts)
     def condwrite(self, cond, fields, deftext, *fielddata, **opts):
         '''do conditional write'''
         if cond:
-            self._ui.write(deftext % fielddata, **opts)
+            self._write(deftext % fielddata, **opts)
     def plain(self, text, **opts):
-        self._ui.write(text, **opts)
+        self._write(text, **opts)
     def isplain(self):
         return True
     def nested(self, field):
@@ -409,20 +420,46 @@ def maketemplater(ui, topic, tmpl, cache=None):
         t.cache[topic] = tmpl
     return t
 
-def formatter(ui, topic, opts):
+def formatter(ui, out, topic, opts):
     template = opts.get("template", "")
     if template == "json":
-        return jsonformatter(ui, ui, topic, opts)
+        return jsonformatter(ui, out, topic, opts)
     elif template == "pickle":
-        return pickleformatter(ui, ui, topic, opts)
+        return pickleformatter(ui, out, topic, opts)
     elif template == "debug":
-        return debugformatter(ui, ui, topic, opts)
+        return debugformatter(ui, out, topic, opts)
     elif template != "":
-        return templateformatter(ui, ui, topic, opts)
+        return templateformatter(ui, out, topic, opts)
     # developer config: ui.formatdebug
     elif ui.configbool('ui', 'formatdebug'):
-        return debugformatter(ui, ui, topic, opts)
+        return debugformatter(ui, out, topic, opts)
     # deprecated config: ui.formatjson
     elif ui.configbool('ui', 'formatjson'):
-        return jsonformatter(ui, ui, topic, opts)
-    return plainformatter(ui, topic, opts)
+        return jsonformatter(ui, out, topic, opts)
+    return plainformatter(ui, out, topic, opts)
+
+@contextlib.contextmanager
+def openformatter(ui, filename, topic, opts):
+    """Create a formatter that writes outputs to the specified file
+
+    Must be invoked using the 'with' statement.
+    """
+    with util.posixfile(filename, 'wb') as out:
+        with formatter(ui, out, topic, opts) as fm:
+            yield fm
+
+@contextlib.contextmanager
+def _neverending(fm):
+    yield fm
+
+def maybereopen(fm, filename, opts):
+    """Create a formatter backed by file if filename specified, else return
+    the given formatter
+
+    Must be invoked using the 'with' statement. This will never call fm.end()
+    of the given formatter.
+    """
+    if filename:
+        return openformatter(fm._ui, filename, fm._topic, opts)
+    else:
+        return _neverending(fm)

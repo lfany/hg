@@ -25,7 +25,6 @@ from . import (
     cmdutil,
     color,
     commands,
-    debugcommands,
     demandimport,
     encoding,
     error,
@@ -48,7 +47,7 @@ from . import (
 
 class request(object):
     def __init__(self, args, ui=None, repo=None, fin=None, fout=None,
-                 ferr=None):
+                 ferr=None, prereposetups=None):
         self.args = args
         self.ui = ui
         self.repo = repo
@@ -57,6 +56,10 @@ class request(object):
         self.fin = fin
         self.fout = fout
         self.ferr = ferr
+
+        # reposetups which run before extensions, useful for chg to pre-fill
+        # low-level repo state (for example, changelog) before extensions.
+        self.prereposetups = prereposetups or []
 
     def _runexithandlers(self):
         exc = None
@@ -162,9 +165,18 @@ def dispatch(req):
     ret = None
     try:
         ret = _runcatch(req)
-    except KeyboardInterrupt:
+    except error.ProgrammingError as inst:
+        req.ui.warn(_('** ProgrammingError: %s\n') % inst)
+        if inst.hint:
+            req.ui.warn(_('** (%s)\n') % inst.hint)
+        raise
+    except KeyboardInterrupt as inst:
         try:
-            req.ui.warn(_("interrupted!\n"))
+            if isinstance(inst, error.SignalInterrupt):
+                msg = _("killed!\n")
+            else:
+                msg = _("interrupted!\n")
+            req.ui.warn(msg)
         except error.SignalInterrupt:
             # maybe pager would quit without consuming all the output, and
             # SIGPIPE was raised. we cannot print anything in this case.
@@ -179,7 +191,7 @@ def dispatch(req):
         if req.ui.logblockedtimes:
             req.ui._blockedtimes['command_duration'] = duration * 1000
             req.ui.log('uiblocked', 'ui blocked ms', **req.ui._blockedtimes)
-        req.ui.log("commandfinish", "%s exited %s after %0.2f seconds\n",
+        req.ui.log("commandfinish", "%s exited %d after %0.2f seconds\n",
                    msg, ret or 0, duration)
         try:
             req._runexithandlers()
@@ -307,7 +319,8 @@ def _callcatch(ui, func):
     except error.CommandError as inst:
         if inst.args[0]:
             ui.pager('help')
-            ui.warn(_("hg %s: %s\n") % (inst.args[0], inst.args[1]))
+            msgbytes = pycompat.bytestr(inst.args[1])
+            ui.warn(_("hg %s: %s\n") % (inst.args[0], msgbytes))
             commands.help_(ui, inst.args[0], full=False, command=True)
         else:
             ui.pager('help')
@@ -321,7 +334,8 @@ def _callcatch(ui, func):
         try:
             # check if the command is in a disabled extension
             # (but don't check for extensions themselves)
-            formatted = help.formattedhelp(ui, inst.args[0], unknowncmd=True)
+            formatted = help.formattedhelp(ui, commands, inst.args[0],
+                                           unknowncmd=True)
             ui.warn(nocmdmsg)
             ui.write(formatted)
         except (error.UnknownCommand, error.Abort):
@@ -475,7 +489,8 @@ class cmdalias(object):
         return aliasargs(self.fn, args)
 
     def __getattr__(self, name):
-        adefaults = {'norepo': True, 'optionalrepo': False, 'inferrepo': False}
+        adefaults = {r'norepo': True,
+                     r'optionalrepo': False, r'inferrepo': False}
         if name not in adefaults:
             raise AttributeError(name)
         if self.badalias or util.safehasattr(self, 'shell'):
@@ -740,11 +755,7 @@ def _dispatch(req):
     rpath = _earlygetopt(["-R", "--repository", "--repo"], args)
     path, lui = _getlocal(ui, rpath)
 
-    # Side-effect of accessing is debugcommands module is guaranteed to be
-    # imported and commands.table is populated.
-    debugcommands.command
-
-    uis = set([ui, lui])
+    uis = {ui, lui}
 
     if req.repo:
         uis.add(req.repo.ui)
@@ -871,7 +882,8 @@ def _dispatch(req):
                 repo.ui.ferr = ui.ferr
             else:
                 try:
-                    repo = hg.repository(ui, path=path)
+                    repo = hg.repository(ui, path=path,
+                                         presetupfuncs=req.prereposetups)
                     if not repo.local():
                         raise error.Abort(_("repository '%s' is not local")
                                           % path)

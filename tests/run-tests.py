@@ -58,11 +58,7 @@ import signal
 import socket
 import subprocess
 import sys
-try:
-    import sysconfig
-except ImportError:
-    # sysconfig doesn't exist in Python 2.6
-    sysconfig = None
+import sysconfig
 import tempfile
 import threading
 import time
@@ -94,7 +90,7 @@ if sys.version_info > (3, 5, 0):
         return p.decode('utf-8')
 
 elif sys.version_info >= (3, 0, 0):
-    print('%s is only supported on Python 3.5+ and 2.6-2.7, not %s' %
+    print('%s is only supported on Python 3.5+ and 2.7, not %s' %
           (sys.argv[0], '.'.join(str(v) for v in sys.version_info[:3])))
     sys.exit(70) # EX_SOFTWARE from `man 3 sysexit`
 else:
@@ -220,6 +216,22 @@ def parselistfiles(files, listtype, warn=True):
         f.close()
     return entries
 
+def parsettestcases(path):
+    """read a .t test file, return a set of test case names
+
+    If path does not exist, return an empty set.
+    """
+    cases = set()
+    try:
+        with open(path, 'rb') as f:
+            for l in f:
+                if l.startswith(b'#testcases '):
+                    cases.update(l[11:].split())
+    except IOError as ex:
+        if ex.errno != errno.ENOENT:
+            raise
+    return cases
+
 def getparser():
     """Obtain the OptionParser used by the CLI."""
     parser = optparse.OptionParser("%prog [options] [tests]")
@@ -305,7 +317,7 @@ def getparser():
     parser.add_option("--ipv6", action="store_true",
                       help="prefer IPv6 to IPv4 for network related tests")
     parser.add_option("-3", "--py3k-warnings", action="store_true",
-        help="enable Py3k warnings on Python 2.6+")
+        help="enable Py3k warnings on Python 2.7+")
     # This option should be deleted once test-check-py3-compat.t and other
     # Python 3 tests run with Python 3.
     parser.add_option("--with-python3", metavar="PYTHON3",
@@ -345,7 +357,7 @@ def parseargs(args, parser):
         if not (os.path.isfile(options.with_hg) and
                 os.access(options.with_hg, os.X_OK)):
             parser.error('--with-hg must specify an executable hg script')
-        if not os.path.basename(options.with_hg) == b'hg':
+        if os.path.basename(options.with_hg) not in [b'hg', b'hg.exe']:
             sys.stderr.write('warning: --with-hg should specify an hg script\n')
     if options.local:
         testdir = os.path.dirname(_bytespath(canonpath(sys.argv[0])))
@@ -423,7 +435,7 @@ def parseargs(args, parser):
     if options.py3k_warnings:
         if PYTHON3:
             parser.error(
-                '--py3k-warnings can only be used on Python 2.6 and 2.7')
+                '--py3k-warnings can only be used on Python 2.7')
     if options.with_python3:
         if PYTHON3:
             parser.error('--with-python3 cannot be used when executing with '
@@ -527,10 +539,10 @@ def log(*msg):
         sys.stdout.flush()
 
 def terminate(proc):
-    """Terminate subprocess (with fallback for Python versions < 2.6)"""
+    """Terminate subprocess"""
     vlog('# Terminating process %d' % proc.pid)
     try:
-        getattr(proc, 'terminate', lambda : os.kill(proc.pid, signal.SIGTERM))()
+        proc.terminate()
     except OSError:
         pass
 
@@ -591,6 +603,7 @@ class Test(unittest.TestCase):
         self.bname = os.path.basename(path)
         self.name = _strpath(self.bname)
         self._testdir = os.path.dirname(path)
+        self._tmpname = os.path.basename(path)
         self.errpath = os.path.join(self._testdir, b'%s.err' % self.bname)
 
         self._threadtmp = tmpdir
@@ -650,7 +663,7 @@ class Test(unittest.TestCase):
             if e.errno != errno.EEXIST:
                 raise
 
-        name = os.path.basename(self.path)
+        name = self._tmpname
         self._testtmp = os.path.join(self._threadtmp, name)
         os.mkdir(self._testtmp)
 
@@ -882,8 +895,7 @@ class Test(unittest.TestCase):
             offset = '' if i == 0 else '%s' % i
             env["HGPORT%s" % offset] = '%s' % (self._startport + i)
         env = os.environ.copy()
-        if sysconfig is not None:
-            env['PYTHONUSERBASE'] = sysconfig.get_config_var('userbase')
+        env['PYTHONUSERBASE'] = sysconfig.get_config_var('userbase')
         env['HGEMITWARNINGS'] = '1'
         env['TESTTMP'] = self._testtmp
         env['HOME'] = self._testtmp
@@ -938,12 +950,9 @@ class Test(unittest.TestCase):
         hgrc.write(b'mergemarkers = detailed\n')
         hgrc.write(b'promptecho = True\n')
         hgrc.write(b'[defaults]\n')
-        hgrc.write(b'backout = -d "0 0"\n')
-        hgrc.write(b'commit = -d "0 0"\n')
-        hgrc.write(b'shelve = --date "0 0"\n')
-        hgrc.write(b'tag = -d "0 0"\n')
         hgrc.write(b'[devel]\n')
         hgrc.write(b'all-warnings = true\n')
+        hgrc.write(b'default-date = 0 0\n')
         hgrc.write(b'[largefiles]\n')
         hgrc.write(b'usercache = %s\n' %
                    (os.path.join(self._testtmp, b'.cache/largefiles')))
@@ -1060,6 +1069,19 @@ class TTest(Test):
     ESCAPEMAP = dict((bchr(i), br'\x%02x' % i) for i in range(256))
     ESCAPEMAP.update({b'\\': b'\\\\', b'\r': br'\r'})
 
+    def __init__(self, path, *args, **kwds):
+        # accept an extra "case" parameter
+        case = None
+        if 'case' in kwds:
+            case = kwds.pop('case')
+        self._case = case
+        self._allcases = parsettestcases(path)
+        super(TTest, self).__init__(path, *args, **kwds)
+        if case:
+            self.name = '%s (case %s)' % (self.name, _strpath(case))
+            self.errpath = b'%s.%s.err' % (self.errpath[:-4], case)
+            self._tmpname += b'-%s' % case
+
     @property
     def refpath(self):
         return os.path.join(self._testdir, self.bname)
@@ -1114,6 +1136,20 @@ class TTest(Test):
         if 'slow' in reqs:
             self._timeout = self._slowtimeout
         return True, None
+
+    def _iftest(self, args):
+        # implements "#if"
+        reqs = []
+        for arg in args:
+            if arg.startswith(b'no-') and arg[3:] in self._allcases:
+                if arg[3:] == self._case:
+                    return False
+            elif arg in self._allcases:
+                if arg != self._case:
+                    return False
+            else:
+                reqs.append(arg)
+        return self._hghave(reqs)[0]
 
     def _parsetest(self, lines):
         # We generate a shell script which outputs unique markers to line
@@ -1172,7 +1208,7 @@ class TTest(Test):
                     after.setdefault(pos, []).append('  !!! invalid #if\n')
                 if skipping is not None:
                     after.setdefault(pos, []).append('  !!! nested #if\n')
-                skipping = not self._hghave(lsplit[1:])[0]
+                skipping = not self._iftest(lsplit[1:])
                 after.setdefault(pos, []).append(l)
             elif l.startswith(b'#else'):
                 if skipping is None:
@@ -1689,7 +1725,7 @@ class TestSuite(unittest.TestSuite):
             def get():
                 num_tests[0] += 1
                 if getattr(test, 'should_reload', False):
-                    return self._loadtest(test.path, num_tests[0])
+                    return self._loadtest(test, num_tests[0])
                 return test
             if not os.path.exists(test.path):
                 result.addSkip(test, "Doesn't exist")
@@ -1731,6 +1767,8 @@ class TestSuite(unittest.TestSuite):
                 if not v:
                     channel = n
                     break
+            else:
+                raise ValueError('Could not find output channel')
             channels[channel] = "=" + test.name[5:].split(".")[0]
             try:
                 test(result)
@@ -1740,10 +1778,11 @@ class TestSuite(unittest.TestSuite):
             except: # re-raises
                 done.put(('!', test, 'run-test raised an error, see traceback'))
                 raise
-            try:
-                channels[channel] = ''
-            except IndexError:
-                pass
+            finally:
+                try:
+                    channels[channel] = ''
+                except IndexError:
+                    pass
 
         def stat():
             count = 0
@@ -1787,7 +1826,7 @@ class TestSuite(unittest.TestSuite):
                         if getattr(test, 'should_reload', False):
                             num_tests[0] += 1
                             tests.append(
-                                self._loadtest(test.name, num_tests[0]))
+                                self._loadtest(test, num_tests[0]))
                         else:
                             tests.append(test)
                     if self._jobs == 1:
@@ -2067,11 +2106,11 @@ class TestRunner(object):
             self.options = options
 
             self._checktools()
-            tests = self.findtests(args)
+            testdescs = self.findtests(args)
             if options.profile_runner:
                 import statprof
                 statprof.start()
-            result = self._run(tests)
+            result = self._run(testdescs)
             if options.profile_runner:
                 statprof.stop()
                 statprof.display()
@@ -2080,9 +2119,9 @@ class TestRunner(object):
         finally:
             os.umask(oldmask)
 
-    def _run(self, tests):
+    def _run(self, testdescs):
         if self.options.random:
-            random.shuffle(tests)
+            random.shuffle(testdescs)
         else:
             # keywords for slow tests
             slow = {b'svn': 10,
@@ -2100,6 +2139,7 @@ class TestRunner(object):
             perf = {}
             def sortkey(f):
                 # run largest tests first, as they tend to take the longest
+                f = f['path']
                 try:
                     return perf[f]
                 except KeyError:
@@ -2117,7 +2157,7 @@ class TestRunner(object):
                         val /= 10.0
                     perf[f] = val / 1000.0
                     return perf[f]
-            tests.sort(key=sortkey)
+            testdescs.sort(key=sortkey)
 
         self._testdir = osenvironb[b'TESTDIR'] = getattr(
             os, 'getcwdb', os.getcwd)()
@@ -2247,7 +2287,7 @@ class TestRunner(object):
         vlog("# Using", IMPL_PATH, osenvironb[IMPL_PATH])
 
         try:
-            return self._runtests(tests) or 0
+            return self._runtests(testdescs) or 0
         finally:
             time.sleep(.1)
             self._cleanup()
@@ -2267,11 +2307,31 @@ class TestRunner(object):
             else:
                 args = os.listdir(b'.')
 
-        return [t for t in args
-                if os.path.basename(t).startswith(b'test-')
-                    and (t.endswith(b'.py') or t.endswith(b'.t'))]
+        tests = []
+        for t in args:
+            if not (os.path.basename(t).startswith(b'test-')
+                    and (t.endswith(b'.py') or t.endswith(b'.t'))):
+                continue
+            if t.endswith(b'.t'):
+                # .t file may contain multiple test cases
+                cases = sorted(parsettestcases(t))
+                if cases:
+                    tests += [{'path': t, 'case': c} for c in sorted(cases)]
+                else:
+                    tests.append({'path': t})
+            else:
+                tests.append({'path': t})
+        return tests
 
-    def _runtests(self, tests):
+    def _runtests(self, testdescs):
+        def _reloadtest(test, i):
+            # convert a test back to its description dict
+            desc = {'path': test.path}
+            case = getattr(test, '_case', None)
+            if case:
+                desc['case'] = case
+            return self._gettest(desc, i)
+
         try:
             if self._installdir:
                 self._installhg()
@@ -2283,16 +2343,21 @@ class TestRunner(object):
                 self._installchg()
 
             if self.options.restart:
-                orig = list(tests)
-                while tests:
-                    if os.path.exists(tests[0] + ".err"):
+                orig = list(testdescs)
+                while testdescs:
+                    desc = testdescs[0]
+                    if 'case' in desc:
+                        errpath = b'%s.%s.err' % (desc['path'], desc['case'])
+                    else:
+                        errpath = b'%s.err' % desc['path']
+                    if os.path.exists(errpath):
                         break
-                    tests.pop(0)
-                if not tests:
+                    testdescs.pop(0)
+                if not testdescs:
                     print("running all tests")
-                    tests = orig
+                    testdescs = orig
 
-            tests = [self._gettest(t, i) for i, t in enumerate(tests)]
+            tests = [self._gettest(d, i) for i, d in enumerate(testdescs)]
 
             failed = False
             warned = False
@@ -2309,7 +2374,7 @@ class TestRunner(object):
                               loop=self.options.loop,
                               runs_per_test=self.options.runs_per_test,
                               showchannels=self.options.showchannels,
-                              tests=tests, loadtest=self._gettest)
+                              tests=tests, loadtest=_reloadtest)
             verbosity = 1
             if self.options.verbose:
                 verbosity = 2
@@ -2350,13 +2415,14 @@ class TestRunner(object):
             self._ports[count] = port
         return port
 
-    def _gettest(self, test, count):
+    def _gettest(self, testdesc, count):
         """Obtain a Test by looking at its filename.
 
         Returns a Test instance. The Test may not be runnable if it doesn't
         map to a known type.
         """
-        lctest = test.lower()
+        path = testdesc['path']
+        lctest = path.lower()
         testcls = Test
 
         for ext, cls in self.TESTTYPES:
@@ -2364,8 +2430,11 @@ class TestRunner(object):
                 testcls = cls
                 break
 
-        refpath = os.path.join(self._testdir, test)
+        refpath = os.path.join(self._testdir, path)
         tmpdir = os.path.join(self._hgtmp, b'child%d' % count)
+
+        # extra keyword parameters. 'case' is used by .t tests
+        kwds = dict((k, testdesc[k]) for k in ['case'] if k in testdesc)
 
         t = testcls(refpath, tmpdir,
                     keeptmpdir=self.options.keep_tmpdir,
@@ -2377,7 +2446,7 @@ class TestRunner(object):
                     shell=self.options.shell,
                     hgcommand=self._hgcommand,
                     usechg=bool(self.options.with_chg or self.options.chg),
-                    useipv6=useipv6)
+                    useipv6=useipv6, **kwds)
         t.should_reload = True
         return t
 

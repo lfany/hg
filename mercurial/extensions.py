@@ -28,8 +28,8 @@ _extensions = {}
 _disabledextensions = {}
 _aftercallbacks = {}
 _order = []
-_builtin = set(['hbisect', 'bookmarks', 'parentrevspec', 'progress', 'interhg',
-                'inotify', 'hgcia'])
+_builtin = {'hbisect', 'bookmarks', 'parentrevspec', 'progress', 'interhg',
+            'inotify', 'hgcia'}
 
 def extensions(ui=None):
     if ui:
@@ -118,6 +118,23 @@ def _reportimporterror(ui, err, failed, next):
     if ui.debugflag:
         ui.traceback()
 
+# attributes set by registrar.command
+_cmdfuncattrs = ('norepo', 'optionalrepo', 'inferrepo')
+
+def _validatecmdtable(ui, cmdtable):
+    """Check if extension commands have required attributes"""
+    for c, e in cmdtable.iteritems():
+        f = e[0]
+        if getattr(f, '_deprecatedregistrar', False):
+            ui.deprecwarn("cmdutil.command is deprecated, use "
+                          "registrar.command to register '%s'" % c, '4.6')
+        missing = [a for a in _cmdfuncattrs if not util.safehasattr(f, a)]
+        if not missing:
+            continue
+        raise error.ProgrammingError(
+            'missing attributes: %s' % ', '.join(missing),
+            hint="use @command decorator to register '%s'" % c)
+
 def load(ui, name, path):
     if name.startswith('hgext.') or name.startswith('hgext/'):
         shortname = name[6:]
@@ -139,6 +156,7 @@ def load(ui, name, path):
         ui.warn(_('(third party extension %s requires version %s or newer '
                   'of Mercurial; disabling)\n') % (shortname, minver))
         return
+    _validatecmdtable(ui, getattr(mod, 'cmdtable', {}))
 
     _extensions[shortname] = mod
     _order.append(shortname)
@@ -161,8 +179,10 @@ def _runextsetup(name, ui):
                 raise
             extsetup() # old extsetup with no ui argument
 
-def loadall(ui):
+def loadall(ui, whitelist=None):
     result = ui.configitems("extensions")
+    if whitelist is not None:
+        result = [(k, v) for (k, v) in result if k in whitelist]
     newindex = len(_order)
     for (name, path) in result:
         if path:
@@ -171,16 +191,16 @@ def loadall(ui):
                 continue
         try:
             load(ui, name, path)
-        except KeyboardInterrupt:
-            raise
         except Exception as inst:
-            inst = _forbytes(inst)
+            msg = _forbytes(inst)
             if path:
                 ui.warn(_("*** failed to import extension %s from %s: %s\n")
-                        % (name, path, inst))
+                        % (name, path, msg))
             else:
                 ui.warn(_("*** failed to import extension %s: %s\n")
-                        % (name, inst))
+                        % (name, msg))
+            if isinstance(inst, error.Hint) and inst.hint:
+                ui.warn(_("*** (%s)\n") % inst.hint)
             ui.traceback()
 
     for name in _order[newindex:]:

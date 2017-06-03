@@ -254,7 +254,7 @@ def _oldheadssummary(repo, remoteheads, outgoing, inc=False):
     newheads = list(c.node() for c in r)
     # set some unsynced head to issue the "unsynced changes" warning
     if inc:
-        unsynced = set([None])
+        unsynced = {None}
     else:
         unsynced = set()
     return {None: (oldheads, newheads, unsynced)}
@@ -431,6 +431,7 @@ def _postprocessobsolete(pushop, futurecommon, candidate_newhs):
     repo = pushop.repo
     unfi = repo.unfiltered()
     tonode = unfi.changelog.node
+    torev = unfi.changelog.rev
     public = phases.public
     getphase = unfi._phasecache.phase
     ispublic = (lambda r: getphase(unfi, r) == public)
@@ -460,8 +461,7 @@ def _postprocessobsolete(pushop, futurecommon, candidate_newhs):
     while localcandidate:
         nh = localcandidate.pop()
         # run this check early to skip the evaluation of the whole branch
-        if (nh in futurecommon
-                or unfi[nh].phase() <= public):
+        if (nh in futurecommon or ispublic(torev(nh))):
             newhs.add(nh)
             continue
 

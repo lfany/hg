@@ -75,9 +75,14 @@ def _revancestors(repo, revs, followfirst):
             if current not in seen:
                 seen.add(current)
                 yield current
-                for parent in cl.parentrevs(current)[:cut]:
-                    if parent != node.nullrev:
-                        heapq.heappush(h, -parent)
+                try:
+                    for parent in cl.parentrevs(current)[:cut]:
+                        if parent != node.nullrev:
+                            heapq.heappush(h, -parent)
+                except error.WdirUnsupported:
+                    for parent in repo[current].parents()[:cut]:
+                        if parent.rev() != node.nullrev:
+                            heapq.heappush(h, -parent.rev())
 
     return generatorset(iterate(), iterasc=False)
 
@@ -383,7 +388,10 @@ def ancestorspec(repo, subset, x, n, order):
     cl = repo.changelog
     for r in getset(repo, fullreposet(repo), x):
         for i in range(n):
-            r = cl.parentrevs(r)[0]
+            try:
+                r = cl.parentrevs(r)[0]
+            except error.WdirUnsupported:
+                r = repo[r].parents()[0].rev()
         ps.add(r)
     return subset & ps
 
@@ -451,9 +459,8 @@ def bookmark(repo, subset, x):
             for bmrev in matchrevs:
                 bms.add(repo[bmrev].rev())
     else:
-        bms = set([repo[r].rev()
-                   for r in repo._bookmarks.values()])
-    bms -= set([node.nullrev])
+        bms = {repo[r].rev() for r in repo._bookmarks.values()}
+    bms -= {node.nullrev}
     return subset & bms
 
 @predicate('branch(string or set)', safe=True)
@@ -1276,7 +1283,7 @@ def named(repo, subset, x):
             if name not in ns.deprecated:
                 names.update(repo[n].rev() for n in ns.nodes(repo, name))
 
-    names -= set([node.nullrev])
+    names -= {node.nullrev}
     return subset & names
 
 @predicate('id(string)', safe=True)
@@ -1363,8 +1370,8 @@ def origin(repo, subset, x):
                 return src
             src = prev
 
-    o = set([_firstsrc(r) for r in dests])
-    o -= set([None])
+    o = {_firstsrc(r) for r in dests}
+    o -= {None}
     # XXX we should turn this into a baseset instead of a set, smartset may do
     # some optimizations from the fact this is a baseset.
     return subset & o
@@ -1393,7 +1400,7 @@ def outgoing(repo, subset, x):
     outgoing = discovery.findcommonoutgoing(repo, other, onlyheads=revs)
     repo.ui.popbuffer()
     cl = repo.changelog
-    o = set([cl.rev(r) for r in outgoing.missing])
+    o = {cl.rev(r) for r in outgoing.missing}
     return subset & o
 
 @predicate('p1([set])', safe=True)
@@ -1409,8 +1416,11 @@ def p1(repo, subset, x):
     ps = set()
     cl = repo.changelog
     for r in getset(repo, fullreposet(repo), x):
-        ps.add(cl.parentrevs(r)[0])
-    ps -= set([node.nullrev])
+        try:
+            ps.add(cl.parentrevs(r)[0])
+        except error.WdirUnsupported:
+            ps.add(repo[r].parents()[0].rev())
+    ps -= {node.nullrev}
     # XXX we should turn this into a baseset instead of a set, smartset may do
     # some optimizations from the fact this is a baseset.
     return subset & ps
@@ -1432,8 +1442,13 @@ def p2(repo, subset, x):
     ps = set()
     cl = repo.changelog
     for r in getset(repo, fullreposet(repo), x):
-        ps.add(cl.parentrevs(r)[1])
-    ps -= set([node.nullrev])
+        try:
+            ps.add(cl.parentrevs(r)[1])
+        except error.WdirUnsupported:
+            parents = repo[r].parents()
+            if len(parents) == 2:
+                ps.add(parents[1])
+    ps -= {node.nullrev}
     # XXX we should turn this into a baseset instead of a set, smartset may do
     # some optimizations from the fact this is a baseset.
     return subset & ps
@@ -1454,11 +1469,11 @@ def parents(repo, subset, x):
         up = ps.update
         parentrevs = cl.parentrevs
         for r in getset(repo, fullreposet(repo), x):
-            if r == node.wdirrev:
-                up(p.rev() for p in repo[r].parents())
-            else:
+            try:
                 up(parentrevs(r))
-    ps -= set([node.nullrev])
+            except error.WdirUnsupported:
+                up(p.rev() for p in repo[r].parents())
+    ps -= {node.nullrev}
     return subset & ps
 
 def _phase(repo, subset, *targets):
@@ -1500,11 +1515,19 @@ def parentspec(repo, subset, x, n, order):
         if n == 0:
             ps.add(r)
         elif n == 1:
-            ps.add(cl.parentrevs(r)[0])
-        elif n == 2:
-            parents = cl.parentrevs(r)
-            if parents[1] != node.nullrev:
-                ps.add(parents[1])
+            try:
+                ps.add(cl.parentrevs(r)[0])
+            except error.WdirUnsupported:
+                ps.add(repo[r].parents()[0].rev())
+        else:
+            try:
+                parents = cl.parentrevs(r)
+                if parents[1] != node.nullrev:
+                    ps.add(parents[1])
+            except error.WdirUnsupported:
+                parents = repo[r].parents()
+                if len(parents) == 2:
+                    ps.add(parents[1].rev())
     return subset & ps
 
 @predicate('present(set)', safe=True)
@@ -1965,7 +1988,7 @@ def _toposort(revs, parentsfunc, firstbranch=()):
             else:
                 # This is a new head. We create a new subgroup for it.
                 targetidx = len(groups)
-                groups.append(([], set([rev])))
+                groups.append(([], {rev}))
 
             gr = groups[targetidx]
 
@@ -2098,11 +2121,11 @@ def tag(repo, subset, x):
             if tn is None:
                 raise error.RepoLookupError(_("tag '%s' does not exist")
                                             % pattern)
-            s = set([repo[tn].rev()])
+            s = {repo[tn].rev()}
         else:
-            s = set([cl.rev(n) for t, n in repo.tagslist() if matcher(t)])
+            s = {cl.rev(n) for t, n in repo.tagslist() if matcher(t)}
     else:
-        s = set([cl.rev(n) for t, n in repo.tagslist() if t != 'tip'])
+        s = {cl.rev(n) for t, n in repo.tagslist() if t != 'tip'}
     return subset & s
 
 @predicate('tagged', safe=True)
@@ -2128,7 +2151,7 @@ def user(repo, subset, x):
     """
     return author(repo, subset, x)
 
-@predicate('wdir', safe=True)
+@predicate('wdir()', safe=True)
 def wdir(repo, subset, x):
     """Working directory. (EXPERIMENTAL)"""
     # i18n: "wdir" is a keyword

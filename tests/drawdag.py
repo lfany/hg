@@ -80,16 +80,16 @@ import itertools
 
 from mercurial.i18n import _
 from mercurial import (
-    cmdutil,
     context,
     error,
     node,
+    registrar,
     scmutil,
     tags as tagsmod,
 )
 
 cmdtable = {}
-command = cmdutil.command(cmdtable)
+command = registrar.command(cmdtable)
 
 _pipechars = '\\/+-|'
 _nonpipechars = ''.join(chr(i) for i in xrange(33, 127)
@@ -145,7 +145,7 @@ def _parseasciigraph(text):
     def parents(y, x):
         """(int, int) -> [str]. follow the ASCII edges at given position,
         return a list of parents"""
-        visited = set([(y, x)])
+        visited = {(y, x)}
         visit = []
         result = []
 
@@ -213,6 +213,9 @@ class simplefilectx(object):
 
     def data(self):
         return self._data
+
+    def filenode(self):
+        return None
 
     def path(self):
         return self._path

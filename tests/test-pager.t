@@ -1,7 +1,11 @@
   $ cat >> fakepager.py <<EOF
   > import sys
+  > printed = False
   > for line in sys.stdin:
   >     sys.stdout.write('paged! %r\n' % line)
+  >     printed = True
+  > if not printed:
+  >     sys.stdout.write('paged empty output!\n')
   > EOF
 
 Enable ui.formatted because pager won't fire without it, and set up
@@ -223,9 +227,9 @@ pager is globally set to off using a flag:
 Pager should not override the exit code of other commands
 
   $ cat >> $TESTTMP/fortytwo.py <<'EOF'
-  > from mercurial import cmdutil, commands
+  > from mercurial import commands, registrar
   > cmdtable = {}
-  > command = cmdutil.command(cmdtable)
+  > command = registrar.command(cmdtable)
   > @command('fortytwo', [], 'fortytwo', norepo=True)
   > def fortytwo(ui, *opts):
   >     ui.write('42\n')
@@ -280,6 +284,15 @@ explicit flags work too:
    8: a 8
    9: a 9
   10: a 10
+
+A command with --output option:
+
+  $ hg cat -r0 a
+  paged! 'a\n'
+  $ hg cat -r0 a --output=-
+  paged! 'a\n'
+  $ hg cat -r0 a --output=out
+  $ rm out
 
 Put annotate in the ignore list for pager:
   $ cat >> $HGRCPATH <<EOF

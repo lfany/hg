@@ -166,6 +166,43 @@ basic failing test
   python hash seed: * (glob)
   [1]
 
+test --outputdir
+  $ mkdir output
+  $ rt --outputdir output
+  
+  --- $TESTTMP/test-failure.t
+  +++ $TESTTMP/output/test-failure.t.err
+  @@ -1,5 +1,5 @@
+     $ echo babar
+  -  rataxes
+  +  babar
+   This is a noop statement so that
+   this test is still more bytes than success.
+   pad pad pad pad............................................................
+  
+  ERROR: test-failure.t output changed
+  !.
+  --- $TESTTMP/test-failure-unicode.t
+  +++ $TESTTMP/output/test-failure-unicode.t.err
+  @@ -1,2 +1,2 @@
+     $ echo babar\xce\xb1 (esc)
+  -  l\xce\xb5\xce\xb5t (esc)
+  +  babar\xce\xb1 (esc)
+  
+  ERROR: test-failure-unicode.t output changed
+  !
+  Failed test-failure.t: output changed
+  Failed test-failure-unicode.t: output changed
+  # Ran 3 tests, 0 skipped, 0 warned, 2 failed.
+  python hash seed: * (glob)
+  [1]
+  $ ls -a output
+  .
+  ..
+  .testtimes
+  test-failure-unicode.t.err
+  test-failure.t.err
+
 test --xunit support
   $ rt --xunit=xunit.xml
   
@@ -200,14 +237,17 @@ test --xunit support
   <testsuite errors="0" failures="2" name="run-tests" skipped="0" tests="3">
     <testcase name="test-success.t" time="*"/> (glob)
     <testcase name="test-failure-unicode.t" time="*"> (glob)
+      <failure message="output changed" type="output-mismatch">
   <![CDATA[--- $TESTTMP/test-failure-unicode.t
   +++ $TESTTMP/test-failure-unicode.t.err
   @@ -1,2 +1,2 @@
      $ echo babar\xce\xb1 (esc)
   -  l\xce\xb5\xce\xb5t (esc)
   +  babar\xce\xb1 (esc)
-  ]]>  </testcase>
+  ]]>    </failure>
+    </testcase>
     <testcase name="test-failure.t" time="*"> (glob)
+      <failure message="output changed" type="output-mismatch">
   <![CDATA[--- $TESTTMP/test-failure.t
   +++ $TESTTMP/test-failure.t.err
   @@ -1,5 +1,5 @@
@@ -217,13 +257,68 @@ test --xunit support
    This is a noop statement so that
    this test is still more bytes than success.
    pad pad pad pad............................................................
-  ]]>  </testcase>
+  ]]>    </failure>
+    </testcase>
   </testsuite>
 
   $ cat .testtimes
   test-failure-unicode.t * (glob)
   test-failure.t * (glob)
   test-success.t * (glob)
+
+  $ rt --list-tests
+  test-failure-unicode.t
+  test-failure.t
+  test-success.t
+
+  $ rt --list-tests --json
+  test-failure-unicode.t
+  test-failure.t
+  test-success.t
+  $ cat report.json
+  testreport ={
+      "test-failure-unicode.t": {
+          "result": "success"
+      },
+      "test-failure.t": {
+          "result": "success"
+      },
+      "test-success.t": {
+          "result": "success"
+      }
+  } (no-eol)
+
+  $ rt --list-tests --xunit=xunit.xml
+  test-failure-unicode.t
+  test-failure.t
+  test-success.t
+  $ cat xunit.xml
+  <?xml version="1.0" encoding="utf-8"?>
+  <testsuite errors="0" failures="0" name="run-tests" skipped="0" tests="0">
+    <testcase name="test-failure-unicode.t"/>
+    <testcase name="test-failure.t"/>
+    <testcase name="test-success.t"/>
+  </testsuite>
+
+  $ rt --list-tests test-failure* --json --xunit=xunit.xml --outputdir output
+  test-failure-unicode.t
+  test-failure.t
+  $ cat output/report.json
+  testreport ={
+      "test-failure-unicode.t": {
+          "result": "success"
+      },
+      "test-failure.t": {
+          "result": "success"
+      }
+  } (no-eol)
+  $ cat xunit.xml
+  <?xml version="1.0" encoding="utf-8"?>
+  <testsuite errors="0" failures="0" name="run-tests" skipped="0" tests="0">
+    <testcase name="test-failure-unicode.t"/>
+    <testcase name="test-failure.t"/>
+  </testsuite>
+
   $ rm test-failure-unicode.t
 
 test for --retest
@@ -233,6 +328,29 @@ test for --retest
   
   --- $TESTTMP/test-failure.t
   +++ $TESTTMP/test-failure.t.err
+  @@ -1,5 +1,5 @@
+     $ echo babar
+  -  rataxes
+  +  babar
+   This is a noop statement so that
+   this test is still more bytes than success.
+   pad pad pad pad............................................................
+  
+  ERROR: test-failure.t output changed
+  !
+  Failed test-failure.t: output changed
+  # Ran 2 tests, 1 skipped, 0 warned, 1 failed.
+  python hash seed: * (glob)
+  [1]
+
+--retest works with --outputdir
+  $ rm -r output
+  $ mkdir output
+  $ mv test-failure.t.err output
+  $ rt --retest --outputdir output
+  
+  --- $TESTTMP/test-failure.t
+  +++ $TESTTMP/output/test-failure.t.err
   @@ -1,5 +1,5 @@
      $ echo babar
   -  rataxes
@@ -555,7 +673,7 @@ timeouts
   > cat test-timeout.t >> test-slow-timeout.t
   $ rt --timeout=1 --slowtimeout=3 test-timeout.t test-slow-timeout.t
   st
-  Skipped test-slow-timeout.t: missing feature: allow slow tests
+  Skipped test-slow-timeout.t: missing feature: allow slow tests (use --allow-slow-tests)
   Failed test-timeout.t: timed out
   # Ran 1 tests, 1 skipped, 0 warned, 1 failed.
   python hash seed: * (glob)
@@ -618,6 +736,10 @@ Skips with xml
   <?xml version="1.0" encoding="utf-8"?>
   <testsuite errors="0" failures="0" name="run-tests" skipped="2" tests="2">
     <testcase name="test-success.t" time="*"/> (glob)
+    <testcase name="test-skip.t">
+      <skipped>
+  <![CDATA[missing feature: nail clipper]]>    </skipped>
+    </testcase>
   </testsuite>
 
 Missing skips or blacklisted skips don't count as executed:
@@ -714,6 +836,68 @@ test for --json
           "time": "\s*[\d\.]{4,5}" (re)
       }
   } (no-eol)
+--json with --outputdir
+
+  $ rm report.json
+  $ rm -r output
+  $ mkdir output
+  $ rt --json --outputdir output
+  
+  --- $TESTTMP/test-failure.t
+  +++ $TESTTMP/output/test-failure.t.err
+  @@ -1,5 +1,5 @@
+     $ echo babar
+  -  rataxes
+  +  babar
+   This is a noop statement so that
+   this test is still more bytes than success.
+   pad pad pad pad............................................................
+  
+  ERROR: test-failure.t output changed
+  !.s
+  Skipped test-skip.t: missing feature: nail clipper
+  Failed test-failure.t: output changed
+  # Ran 2 tests, 1 skipped, 0 warned, 1 failed.
+  python hash seed: * (glob)
+  [1]
+  $ f report.json
+  report.json: file not found
+  $ cat output/report.json
+  testreport ={
+      "test-failure.t": [\{] (re)
+          "csys": "\s*[\d\.]{4,5}", ? (re)
+          "cuser": "\s*[\d\.]{4,5}", ? (re)
+          "diff": "---.+\+\+\+.+", ? (re)
+          "end": "\s*[\d\.]{4,5}", ? (re)
+          "result": "failure", ? (re)
+          "start": "\s*[\d\.]{4,5}", ? (re)
+          "time": "\s*[\d\.]{4,5}" (re)
+      }, ? (re)
+      "test-skip.t": {
+          "csys": "\s*[\d\.]{4,5}", ? (re)
+          "cuser": "\s*[\d\.]{4,5}", ? (re)
+          "diff": "", ? (re)
+          "end": "\s*[\d\.]{4,5}", ? (re)
+          "result": "skip", ? (re)
+          "start": "\s*[\d\.]{4,5}", ? (re)
+          "time": "\s*[\d\.]{4,5}" (re)
+      }, ? (re)
+      "test-success.t": [\{] (re)
+          "csys": "\s*[\d\.]{4,5}", ? (re)
+          "cuser": "\s*[\d\.]{4,5}", ? (re)
+          "diff": "", ? (re)
+          "end": "\s*[\d\.]{4,5}", ? (re)
+          "result": "success", ? (re)
+          "start": "\s*[\d\.]{4,5}", ? (re)
+          "time": "\s*[\d\.]{4,5}" (re)
+      }
+  } (no-eol)
+  $ ls -a output
+  .
+  ..
+  .testtimes
+  report.json
+  test-failure.t.err
 
 Test that failed test accepted through interactive are properly reported:
 
@@ -852,7 +1036,7 @@ test support for --allow-slow-tests
   > EOF
   $ rt test-very-slow-test.t
   s
-  Skipped test-very-slow-test.t: missing feature: allow slow tests
+  Skipped test-very-slow-test.t: missing feature: allow slow tests (use --allow-slow-tests)
   # Ran 0 tests, 1 skipped, 0 warned, 0 failed.
   $ rt $HGTEST_RUN_TESTS_PURE --allow-slow-tests test-very-slow-test.t
   .
@@ -898,5 +1082,129 @@ support for bisecting failed tests automatically
   Failed test-bisect.t: output changed
   test-bisect.t broken by 72cbf122d116 (bad)
   # Ran 1 tests, 0 skipped, 0 warned, 1 failed.
+  python hash seed: * (glob)
+  [1]
+
+  $ cd ..
+
+Test a broken #if statement doesn't break run-tests threading.
+==============================================================
+  $ mkdir broken
+  $ cd broken
+  $ cat > test-broken.t <<EOF
+  > true
+  > #if notarealhghavefeature
+  >   $ false
+  > #endif
+  > EOF
+  $ for f in 1 2 3 4 ; do
+  > cat > test-works-$f.t <<EOF
+  > This is test case $f
+  >   $ sleep 1
+  > EOF
+  > done
+  $ rt -j 2
+  ....
+  # Ran 5 tests, 0 skipped, 0 warned, 0 failed.
+  skipped: unknown feature: notarealhghavefeature
+  
+  $ cd ..
+  $ rm -rf broken
+
+Test cases in .t files
+======================
+  $ mkdir cases
+  $ cd cases
+  $ cat > test-cases-abc.t <<'EOF'
+  > #testcases A B C
+  >   $ V=B
+  > #if A
+  >   $ V=A
+  > #endif
+  > #if C
+  >   $ V=C
+  > #endif
+  >   $ echo $V | sed 's/A/C/'
+  >   C
+  > #if C
+  >   $ [ $V = C ]
+  > #endif
+  > #if A
+  >   $ [ $V = C ]
+  >   [1]
+  > #endif
+  > #if no-C
+  >   $ [ $V = C ]
+  >   [1]
+  > #endif
+  >   $ [ $V = D ]
+  >   [1]
+  > EOF
+  $ rt
+  .
+  --- $TESTTMP/anothertests/cases/test-cases-abc.t
+  +++ $TESTTMP/anothertests/cases/test-cases-abc.t.B.err
+  @@ -7,7 +7,7 @@
+     $ V=C
+   #endif
+     $ echo $V | sed 's/A/C/'
+  -  C
+  +  B
+   #if C
+     $ [ $V = C ]
+   #endif
+  
+  ERROR: test-cases-abc.t (case B) output changed
+  !.
+  Failed test-cases-abc.t (case B): output changed
+  # Ran 3 tests, 0 skipped, 0 warned, 1 failed.
+  python hash seed: * (glob)
+  [1]
+
+--restart works
+
+  $ rt --restart
+  
+  --- $TESTTMP/anothertests/cases/test-cases-abc.t
+  +++ $TESTTMP/anothertests/cases/test-cases-abc.t.B.err
+  @@ -7,7 +7,7 @@
+     $ V=C
+   #endif
+     $ echo $V | sed 's/A/C/'
+  -  C
+  +  B
+   #if C
+     $ [ $V = C ]
+   #endif
+  
+  ERROR: test-cases-abc.t (case B) output changed
+  !.
+  Failed test-cases-abc.t (case B): output changed
+  # Ran 2 tests, 0 skipped, 0 warned, 1 failed.
+  python hash seed: * (glob)
+  [1]
+
+--restart works with outputdir
+
+  $ mkdir output
+  $ mv test-cases-abc.t.B.err output
+  $ rt --restart --outputdir output
+  
+  --- $TESTTMP/anothertests/cases/test-cases-abc.t
+  +++ $TESTTMP/anothertests/cases/output/test-cases-abc.t.B.err
+  @@ -7,7 +7,7 @@
+     $ V=C
+   #endif
+     $ echo $V | sed 's/A/C/'
+  -  C
+  +  B
+   #if C
+     $ [ $V = C ]
+   #endif
+  
+  ERROR: test-cases-abc.t (case B) output changed
+  !.
+  Failed test-cases-abc.t (case B): output changed
+  # Ran 2 tests, 0 skipped, 0 warned, 1 failed.
   python hash seed: * (glob)
   [1]

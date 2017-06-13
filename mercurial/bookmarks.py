@@ -50,28 +50,35 @@ class bmstore(dict):
     def __init__(self, repo):
         dict.__init__(self)
         self._repo = repo
+        self._clean = True
+        self._aclean = True
+        nm = repo.changelog.nodemap
+        tonode = bin # force local lookup
+        setitem = dict.__setitem__
         try:
-            bkfile = _getbkfile(repo)
-            for line in bkfile:
-                line = line.strip()
-                if not line:
-                    continue
-                if ' ' not in line:
-                    repo.ui.warn(_('malformed line in .hg/bookmarks: %r\n')
-                                 % line)
-                    continue
-                sha, refspec = line.split(' ', 1)
-                refspec = encoding.tolocal(refspec)
-                try:
-                    self[refspec] = repo.changelog.lookup(sha)
-                except LookupError:
-                    pass
+            with _getbkfile(repo) as bkfile:
+                for line in bkfile:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        sha, refspec = line.split(' ', 1)
+                        node = tonode(sha)
+                        if node in nm:
+                            refspec = encoding.tolocal(refspec)
+                            setitem(self, refspec, node)
+                    except (TypeError, ValueError):
+                        # TypeError:
+                        # - bin(...)
+                        # ValueError:
+                        # - node in nm, for non-20-bytes entry
+                        # - split(...), for string without ' '
+                        repo.ui.warn(_('malformed line in .hg/bookmarks: %r\n')
+                                     % line)
         except IOError as inst:
             if inst.errno != errno.ENOENT:
                 raise
-        self._clean = True
         self._active = _readactive(repo, self)
-        self._aclean = True
 
     @property
     def active(self):
@@ -225,6 +232,28 @@ def deletedivergent(repo, deletefrom, bm):
                 del marks[mark]
                 deleted = True
     return deleted
+
+def headsforactive(repo):
+    """Given a repo with an active bookmark, return divergent bookmark nodes.
+
+    Args:
+      repo: A repository with an active bookmark.
+
+    Returns:
+      A list of binary node ids that is the full list of other
+      revisions with bookmarks divergent from the active bookmark. If
+      there were no divergent bookmarks, then this list will contain
+      only one entry.
+    """
+    if not repo._activebookmark:
+        raise ValueError(
+            'headsforactive() only makes sense with an active bookmark')
+    name = repo._activebookmark.split('@', 1)[0]
+    heads = []
+    for mark, n in repo._bookmarks.iteritems():
+        if mark.split('@', 1)[0] == name:
+            heads.append(n)
+    return heads
 
 def calculateupdate(ui, repo, checkout):
     '''Return a tuple (targetrev, movemarkfrom) indicating the rev to

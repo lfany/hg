@@ -16,18 +16,16 @@ from .node import short
 from . import (
     bundle2,
     changegroup,
+    discovery,
     error,
     exchange,
     obsolete,
     util,
 )
 
-def _bundle(repo, bases, heads, node, suffix, compress=True):
+def _bundle(repo, bases, heads, node, suffix, compress=True, obsolescence=True):
     """create a bundle with the specified revisions as a backup"""
-    cgversion = changegroup.safeversion(repo)
 
-    cg = changegroup.changegroupsubset(repo, bases, heads, 'strip',
-                                       version=cgversion)
     backupdir = "strip-backup"
     vfs = repo.vfs
     if not vfs.isdir(backupdir):
@@ -39,6 +37,7 @@ def _bundle(repo, bases, heads, node, suffix, compress=True):
     totalhash = hashlib.sha1(''.join(allhashes)).hexdigest()
     name = "%s/%s-%s-%s.hg" % (backupdir, short(node), totalhash[:8], suffix)
 
+    cgversion = changegroup.safeversion(repo)
     comp = None
     if cgversion != '01':
         bundletype = "HG20"
@@ -48,8 +47,11 @@ def _bundle(repo, bases, heads, node, suffix, compress=True):
         bundletype = "HG10BZ"
     else:
         bundletype = "HG10UN"
-    return bundle2.writebundle(repo.ui, cg, name, bundletype, vfs,
-                                   compression=comp)
+
+    outgoing = discovery.outgoing(repo, missingroots=bases, missingheads=heads)
+    contentopts = {'cg.version': cgversion, 'obsolescence': obsolescence}
+    return bundle2.writenewbundle(repo.ui, repo, 'strip', name, bundletype,
+                                  outgoing, contentopts, vfs, compression=comp)
 
 def _collectfiles(repo, striprev):
     """find out the filelogs affected by the strip"""
@@ -120,6 +122,13 @@ def strip(ui, repo, nodelist, backup=True, topic='backup'):
     savebases = [cl.node(r) for r in saverevs]
     stripbases = [cl.node(r) for r in tostrip]
 
+    stripobsidx = obsmarkers = ()
+    if repo.ui.configbool('devel', 'strip-obsmarkers', True):
+        obsmarkers = obsolete.exclusivemarkers(repo, stripbases)
+    if obsmarkers:
+        stripobsidx = [i for i, m in enumerate(repo.obsstore)
+                       if m in obsmarkers]
+
     # For a set s, max(parents(s) - s) is the same as max(heads(::s - s)), but
     # is much faster
     newbmtarget = repo.revs('max(parents(%ld) - (%ld))', tostrip, tostrip)
@@ -148,8 +157,13 @@ def strip(ui, repo, nodelist, backup=True, topic='backup'):
     tmpbundlefile = None
     if saveheads:
         # do not compress temporary bundle if we remove it from disk later
+        #
+        # We do not include obsolescence, it might re-introduce prune markers
+        # we are trying to strip.  This is harmless since the stripped markers
+        # are already backed up and we did not touched the markers for the
+        # saved changesets.
         tmpbundlefile = _bundle(repo, savebases, saveheads, node, 'temp',
-                            compress=False)
+                                compress=False, obsolescence=False)
 
     mfst = repo.manifestlog._revlog
 
@@ -165,13 +179,8 @@ def strip(ui, repo, nodelist, backup=True, topic='backup'):
             tr.startgroup()
             cl.strip(striprev, tr)
             mfst.strip(striprev, tr)
-            if 'treemanifest' in repo.requirements: # safe but unnecessary
-                                                    # otherwise
-                for unencoded, encoded, size in repo.store.datafiles():
-                    if (unencoded.startswith('meta/') and
-                        unencoded.endswith('00manifest.i')):
-                        dir = unencoded[5:-12]
-                        repo.manifestlog._revlog.dirlog(dir).strip(striprev, tr)
+            striptrees(repo, tr, striprev, files)
+
             for fn in files:
                 repo.file(fn).strip(striprev, tr)
             tr.endgroup()
@@ -182,6 +191,9 @@ def strip(ui, repo, nodelist, backup=True, topic='backup'):
                     fp.truncate(troffset)
                 if troffset == 0:
                     repo.store.markremoved(file)
+
+            deleteobsmarkers(repo.obsstore, stripobsidx)
+            del repo.obsstore
 
         if tmpbundlefile:
             ui.note(_("adding branch\n"))
@@ -239,6 +251,15 @@ def strip(ui, repo, nodelist, backup=True, topic='backup'):
     # return the backup file path (or None if 'backup' was False) so
     # extensions can use it
     return backupfile
+
+def striptrees(repo, tr, striprev, files):
+    if 'treemanifest' in repo.requirements: # safe but unnecessary
+                                            # otherwise
+        for unencoded, encoded, size in repo.store.datafiles():
+            if (unencoded.startswith('meta/') and
+                unencoded.endswith('00manifest.i')):
+                dir = unencoded[5:-12]
+                repo.manifestlog._revlog.dirlog(dir).strip(striprev, tr)
 
 def rebuildfncache(ui, repo):
     """Rebuilds the fncache file from repo history.

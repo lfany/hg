@@ -16,7 +16,6 @@ from .node import (
     nullid,
 )
 from . import (
-    base85,
     bookmarks as bookmod,
     bundle2,
     changegroup,
@@ -29,7 +28,6 @@ from . import (
     scmutil,
     sslutil,
     streamclone,
-    tags,
     url as urlmod,
     util,
 )
@@ -45,7 +43,7 @@ _bundlespeccgversions = {'v1': '01',
                         }
 
 # Compression engines allowed in version 1. THIS SHOULD NEVER CHANGE.
-_bundlespecv1compengines = set(['gzip', 'bzip2', 'none'])
+_bundlespecv1compengines = {'gzip', 'bzip2', 'none'}
 
 def parsebundlespec(repo, spec, strict=True, externalnames=False):
     """Parse a bundle string specification into parts.
@@ -250,21 +248,6 @@ def getbundlespec(ui, fh):
     else:
         raise error.Abort(_('unknown bundle type: %s') % b)
 
-def buildobsmarkerspart(bundler, markers):
-    """add an obsmarker part to the bundler with <markers>
-
-    No part is created if markers is empty.
-    Raises ValueError if the bundler doesn't support any known obsmarker format.
-    """
-    if markers:
-        remoteversions = bundle2.obsmarkersversion(bundler.capabilities)
-        version = obsolete.commonversion(remoteversions)
-        if version is None:
-            raise ValueError('bundler does not support common obsmarker format')
-        stream = obsolete.encodemarkers(markers, True, version=version)
-        return bundler.newpart('obsmarkers', data=stream)
-    return None
-
 def _computeoutgoing(repo, heads, common):
     """Computes which revs are outgoing given a set of common
     and a set of heads.
@@ -340,8 +323,21 @@ class pushoperation(object):
         self.bkresult = None
         # discover.outgoing object (contains common and outgoing data)
         self.outgoing = None
-        # all remote heads before the push
+        # all remote topological heads before the push
         self.remoteheads = None
+        # Details of the remote branch pre and post push
+        #
+        # mapping: {'branch': ([remoteheads],
+        #                      [newheads],
+        #                      [unsyncedheads],
+        #                      [discardedheads])}
+        # - branch: the branch name
+        # - remoteheads: the list of remote heads known locally
+        #                None if the branch is new
+        # - newheads: the new remote heads (known locally) with outgoing pushed
+        # - unsyncedheads: the list of remote heads unknown locally.
+        # - discardedheads: the list of remote heads made obsolete by the push
+        self.pushbranchmap = None
         # testable as a boolean indicating if any nodes are missing locally.
         self.incoming = None
         # phases changes that must be pushed along side the changesets
@@ -729,8 +725,23 @@ def _pushb2ctxcheckheads(pushop, bundler):
 
     Exists as an independent function to aid extensions
     """
-    if not pushop.force:
-        bundler.newpart('check:heads', data=iter(pushop.remoteheads))
+    # * 'force' do not check for push race,
+    # * if we don't push anything, there are nothing to check.
+    if not pushop.force and pushop.outgoing.missingheads:
+        allowunrelated = 'related' in bundler.capabilities.get('checkheads', ())
+        if not allowunrelated:
+            bundler.newpart('check:heads', data=iter(pushop.remoteheads))
+        else:
+            affected = set()
+            for branch, heads in pushop.pushbranchmap.iteritems():
+                remoteheads, newheads, unsyncedheads, discardedheads = heads
+                if remoteheads is not None:
+                    remote = set(remoteheads)
+                    affected |= set(discardedheads) & remote
+                    affected |= remote - set(newheads)
+            if affected:
+                data = iter(sorted(affected))
+                bundler.newpart('check:updated-heads', data=data)
 
 @b2partsgenerator('changeset')
 def _pushb2ctx(pushop, bundler):
@@ -824,7 +835,7 @@ def _pushb2obsmarkers(pushop, bundler):
     pushop.stepsdone.add('obsmarkers')
     if pushop.outobsmarkers:
         markers = sorted(pushop.outobsmarkers)
-        buildobsmarkerspart(bundler, markers)
+        bundle2.buildobsmarkerspart(bundler, markers)
 
 @b2partsgenerator('bookmarks')
 def _pushb2bookmarks(pushop, bundler):
@@ -952,8 +963,8 @@ def _pushchangeset(pushop):
                                    'push',
                                    fastpath=True)
     else:
-        cg = changegroup.getlocalchangegroup(pushop.repo, 'push', outgoing,
-                                        bundlecaps)
+        cg = changegroup.getchangegroup(pushop.repo, 'push', outgoing,
+                                        bundlecaps=bundlecaps)
 
     # apply changegroup to remote
     if unbundle:
@@ -1335,7 +1346,9 @@ def _pullbundle2(pullop):
     For now, the only supported data are changegroup."""
     kwargs = {'bundlecaps': caps20to10(pullop.repo)}
 
-    streaming, streamreqs = streamclone.canperformstreamclone(pullop)
+    # At the moment we don't do stream clones over bundle2. If that is
+    # implemented then here's where the check for that will go.
+    streaming = False
 
     # pulling changegroup
     pullop.stepsdone.add('changegroup')
@@ -1512,7 +1525,7 @@ def _pullobsolete(pullop):
             markers = []
             for key in sorted(remoteobs, reverse=True):
                 if key.startswith('dump'):
-                    data = base85.b85decode(remoteobs[key])
+                    data = util.b85decode(remoteobs[key])
                     version, newmarks = obsolete._readmarkers(data)
                     markers += newmarks
             if markers:
@@ -1522,7 +1535,7 @@ def _pullobsolete(pullop):
 
 def caps20to10(repo):
     """return a set with appropriate options to use bundle20 during getbundle"""
-    caps = set(['HG20'])
+    caps = {'HG20'}
     capsblob = bundle2.encodecaps(bundle2.getrepocaps(repo))
     caps.add('bundle2=' + urlreq.quote(capsblob))
     return caps
@@ -1648,7 +1661,7 @@ def _getbundleobsmarkerpart(bundler, repo, source, bundlecaps=None,
         subset = [c.node() for c in repo.set('::%ln', heads)]
         markers = repo.obsstore.relevantmarkers(subset)
         markers = sorted(markers)
-        buildobsmarkerspart(bundler, markers)
+        bundle2.buildobsmarkerspart(bundler, markers)
 
 @getbundle2partsgenerator('hgtagsfnodes')
 def _getbundletagsfnodes(bundler, repo, source, bundlecaps=None,
@@ -1668,30 +1681,7 @@ def _getbundletagsfnodes(bundler, repo, source, bundlecaps=None,
         return
 
     outgoing = _computeoutgoing(repo, heads, common)
-
-    if not outgoing.missingheads:
-        return
-
-    cache = tags.hgtagsfnodescache(repo.unfiltered())
-    chunks = []
-
-    # .hgtags fnodes are only relevant for head changesets. While we could
-    # transfer values for all known nodes, there will likely be little to
-    # no benefit.
-    #
-    # We don't bother using a generator to produce output data because
-    # a) we only have 40 bytes per head and even esoteric numbers of heads
-    # consume little memory (1M heads is 40MB) b) we don't want to send the
-    # part if we don't have entries and knowing if we have entries requires
-    # cache lookups.
-    for node in outgoing.missingheads:
-        # Don't compute missing, as this may slow down serving.
-        fnode = cache.getfnode(node, computemissing=False)
-        if fnode is not None:
-            chunks.extend([node, fnode])
-
-    if chunks:
-        bundler.newpart('hgtagsfnodes', data=''.join(chunks))
+    bundle2.addparttagsfnodescache(repo, bundler, outgoing)
 
 def _getbookmarks(repo, **kwargs):
     """Returns bookmark to node mapping.

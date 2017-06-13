@@ -24,6 +24,7 @@ from . import (
     registrar,
     repoview,
     revsetlang,
+    scmutil,
     smartset,
     util,
 )
@@ -75,9 +76,14 @@ def _revancestors(repo, revs, followfirst):
             if current not in seen:
                 seen.add(current)
                 yield current
-                for parent in cl.parentrevs(current)[:cut]:
-                    if parent != node.nullrev:
-                        heapq.heappush(h, -parent)
+                try:
+                    for parent in cl.parentrevs(current)[:cut]:
+                        if parent != node.nullrev:
+                            heapq.heappush(h, -parent)
+                except error.WdirUnsupported:
+                    for parent in repo[current].parents()[:cut]:
+                        if parent.rev() != node.nullrev:
+                            heapq.heappush(h, -parent.rev())
 
     return generatorset(iterate(), iterasc=False)
 
@@ -185,7 +191,7 @@ def _getrevsource(repo, r):
 # operator methods
 
 def stringset(repo, subset, x):
-    x = repo[x].rev()
+    x = scmutil.intrev(repo[x])
     if (x in subset
         or x == node.nullrev and isinstance(subset, fullreposet)):
         return baseset([x])
@@ -373,17 +379,41 @@ def _firstancestors(repo, subset, x):
     # Like ``ancestors(set)`` but follows only the first parents.
     return _ancestors(repo, subset, x, followfirst=True)
 
+def _childrenspec(repo, subset, x, n, order):
+    """Changesets that are the Nth child of a changeset
+    in set.
+    """
+    cs = set()
+    for r in getset(repo, fullreposet(repo), x):
+        for i in range(n):
+            c = repo[r].children()
+            if len(c) == 0:
+                break
+            if len(c) > 1:
+                raise error.RepoLookupError(
+                    _("revision in set has more than one child"))
+            r = c[0]
+        else:
+            cs.add(r)
+    return subset & cs
+
 def ancestorspec(repo, subset, x, n, order):
     """``set~n``
     Changesets that are the Nth ancestor (first parents only) of a changeset
     in set.
     """
     n = getinteger(n, _("~ expects a number"))
+    if n < 0:
+        # children lookup
+        return _childrenspec(repo, subset, x, -n, order)
     ps = set()
     cl = repo.changelog
     for r in getset(repo, fullreposet(repo), x):
         for i in range(n):
-            r = cl.parentrevs(r)[0]
+            try:
+                r = cl.parentrevs(r)[0]
+            except error.WdirUnsupported:
+                r = repo[r].parents()[0].rev()
         ps.add(r)
     return subset & ps
 
@@ -451,9 +481,8 @@ def bookmark(repo, subset, x):
             for bmrev in matchrevs:
                 bms.add(repo[bmrev].rev())
     else:
-        bms = set([repo[r].rev()
-                   for r in repo._bookmarks.values()])
-    bms -= set([node.nullrev])
+        bms = {repo[r].rev() for r in repo._bookmarks.values()}
+    bms -= {node.nullrev}
     return subset & bms
 
 @predicate('branch(string or set)', safe=True)
@@ -466,6 +495,11 @@ def branch(repo, subset, x):
     :hg:`help revisions.patterns`.
     """
     getbi = repo.revbranchcache().branchinfo
+    def getbranch(r):
+        try:
+            return getbi(r)[0]
+        except error.WdirUnsupported:
+            return repo[r].branch()
 
     try:
         b = getstring(x, '')
@@ -478,21 +512,21 @@ def branch(repo, subset, x):
             # note: falls through to the revspec case if no branch with
             # this name exists and pattern kind is not specified explicitly
             if pattern in repo.branchmap():
-                return subset.filter(lambda r: matcher(getbi(r)[0]),
+                return subset.filter(lambda r: matcher(getbranch(r)),
                                      condrepr=('<branch %r>', b))
             if b.startswith('literal:'):
                 raise error.RepoLookupError(_("branch '%s' does not exist")
                                             % pattern)
         else:
-            return subset.filter(lambda r: matcher(getbi(r)[0]),
+            return subset.filter(lambda r: matcher(getbranch(r)),
                                  condrepr=('<branch %r>', b))
 
     s = getset(repo, fullreposet(repo), x)
     b = set()
     for r in s:
-        b.add(getbi(r)[0])
+        b.add(getbranch(r))
     c = s.__contains__
-    return subset.filter(lambda r: c(r) or getbi(r)[0] in b,
+    return subset.filter(lambda r: c(r) or getbranch(r) in b,
                          condrepr=lambda: '<branch %r>' % sorted(b))
 
 @predicate('bumped()', safe=True)
@@ -850,11 +884,11 @@ def filelog(repo, subset, x):
 
     return subset & s
 
-@predicate('first(set, [n])', safe=True)
-def first(repo, subset, x):
+@predicate('first(set, [n])', safe=True, takeorder=True)
+def first(repo, subset, x, order):
     """An alias for limit().
     """
-    return limit(repo, subset, x)
+    return limit(repo, subset, x, order)
 
 def _follow(repo, subset, x, name, followfirst=False):
     l = getargs(x, 0, 2, _("%s takes no arguments or a pattern "
@@ -1118,8 +1152,8 @@ def keyword(repo, subset, x):
 
     return subset.filter(matches, condrepr=('<keyword %r>', kw))
 
-@predicate('limit(set[, n[, offset]])', safe=True)
-def limit(repo, subset, x):
+@predicate('limit(set[, n[, offset]])', safe=True, takeorder=True)
+def limit(repo, subset, x, order):
     """First n members of set, defaulting to 1, starting from offset.
     """
     args = getargsdict(x, 'limit', 'set n offset')
@@ -1128,6 +1162,8 @@ def limit(repo, subset, x):
         raise error.ParseError(_("limit requires one to three arguments"))
     # i18n: "limit" is a keyword
     lim = getinteger(args.get('n'), _("limit expects a number"), default=1)
+    if lim < 0:
+        raise error.ParseError(_("negative number to select"))
     # i18n: "limit" is a keyword
     ofs = getinteger(args.get('offset'), _("limit expects a number"), default=0)
     if ofs < 0:
@@ -1143,13 +1179,14 @@ def limit(repo, subset, x):
         y = next(it, None)
         if y is None:
             break
-        elif y in subset:
-            result.append(y)
-    return baseset(result, datarepr=('<limit n=%d, offset=%d, %r, %r>',
-                                     lim, ofs, subset, os))
+        result.append(y)
+    ls = baseset(result, datarepr=('<limit n=%d, offset=%d, %r>', lim, ofs, os))
+    if order == followorder and lim > 1:
+        return subset & ls
+    return ls & subset
 
-@predicate('last(set, [n])', safe=True)
-def last(repo, subset, x):
+@predicate('last(set, [n])', safe=True, takeorder=True)
+def last(repo, subset, x, order):
     """Last n members of set, defaulting to 1.
     """
     # i18n: "last" is a keyword
@@ -1158,6 +1195,8 @@ def last(repo, subset, x):
     if len(l) == 2:
         # i18n: "last" is a keyword
         lim = getinteger(l[1], _("last expects a number"))
+    if lim < 0:
+        raise error.ParseError(_("negative number to select"))
     os = getset(repo, fullreposet(repo), l[0])
     os.reverse()
     result = []
@@ -1166,9 +1205,12 @@ def last(repo, subset, x):
         y = next(it, None)
         if y is None:
             break
-        elif y in subset:
-            result.append(y)
-    return baseset(result, datarepr=('<last n=%d, %r, %r>', lim, subset, os))
+        result.append(y)
+    ls = baseset(result, datarepr=('<last n=%d, %r>', lim, os))
+    if order == followorder and lim > 1:
+        return subset & ls
+    ls.reverse()
+    return ls & subset
 
 @predicate('max(set)', safe=True)
 def maxrev(repo, subset, x):
@@ -1276,7 +1318,7 @@ def named(repo, subset, x):
             if name not in ns.deprecated:
                 names.update(repo[n].rev() for n in ns.nodes(repo, name))
 
-    names -= set([node.nullrev])
+    names -= {node.nullrev}
     return subset & names
 
 @predicate('id(string)', safe=True)
@@ -1290,13 +1332,18 @@ def node_(repo, subset, x):
     if len(n) == 40:
         try:
             rn = repo.changelog.rev(node.bin(n))
+        except error.WdirUnsupported:
+            rn = node.wdirrev
         except (LookupError, TypeError):
             rn = None
     else:
         rn = None
-        pm = repo.changelog._partialmatch(n)
-        if pm is not None:
-            rn = repo.changelog.rev(pm)
+        try:
+            pm = repo.changelog._partialmatch(n)
+            if pm is not None:
+                rn = repo.changelog.rev(pm)
+        except error.WdirUnsupported:
+            rn = node.wdirrev
 
     if rn is None:
         return baseset()
@@ -1363,8 +1410,8 @@ def origin(repo, subset, x):
                 return src
             src = prev
 
-    o = set([_firstsrc(r) for r in dests])
-    o -= set([None])
+    o = {_firstsrc(r) for r in dests}
+    o -= {None}
     # XXX we should turn this into a baseset instead of a set, smartset may do
     # some optimizations from the fact this is a baseset.
     return subset & o
@@ -1393,7 +1440,7 @@ def outgoing(repo, subset, x):
     outgoing = discovery.findcommonoutgoing(repo, other, onlyheads=revs)
     repo.ui.popbuffer()
     cl = repo.changelog
-    o = set([cl.rev(r) for r in outgoing.missing])
+    o = {cl.rev(r) for r in outgoing.missing}
     return subset & o
 
 @predicate('p1([set])', safe=True)
@@ -1409,8 +1456,11 @@ def p1(repo, subset, x):
     ps = set()
     cl = repo.changelog
     for r in getset(repo, fullreposet(repo), x):
-        ps.add(cl.parentrevs(r)[0])
-    ps -= set([node.nullrev])
+        try:
+            ps.add(cl.parentrevs(r)[0])
+        except error.WdirUnsupported:
+            ps.add(repo[r].parents()[0].rev())
+    ps -= {node.nullrev}
     # XXX we should turn this into a baseset instead of a set, smartset may do
     # some optimizations from the fact this is a baseset.
     return subset & ps
@@ -1432,8 +1482,13 @@ def p2(repo, subset, x):
     ps = set()
     cl = repo.changelog
     for r in getset(repo, fullreposet(repo), x):
-        ps.add(cl.parentrevs(r)[1])
-    ps -= set([node.nullrev])
+        try:
+            ps.add(cl.parentrevs(r)[1])
+        except error.WdirUnsupported:
+            parents = repo[r].parents()
+            if len(parents) == 2:
+                ps.add(parents[1])
+    ps -= {node.nullrev}
     # XXX we should turn this into a baseset instead of a set, smartset may do
     # some optimizations from the fact this is a baseset.
     return subset & ps
@@ -1454,11 +1509,11 @@ def parents(repo, subset, x):
         up = ps.update
         parentrevs = cl.parentrevs
         for r in getset(repo, fullreposet(repo), x):
-            if r == node.wdirrev:
-                up(p.rev() for p in repo[r].parents())
-            else:
+            try:
                 up(parentrevs(r))
-    ps -= set([node.nullrev])
+            except error.WdirUnsupported:
+                up(p.rev() for p in repo[r].parents())
+    ps -= {node.nullrev}
     return subset & ps
 
 def _phase(repo, subset, *targets):
@@ -1500,11 +1555,19 @@ def parentspec(repo, subset, x, n, order):
         if n == 0:
             ps.add(r)
         elif n == 1:
-            ps.add(cl.parentrevs(r)[0])
-        elif n == 2:
-            parents = cl.parentrevs(r)
-            if parents[1] != node.nullrev:
-                ps.add(parents[1])
+            try:
+                ps.add(cl.parentrevs(r)[0])
+            except error.WdirUnsupported:
+                ps.add(repo[r].parents()[0].rev())
+        else:
+            try:
+                parents = cl.parentrevs(r)
+                if parents[1] != node.nullrev:
+                    ps.add(parents[1])
+            except error.WdirUnsupported:
+                parents = repo[r].parents()
+                if len(parents) == 2:
+                    ps.add(parents[1].rev())
     return subset & ps
 
 @predicate('present(set)', safe=True)
@@ -1597,7 +1660,7 @@ def rev(repo, subset, x):
     except (TypeError, ValueError):
         # i18n: "rev" is a keyword
         raise error.ParseError(_("rev expects a number"))
-    if l not in repo.changelog and l != node.nullrev:
+    if l not in repo.changelog and l not in (node.nullrev, node.wdirrev):
         return baseset()
     return subset & baseset([l])
 
@@ -1965,7 +2028,7 @@ def _toposort(revs, parentsfunc, firstbranch=()):
             else:
                 # This is a new head. We create a new subgroup for it.
                 targetidx = len(groups)
-                groups.append(([], set([rev])))
+                groups.append(([], {rev}))
 
             gr = groups[targetidx]
 
@@ -2098,11 +2161,11 @@ def tag(repo, subset, x):
             if tn is None:
                 raise error.RepoLookupError(_("tag '%s' does not exist")
                                             % pattern)
-            s = set([repo[tn].rev()])
+            s = {repo[tn].rev()}
         else:
-            s = set([cl.rev(n) for t, n in repo.tagslist() if matcher(t)])
+            s = {cl.rev(n) for t, n in repo.tagslist() if matcher(t)}
     else:
-        s = set([cl.rev(n) for t, n in repo.tagslist() if t != 'tip'])
+        s = {cl.rev(n) for t, n in repo.tagslist() if t != 'tip'}
     return subset & s
 
 @predicate('tagged', safe=True)
@@ -2128,7 +2191,7 @@ def user(repo, subset, x):
     """
     return author(repo, subset, x)
 
-@predicate('wdir', safe=True)
+@predicate('wdir()', safe=True)
 def wdir(repo, subset, x):
     """Working directory. (EXPERIMENTAL)"""
     # i18n: "wdir" is a keyword

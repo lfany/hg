@@ -311,7 +311,44 @@ bookmark with integer name
   abort: cannot use an integer as a name
   [255]
 
+bookmark with a name that matches a node id
+  $ hg bookmark 925d80f479bb db815d6d32e6
+  bookmark 925d80f479bb matches a changeset hash
+  (did you leave a -r out of an 'hg bookmark' command?)
+  bookmark db815d6d32e6 matches a changeset hash
+  (did you leave a -r out of an 'hg bookmark' command?)
+  $ hg bookmark -d 925d80f479bb
+  $ hg bookmark -d db815d6d32e6
+
+  $ cd ..
+
+bookmark with a name that matches an ambiguous node id
+
+  $ hg init ambiguous
+  $ cd ambiguous
+  $ echo 0 > a
+  $ hg ci -qAm 0
+  $ for i in 1057 2857 4025; do
+  >   hg up -q 0
+  >   echo $i > a
+  >   hg ci -qm $i
+  > done
+  $ hg up -q null
+  $ hg log -r0: -T '{rev}:{node}\n'
+  0:b4e73ffab476aa0ee32ed81ca51e07169844bc6a
+  1:c56256a09cd28e5764f32e8e2810d0f01e2e357a
+  2:c5623987d205cd6d9d8389bfc40fff9dbb670b48
+  3:c562ddd9c94164376c20b86b0b4991636a3bf84f
+
+  $ hg bookmark -r0 c562
+  $ hg bookmarks
+     c562                      0:b4e73ffab476
+
+  $ cd ..
+
 incompatible options
+
+  $ cd repo
 
   $ hg bookmark -m Y -d Z
   abort: --delete and --rename are incompatible
@@ -663,7 +700,7 @@ test wrongly formated bookmark
 
 test missing revisions
 
-  $ echo "925d80f479bc z" > .hg/bookmarks
+  $ echo "925d80f479b925d80f479bc925d80f479bccabab z" > .hg/bookmarks
   $ hg book
   no bookmarks set
 

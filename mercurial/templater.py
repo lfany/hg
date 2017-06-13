@@ -53,6 +53,7 @@ def tokenize(program, start, end, term=None):
     """Parse a template expression into a stream of tokens, which must end
     with term if specified"""
     pos = start
+    program = pycompat.bytestr(program)
     while pos < end:
         c = program[pos]
         if c.isspace(): # skip inter-token whitespace
@@ -959,6 +960,9 @@ def shortest(context, mapping, args):
                 return True
         except error.RevlogError:
             return False
+        except error.WdirUnsupported:
+            # single 'ff...' match
+            return True
 
     shortest = node
     startlength = max(6, minlength)

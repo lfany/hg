@@ -37,14 +37,14 @@ these predicates use '\0' as a separator:
   $ cat <<EOF > debugrevlistspec.py
   > from __future__ import absolute_import
   > from mercurial import (
-  >     cmdutil,
   >     node as nodemod,
+  >     registrar,
   >     revset,
   >     revsetlang,
   >     smartset,
   > )
   > cmdtable = {}
-  > command = cmdutil.command(cmdtable)
+  > command = registrar.command(cmdtable)
   > @command('debugrevlistspec',
   >     [('', 'optimize', None, 'print parsed tree after optimizing'),
   >      ('', 'bin', None, 'unhexlify arguments')])
@@ -413,7 +413,7 @@ quoting needed
   hg: parse error: invalid \x escape
   [255]
   $ log 'date(tip)'
-  abort: invalid date: 'tip'
+  hg: parse error: invalid date: 'tip'
   [255]
   $ log '0:date'
   abort: unknown revision 'date'!
@@ -986,6 +986,9 @@ test ancestors
   $ log 'keyword(issue)'
   6
   $ log 'keyword("test a")'
+
+Test first (=limit) and last
+
   $ log 'limit(head(), 1)'
   0
   $ log 'limit(author("re:bob|test"), 3, 5)'
@@ -998,6 +1001,65 @@ test ancestors
   $ log 'limit(all(), 1, -1)'
   hg: parse error: negative offset
   [255]
+  $ log 'limit(all(), -1)'
+  hg: parse error: negative number to select
+  [255]
+  $ log 'limit(all(), 0)'
+
+  $ log 'last(all(), -1)'
+  hg: parse error: negative number to select
+  [255]
+  $ log 'last(all(), 0)'
+  $ log 'last(all(), 1)'
+  9
+  $ log 'last(all(), 2)'
+  8
+  9
+
+Test order of first/last revisions
+
+  $ hg debugrevspec -s 'first(4:0, 3) & 3:'
+  * set:
+  <filteredset
+    <baseset
+      <limit n=3, offset=0,
+        <spanset- 0:4>>>,
+    <spanset+ 3:9>>
+  4
+  3
+
+  $ hg debugrevspec -s '3: & first(4:0, 3)'
+  * set:
+  <filteredset
+    <spanset+ 3:9>,
+    <baseset
+      <limit n=3, offset=0,
+        <spanset- 0:4>>>>
+  3
+  4
+
+  $ hg debugrevspec -s 'last(4:0, 3) & :1'
+  * set:
+  <filteredset
+    <baseset
+      <last n=3,
+        <spanset+ 0:4>>>,
+    <spanset+ 0:1>>
+  1
+  0
+
+  $ hg debugrevspec -s ':1 & last(4:0, 3)'
+  * set:
+  <filteredset
+    <spanset+ 0:1>,
+    <baseset
+      <last n=3,
+        <spanset+ 0:4>>>>
+  0
+  1
+
+Test matching
+
   $ log 'matching(6)'
   6
   $ log 'matching(6:7, "phase parents user date branch summary files description substate")'
@@ -1210,10 +1272,10 @@ Test null revision
   $ log 'reverse(null:)' | tail -2
   0
   -1
-BROKEN: should be '-1'
   $ log 'first(null:)'
-BROKEN: should be '-1'
+  -1
   $ log 'min(null:)'
+BROKEN: should be '-1'
   $ log 'tip:null and all()' | tail -2
   1
   0
@@ -1221,6 +1283,42 @@ BROKEN: should be '-1'
 Test working-directory revision
   $ hg debugrevspec 'wdir()'
   2147483647
+  $ hg debugrevspec 'wdir()^'
+  9
+  $ hg up 7
+  0 files updated, 0 files merged, 1 files removed, 0 files unresolved
+  $ hg debugrevspec 'wdir()^'
+  7
+  $ hg debugrevspec 'wdir()^0'
+  2147483647
+  $ hg debugrevspec 'wdir()~3'
+  5
+  $ hg debugrevspec 'ancestors(wdir())'
+  0
+  1
+  2
+  3
+  4
+  5
+  6
+  7
+  2147483647
+  $ hg debugrevspec 'wdir()~0'
+  2147483647
+  $ hg debugrevspec 'p1(wdir())'
+  7
+  $ hg debugrevspec 'p2(wdir())'
+  $ hg debugrevspec 'parents(wdir())'
+  7
+  $ hg debugrevspec 'wdir()^1'
+  7
+  $ hg debugrevspec 'wdir()^2'
+  $ hg debugrevspec 'wdir()^3'
+  hg: parse error: ^ expects a number 0, 1, or 2
+  [255]
+For tests consistency
+  $ hg up 9
+  1 files updated, 0 files merged, 0 files removed, 0 files unresolved
   $ hg debugrevspec 'tip or wdir()'
   9
   2147483647
@@ -1239,9 +1337,103 @@ Test working-directory revision
   9
   $ log '(all() + wdir()) & max(. + wdir())'
   2147483647
-  $ log '(all() + wdir()) & first(wdir() + .)'
+  $ log 'first(wdir() + .)'
   2147483647
-  $ log '(all() + wdir()) & last(. + wdir())'
+  $ log 'last(. + wdir())'
+  2147483647
+
+Test working-directory integer revision and node id
+(BUG: '0:wdir()' is still needed to populate wdir revision)
+
+  $ hg debugrevspec '0:wdir() & 2147483647'
+  2147483647
+  $ hg debugrevspec '0:wdir() & rev(2147483647)'
+  2147483647
+  $ hg debugrevspec '0:wdir() & ffffffffffffffffffffffffffffffffffffffff'
+  2147483647
+  $ hg debugrevspec '0:wdir() & ffffffffffff'
+  2147483647
+  $ hg debugrevspec '0:wdir() & id(ffffffffffffffffffffffffffffffffffffffff)'
+  2147483647
+  $ hg debugrevspec '0:wdir() & id(ffffffffffff)'
+  2147483647
+
+  $ cd ..
+
+Test short 'ff...' hash collision
+(BUG: '0:wdir()' is still needed to populate wdir revision)
+
+  $ hg init wdir-hashcollision
+  $ cd wdir-hashcollision
+  $ cat <<EOF >> .hg/hgrc
+  > [experimental]
+  > evolution = createmarkers
+  > EOF
+  $ echo 0 > a
+  $ hg ci -qAm 0
+  $ for i in 2463 2961 6726 78127; do
+  >   hg up -q 0
+  >   echo $i > a
+  >   hg ci -qm $i
+  > done
+  $ hg up -q null
+  $ hg log -r '0:wdir()' -T '{rev}:{node} {shortest(node, 3)}\n'
+  0:b4e73ffab476aa0ee32ed81ca51e07169844bc6a b4e
+  1:fffbae3886c8fbb2114296380d276fd37715d571 fffba
+  2:fffb6093b00943f91034b9bdad069402c834e572 fffb6
+  3:fff48a9b9de34a4d64120c29548214c67980ade3 fff4
+  4:ffff85cff0ff78504fcdc3c0bc10de0c65379249 ffff8
+  2147483647:ffffffffffffffffffffffffffffffffffffffff fffff
+  $ hg debugobsolete fffbae3886c8fbb2114296380d276fd37715d571
+
+  $ hg debugrevspec '0:wdir() & fff'
+  abort: 00changelog.i@fff: ambiguous identifier!
+  [255]
+  $ hg debugrevspec '0:wdir() & ffff'
+  abort: 00changelog.i@ffff: ambiguous identifier!
+  [255]
+  $ hg debugrevspec '0:wdir() & fffb'
+  abort: 00changelog.i@fffb: ambiguous identifier!
+  [255]
+BROKEN should be '2' (node lookup uses unfiltered repo since dc25ed84bee8)
+  $ hg debugrevspec '0:wdir() & id(fffb)'
+  2
+  $ hg debugrevspec '0:wdir() & ffff8'
+  4
+  $ hg debugrevspec '0:wdir() & fffff'
+  2147483647
+
+  $ cd ..
+
+Test branch() with wdir()
+
+  $ cd repo
+
+  $ log '0:wdir() & branch("literal:é")'
+  8
+  9
+  2147483647
+  $ log '0:wdir() & branch("re:é")'
+  8
+  9
+  2147483647
+  $ log '0:wdir() & branch("re:^a")'
+  0
+  2
+  $ log '0:wdir() & branch(8)'
+  8
+  9
+  2147483647
+
+branch(wdir()) returns all revisions belonging to the working branch. The wdir
+itself isn't returned unless it is explicitly populated.
+
+  $ log 'branch(wdir())'
+  8
+  9
+  $ log '0:wdir() & branch(wdir())'
+  8
+  9
   2147483647
 
   $ log 'outgoing()'
@@ -1757,10 +1949,11 @@ ordering defined by it.
       follow)
     define)
   * set:
-  <baseset
-    <limit n=1, offset=0,
-      <spanset- 0:2>,
-      <baseset [1, 0, 2]>>>
+  <filteredset
+    <baseset
+      <limit n=1, offset=0,
+        <baseset [1, 0, 2]>>>,
+    <spanset- 0:2>>
   1
 
   $ try --optimize '2:0 & not last(0 + 2 + 1)'
@@ -1796,7 +1989,6 @@ ordering defined by it.
     <not
       <baseset
         <last n=1,
-          <fullreposet+ 0:9>,
           <baseset [1, 2, 0]>>>>>
   2
   0
@@ -2845,6 +3037,14 @@ parentrevspec
   $ log 'merge()^^^'
   1
 
+  $ log '(merge() | 0)~-1'
+  7
+  1
+  $ log 'merge()~-1'
+  7
+  $ log 'tip~-1'
+  $ log '(tip | merge())~-1'
+  7
   $ log 'merge()~0'
   6
   $ log 'merge()~1'
@@ -2863,6 +3063,10 @@ parentrevspec
 
   $ log 'tip^foo'
   hg: parse error: ^ expects a number 0, 1, or 2
+  [255]
+
+  $ log 'branchpoint()~-1'
+  abort: revision in set has more than one child!
   [255]
 
 Bogus function gets suggestions
@@ -3411,7 +3615,6 @@ issue2549 - correct optimizations
   <filteredset
     <baseset
       <limit n=2, offset=0,
-        <fullreposet+ 0:9>,
         <baseset [1, 2, 3]>>>,
     <not
       <baseset [2]>>>
@@ -3468,7 +3671,6 @@ issue2549 - correct optimizations
   <filteredset
     <baseset
       <last n=1,
-        <fullreposet+ 0:9>,
         <baseset [2, 1]>>>,
     <not
       <baseset [2]>>>

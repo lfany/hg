@@ -17,15 +17,15 @@ import time
 from mercurial.i18n import _
 from mercurial import (
     cmdutil,
-    commands,
     encoding,
     patch,
+    registrar,
     scmutil,
     util,
 )
 
 cmdtable = {}
-command = cmdutil.command(cmdtable)
+command = registrar.command(cmdtable)
 # Note for extension authors: ONLY specify testedwith = 'ships-with-hg-core' for
 # extensions which SHIP WITH MERCURIAL. Non-mainline extensions should
 # be specifying the version(s) of Mercurial they are tested with, or
@@ -114,7 +114,7 @@ def countrate(ui, repo, amap, *pats, **opts):
     ('s', 'sort', False, _('sort by key (default: sort by count)')),
     ('', 'diffstat', False, _('display added/removed lines separately')),
     ('', 'aliases', '', _('file with email aliases'), _('FILE')),
-    ] + commands.walkopts,
+    ] + cmdutil.walkopts,
     _("hg churn [-d DATE] [-r REV] [--aliases FILE] [FILE]"),
     inferrepo=True)
 def churn(ui, repo, *pats, **opts):

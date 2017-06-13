@@ -8,7 +8,12 @@
 from __future__ import absolute_import
 
 from .i18n import _
-from .node import hex, nullid
+from .node import (
+    hex,
+    nullid,
+    short,
+)
+
 from . import (
     encoding,
     error,
@@ -158,10 +163,10 @@ def _formatrevnode(ctx):
     template provided by cmdutil.changeset_templater"""
     repo = ctx.repo()
     if repo.ui.debugflag:
-        hexnode = ctx.hex()
+        hexfunc = hex
     else:
-        hexnode = ctx.hex()[:12]
-    return '%d:%s' % (scmutil.intrev(ctx.rev()), hexnode)
+        hexfunc = short
+    return '%d:%s' % (scmutil.intrev(ctx), hexfunc(scmutil.binnode(ctx)))
 
 def getfiles(repo, ctx, revcache):
     if 'files' not in revcache:
@@ -611,7 +616,7 @@ def showphaseidx(repo, ctx, templ, **args):
 @templatekeyword('rev')
 def showrev(repo, ctx, templ, **args):
     """Integer. The repository-local changeset revision number."""
-    return scmutil.intrev(ctx.rev())
+    return scmutil.intrev(ctx)
 
 def showrevslist(name, revs, **args):
     """helper to generate a list of revisions in which a mapped template will

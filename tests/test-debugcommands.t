@@ -109,6 +109,23 @@ Test max chain len
       6     5    -1   ???   ???        ???  ???  ???    0     ???      ????           ?     1        1 (glob)
       7     6    -1   ???   ???        ???  ???  ???    0     ???      ????           ?     1        2 (glob)
       8     7    -1   ???   ???        ???  ???  ???    0     ???      ????           ?     1        3 (glob)
+
+Test WdirUnsupported exception
+
+  $ hg debugdata -c ffffffffffffffffffffffffffffffffffffffff
+  abort: working directory revision cannot be specified
+  [255]
+
+Test cache warming command
+
+  $ rm -rf .hg/cache/
+  $ hg debugupdatecaches --debug
+  updating the branch cache
+  $ ls -r .hg/cache/*
+  .hg/cache/rbc-revs-v1
+  .hg/cache/rbc-names-v1
+  .hg/cache/branch2-served
+
   $ cd ..
 
 Test internal debugstacktrace command

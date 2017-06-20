@@ -209,14 +209,29 @@ Make sure user/global hgrc does not affect tests
 
 Add some simple styles to settings
 
-  $ echo '[templates]' >> .hg/hgrc
-  $ printf 'simple = "{rev}\\n"\n' >> .hg/hgrc
-  $ printf 'simple2 = {rev}\\n\n' >> .hg/hgrc
+  $ cat <<'EOF' >> .hg/hgrc
+  > [templates]
+  > simple = "{rev}\n"
+  > simple2 = {rev}\n
+  > rev = "should not precede {rev} keyword\n"
+  > EOF
 
   $ hg log -l1 -Tsimple
   8
   $ hg log -l1 -Tsimple2
   8
+  $ hg log -l1 -Trev
+  should not precede 8 keyword
+  $ hg log -l1 -T '{simple}'
+  8
+
+Map file shouldn't see user templates:
+
+  $ cat <<EOF > tmpl
+  > changeset = 'nothing expanded:{simple}\n'
+  > EOF
+  $ hg log -l1 --style ./tmpl
+  nothing expanded:
 
 Test templates and style maps in files:
 
@@ -1180,7 +1195,10 @@ Check that recursive reference does not fall into RuntimeError (issue4758):
 
  common mistake:
 
-  $ hg log -T '{changeset}\n'
+  $ cat << EOF > issue4758
+  > changeset = '{changeset}\n'
+  > EOF
+  $ hg log --style ./issue4758
   abort: recursive reference 'changeset' in template
   [255]
 
@@ -1196,7 +1214,10 @@ Check that recursive reference does not fall into RuntimeError (issue4758):
 
  buildmap() -> gettemplate(), where no thunk was made:
 
-  $ hg log -T '{files % changeset}\n'
+  $ cat << EOF > issue4758
+  > changeset = '{files % changeset}\n'
+  > EOF
+  $ hg log --style ./issue4758
   abort: recursive reference 'changeset' in template
   [255]
 
@@ -3502,6 +3523,9 @@ Test shortest(node) function:
   $ hg log -r 0 -T '{shortest(node, "not an int")}\n'
   hg: parse error: shortest() expects an integer minlength
   [255]
+
+  $ hg log -r 'wdir()' -T '{node|shortest}\n'
+  ffff
 
   $ cd ..
 

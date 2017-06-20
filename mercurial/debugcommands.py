@@ -32,7 +32,6 @@ from . import (
     changegroup,
     cmdutil,
     color,
-    commands,
     context,
     dagparser,
     dagutil,
@@ -40,6 +39,7 @@ from . import (
     error,
     exchange,
     extensions,
+    filemerge,
     fileset,
     formatter,
     hg,
@@ -47,9 +47,11 @@ from . import (
     lock as lockmod,
     merge as mergemod,
     obsolete,
+    phases,
     policy,
     pvec,
     pycompat,
+    registrar,
     repair,
     revlog,
     revset,
@@ -69,9 +71,7 @@ from . import (
 
 release = lockmod.release
 
-# We reuse the command table from commands because it is easier than
-# teaching dispatch about multiple tables.
-command = cmdutil.command(commands.table)
+command = registrar.command()
 
 @command('debugancestor', [], _('[INDEX] REV1 REV2'), optionalrepo=True)
 def debugancestor(ui, repo, *args):
@@ -289,20 +289,47 @@ def _debugchangegroup(ui, gen, all=None, indent=0, **opts):
             ui.write("%s%s\n" % (indent_string, hex(node)))
             chain = node
 
+def _debugobsmarkers(ui, data, all=None, indent=0, **opts):
+    """display version and markers contained in 'data'"""
+    indent_string = ' ' * indent
+    try:
+        version, markers = obsolete._readmarkers(data)
+    except error.UnknownVersion as exc:
+        msg = "%sunsupported version: %s (%d bytes)\n"
+        msg %= indent_string, exc.version, len(data)
+        ui.write(msg)
+    else:
+        msg = "%sversion: %s (%d bytes)\n"
+        msg %= indent_string, version, len(data)
+        ui.write(msg)
+        fm = ui.formatter('debugobsolete', opts)
+        for rawmarker in sorted(markers):
+            m = obsolete.marker(None, rawmarker)
+            fm.startitem()
+            fm.plain(indent_string)
+            cmdutil.showmarker(fm, m)
+        fm.end()
+
 def _debugbundle2(ui, gen, all=None, **opts):
     """lists the contents of a bundle2"""
     if not isinstance(gen, bundle2.unbundle20):
         raise error.Abort(_('not a bundle2 file'))
     ui.write(('Stream params: %s\n' % repr(gen.params)))
+    parttypes = opts.get('part_type', [])
     for part in gen.iterparts():
+        if parttypes and part.type not in parttypes:
+            continue
         ui.write('%s -- %r\n' % (part.type, repr(part.params)))
         if part.type == 'changegroup':
             version = part.params.get('version', '01')
             cg = changegroup.getunbundler(version, part, 'UN')
             _debugchangegroup(ui, cg, all=all, indent=4, **opts)
+        if part.type == 'obsmarkers':
+            _debugobsmarkers(ui, part.read(), all=all, indent=4, **opts)
 
 @command('debugbundle',
         [('a', 'all', None, _('show all details')),
+         ('', 'part-type', [], _('show only the named part type')),
          ('', 'spec', None, _('print the bundlespec of the bundle'))],
         _('FILE'),
         norepo=True)
@@ -388,42 +415,6 @@ def _debugdisplaystyle(ui):
             ui.write(', '.join(ui.label(e, e) for e in effects.split()))
         ui.write('\n')
 
-@command('debugcommands', [], _('[COMMAND]'), norepo=True)
-def debugcommands(ui, cmd='', *args):
-    """list all available commands and options"""
-    for cmd, vals in sorted(commands.table.iteritems()):
-        cmd = cmd.split('|')[0].strip('^')
-        opts = ', '.join([i[1] for i in vals[1]])
-        ui.write('%s: %s\n' % (cmd, opts))
-
-@command('debugcomplete',
-    [('o', 'options', None, _('show the command options'))],
-    _('[-o] CMD'),
-    norepo=True)
-def debugcomplete(ui, cmd='', **opts):
-    """returns the completion list associated with the given command"""
-
-    if opts.get('options'):
-        options = []
-        otables = [commands.globalopts]
-        if cmd:
-            aliases, entry = cmdutil.findcmd(cmd, commands.table, False)
-            otables.append(entry[1])
-        for t in otables:
-            for o in t:
-                if "(DEPRECATED)" in o[3]:
-                    continue
-                if o[0]:
-                    options.append('-%s' % o[0])
-                options.append('--%s' % o[1])
-        ui.write("%s\n" % "\n".join(options))
-        return
-
-    cmdlist, unused_allcmds = cmdutil.findpossible(cmd, commands.table)
-    if ui.verbose:
-        cmdlist = [' '.join(c[0]) for c in cmdlist.values()]
-    ui.write("%s\n" % "\n".join(sorted(cmdlist)))
-
 @command('debugcreatestreamclonebundle', [], 'FILE')
 def debugcreatestreamclonebundle(ui, repo, fname):
     """create a stream clone bundle file
@@ -431,6 +422,12 @@ def debugcreatestreamclonebundle(ui, repo, fname):
     Stream bundles are special bundles that are essentially archives of
     revlog files. They are commonly used for cloning very quickly.
     """
+    # TODO we may want to turn this into an abort when this functionality
+    # is moved into `hg bundle`.
+    if phases.hassecret(repo):
+        ui.warn(_('(warning: stream clone bundle will contain secret '
+                  'revisions)\n'))
+
     requirements, gen = streamclone.generatebundlev1(repo)
     changegroup.writechunks(ui, gen, fname)
 
@@ -499,7 +496,7 @@ def debugdag(ui, repo, file_=None, *revs, **opts):
         ui.write(line)
         ui.write("\n")
 
-@command('debugdata', commands.debugrevlogopts, _('-c|-m|FILE REV'))
+@command('debugdata', cmdutil.debugrevlogopts, _('-c|-m|FILE REV'))
 def debugdata(ui, repo, file_, rev=None, **opts):
     """dump the contents of a data file revision"""
     if opts.get('changelog') or opts.get('manifest') or opts.get('dir'):
@@ -531,7 +528,7 @@ def debugdate(ui, date, range=None, **opts):
         ui.write(("match: %s\n") % m(d[0]))
 
 @command('debugdeltachain',
-    commands.debugrevlogopts + commands.formatteropts,
+    cmdutil.debugrevlogopts + cmdutil.formatteropts,
     _('-c|-m|FILE'),
     optionalrepo=True)
 def debugdeltachain(ui, repo, file_=None, **opts):
@@ -560,7 +557,7 @@ def debugdeltachain(ui, repo, file_=None, **opts):
     """
     r = cmdutil.openrevlog(repo, 'debugdeltachain', file_, opts)
     index = r.index
-    generaldelta = r.version & revlog.REVLOGGENERALDELTA
+    generaldelta = r.version & revlog.FLAG_GENERALDELTA
 
     def revinfo(rev):
         e = index[rev]
@@ -666,7 +663,7 @@ def debugstate(ui, repo, **opts):
     [('', 'old', None, _('use old-style discovery')),
     ('', 'nonheads', None,
      _('use old-style discovery with non-heads included')),
-    ] + commands.remoteopts,
+    ] + cmdutil.remoteopts,
     _('[-l REV] [-r REV] [-b BRANCH]... [OTHER]'))
 def debugdiscovery(ui, repo, remoteurl="default", **opts):
     """runs the changeset discovery protocol in isolation"""
@@ -728,7 +725,7 @@ def debugdiscovery(ui, repo, remoteurl="default", **opts):
         localrevs = opts.get('local_head')
         doit(localrevs, remoterevs)
 
-@command('debugextensions', commands.formatteropts, [], norepo=True)
+@command('debugextensions', cmdutil.formatteropts, [], norepo=True)
 def debugextensions(ui, **opts):
     '''show information about active extensions'''
     exts = extensions.extensions(ui)
@@ -847,11 +844,7 @@ def debugignore(ui, repo, *files, **opts):
     ignore = repo.dirstate._ignore
     if not files:
         # Show all the patterns
-        includepat = getattr(ignore, 'includepat', None)
-        if includepat is not None:
-            ui.write("%s\n" % includepat)
-        else:
-            raise error.Abort(_("no ignore patterns found"))
+        ui.write("%s\n" % repr(ignore))
     else:
         for f in files:
             nf = util.normpath(f)
@@ -880,7 +873,7 @@ def debugignore(ui, repo, *files, **opts):
             else:
                 ui.write(_("%s is not ignored\n") % f)
 
-@command('debugindex', commands.debugrevlogopts +
+@command('debugindex', cmdutil.debugrevlogopts +
     [('f', 'format', 0, _('revlog format'), _('FORMAT'))],
     _('[-f FORMAT] -c|-m|FILE'),
     optionalrepo=True)
@@ -891,7 +884,7 @@ def debugindex(ui, repo, file_=None, **opts):
     if format not in (0, 1):
         raise error.Abort(_("unknown format %d") % format)
 
-    generaldelta = r.version & revlog.REVLOGGENERALDELTA
+    generaldelta = r.version & revlog.FLAG_GENERALDELTA
     if generaldelta:
         basehdr = ' delta'
     else:
@@ -936,7 +929,7 @@ def debugindex(ui, repo, file_=None, **opts):
                     i, r.flags(i), r.start(i), r.length(i), r.rawsize(i),
                     base, r.linkrev(i), pr[0], pr[1], shortfn(node)))
 
-@command('debugindexdot', commands.debugrevlogopts,
+@command('debugindexdot', cmdutil.debugrevlogopts,
     _('-c|-m|FILE'), optionalrepo=True)
 def debugindexdot(ui, repo, file_=None, **opts):
     """dump an index DAG as a graphviz dot file"""
@@ -950,7 +943,7 @@ def debugindexdot(ui, repo, file_=None, **opts):
             ui.write("\t%d -> %d\n" % (r.rev(pp[1]), i))
     ui.write("}\n")
 
-@command('debuginstall', [] + commands.formatteropts, '', norepo=True)
+@command('debuginstall', [] + cmdutil.formatteropts, '', norepo=True)
 def debuginstall(ui, **opts):
     '''test Mercurial installation
 
@@ -1020,19 +1013,20 @@ def debuginstall(ui, **opts):
     fm.write('hgmodules', _("checking installed modules (%s)...\n"),
              os.path.dirname(pycompat.fsencode(__file__)))
 
-    err = None
-    try:
-        from . import (
-            base85,
-            bdiff,
-            mpatch,
-            osutil,
-        )
-        dir(bdiff), dir(mpatch), dir(base85), dir(osutil) # quiet pyflakes
-    except Exception as inst:
-        err = inst
-        problems += 1
-    fm.condwrite(err, 'extensionserror', " %s\n", err)
+    if policy.policy in ('c', 'allow'):
+        err = None
+        try:
+            from .cext import (
+                base85,
+                bdiff,
+                mpatch,
+                osutil,
+            )
+            dir(bdiff), dir(mpatch), dir(base85), dir(osutil) # quiet pyflakes
+        except Exception as inst:
+            err = inst
+            problems += 1
+        fm.condwrite(err, 'extensionserror', " %s\n", err)
 
     compengines = util.compengines._engines.values()
     fm.write('compengines', _('checking registered compression engines (%s)\n'),
@@ -1330,9 +1324,11 @@ def debugnamecomplete(ui, repo, *args):
          ('', 'record-parents', False,
           _('record parent information for the precursor')),
          ('r', 'rev', [], _('display markers relevant to REV')),
+         ('', 'exclusive', False, _('restrict display to markers only '
+                                    'relevant to REV')),
          ('', 'index', False, _('display index of the marker')),
          ('', 'delete', [], _('delete markers specified by indices')),
-        ] + commands.commitopts2 + commands.formatteropts,
+        ] + cmdutil.commitopts2 + cmdutil.formatteropts,
          _('[OBSOLETED [REPLACEMENT ...]]'))
 def debugobsolete(ui, repo, precursor=None, *successors, **opts):
     """create arbitrary obsolete marker
@@ -1396,7 +1392,7 @@ def debugobsolete(ui, repo, precursor=None, *successors, **opts):
                     parents = tuple(p.node() for p in parents)
                 repo.obsstore.create(tr, prec, succs, opts['flags'],
                                      parents=parents, date=date,
-                                     metadata=metadata)
+                                     metadata=metadata, ui=ui)
                 tr.close()
             except ValueError as exc:
                 raise error.Abort(_('bad obsmarker input: %s') % exc)
@@ -1408,7 +1404,8 @@ def debugobsolete(ui, repo, precursor=None, *successors, **opts):
         if opts['rev']:
             revs = scmutil.revrange(repo, opts['rev'])
             nodes = [repo[r].node() for r in revs]
-            markers = list(obsolete.getmarkers(repo, nodes=nodes))
+            markers = list(obsolete.getmarkers(repo, nodes=nodes,
+                                               exclusive=opts['exclusive']))
             markers.sort(key=lambda x: x._data)
         else:
             markers = obsolete.getmarkers(repo)
@@ -1500,6 +1497,84 @@ def debugpathcomplete(ui, repo, *specs, **opts):
     files.update(dirs)
     ui.write('\n'.join(repo.pathto(p, cwd) for p in sorted(files)))
     ui.write('\n')
+
+@command('debugpickmergetool',
+        [('r', 'rev', '', _('check for files in this revision'), _('REV')),
+         ('', 'changedelete', None, _('emulate merging change and delete')),
+        ] + cmdutil.walkopts + cmdutil.mergetoolopts,
+        _('[PATTERN]...'),
+        inferrepo=True)
+def debugpickmergetool(ui, repo, *pats, **opts):
+    """examine which merge tool is chosen for specified file
+
+    As described in :hg:`help merge-tools`, Mercurial examines
+    configurations below in this order to decide which merge tool is
+    chosen for specified file.
+
+    1. ``--tool`` option
+    2. ``HGMERGE`` environment variable
+    3. configurations in ``merge-patterns`` section
+    4. configuration of ``ui.merge``
+    5. configurations in ``merge-tools`` section
+    6. ``hgmerge`` tool (for historical reason only)
+    7. default tool for fallback (``:merge`` or ``:prompt``)
+
+    This command writes out examination result in the style below::
+
+        FILE = MERGETOOL
+
+    By default, all files known in the first parent context of the
+    working directory are examined. Use file patterns and/or -I/-X
+    options to limit target files. -r/--rev is also useful to examine
+    files in another context without actual updating to it.
+
+    With --debug, this command shows warning messages while matching
+    against ``merge-patterns`` and so on, too. It is recommended to
+    use this option with explicit file patterns and/or -I/-X options,
+    because this option increases amount of output per file according
+    to configurations in hgrc.
+
+    With -v/--verbose, this command shows configurations below at
+    first (only if specified).
+
+    - ``--tool`` option
+    - ``HGMERGE`` environment variable
+    - configuration of ``ui.merge``
+
+    If merge tool is chosen before matching against
+    ``merge-patterns``, this command can't show any helpful
+    information, even with --debug. In such case, information above is
+    useful to know why a merge tool is chosen.
+    """
+    overrides = {}
+    if opts['tool']:
+        overrides[('ui', 'forcemerge')] = opts['tool']
+        ui.note(('with --tool %r\n') % (opts['tool']))
+
+    with ui.configoverride(overrides, 'debugmergepatterns'):
+        hgmerge = encoding.environ.get("HGMERGE")
+        if hgmerge is not None:
+            ui.note(('with HGMERGE=%r\n') % (hgmerge))
+        uimerge = ui.config("ui", "merge")
+        if uimerge:
+            ui.note(('with ui.merge=%r\n') % (uimerge))
+
+        ctx = scmutil.revsingle(repo, opts.get('rev'))
+        m = scmutil.match(ctx, pats, opts)
+        changedelete = opts['changedelete']
+        for path in ctx.walk(m):
+            fctx = ctx[path]
+            try:
+                if not ui.debugflag:
+                    ui.pushbuffer(error=True)
+                tool, toolpath = filemerge._picktool(repo, ui, path,
+                                                     fctx.isbinary(),
+                                                     'l' in fctx.flags(),
+                                                     changedelete)
+            finally:
+                if not ui.debugflag:
+                    ui.popbuffer()
+            ui.write(('%s = %s\n') % (path, tool))
 
 @command('debugpushkey', [], _('REPO NAMESPACE [KEY OLD NEW]'), norepo=True)
 def debugpushkey(ui, repopath, namespace, *keyinfo, **opts):
@@ -1603,7 +1678,7 @@ def debugrename(ui, repo, file1, *pats, **opts):
         else:
             ui.write(_("%s not renamed\n") % rel)
 
-@command('debugrevlog', commands.debugrevlogopts +
+@command('debugrevlog', cmdutil.debugrevlogopts +
     [('d', 'dump', False, _('dump index data'))],
     _('-c|-m|FILE'),
     optionalrepo=True)
@@ -1645,9 +1720,9 @@ def debugrevlog(ui, repo, file_=None, **opts):
     format = v & 0xFFFF
     flags = []
     gdelta = False
-    if v & revlog.REVLOGNGINLINEDATA:
+    if v & revlog.FLAG_INLINE_DATA:
         flags.append('inline')
-    if v & revlog.REVLOGGENERALDELTA:
+    if v & revlog.FLAG_GENERALDELTA:
         gdelta = True
         flags.append('generaldelta')
     if not flags:
@@ -1706,9 +1781,9 @@ def debugrevlog(ui, repo, file_=None, **opts):
                 numother += 1
 
         # Obtain data on the raw chunks in the revlog.
-        chunk = r._chunkraw(rev, rev)[1]
-        if chunk:
-            chunktype = chunk[0]
+        segment = r._getsegmentforrevs(rev, rev)[1]
+        if segment:
+            chunktype = segment[0]
         else:
             chunktype = 'empty'
 
@@ -1826,6 +1901,8 @@ def debugrevlog(ui, repo, file_=None, **opts):
 @command('debugrevspec',
     [('', 'optimize', None,
       _('print parsed tree after optimizing (DEPRECATED)')),
+     ('', 'show-revs', True, _('print list of result revisions (default)')),
+     ('s', 'show-set', None, _('print internal representation of result set')),
      ('p', 'show-stage', [],
       _('print parsed tree at the given stage'), _('NAME')),
      ('', 'no-optimized', False, _('evaluate tree without optimization')),
@@ -1837,6 +1914,9 @@ def debugrevspec(ui, repo, expr, **opts):
 
     Use -p/--show-stage option to print the parsed tree at the given stages.
     Use -p all to print tree at every stage.
+
+    Use --no-show-revs option with -s or -p to print only the set
+    representation or the parsed tree respectively.
 
     Use --verify-optimized to compare the optimized result with the unoptimized
     one. Returns 1 if the optimized result differs.
@@ -1887,9 +1967,9 @@ def debugrevspec(ui, repo, expr, **opts):
     if opts['verify_optimized']:
         arevs = revset.makematcher(treebystage['analyzed'])(repo)
         brevs = revset.makematcher(treebystage['optimized'])(repo)
-        if ui.verbose:
-            ui.note(("* analyzed set:\n"), smartset.prettyformat(arevs), "\n")
-            ui.note(("* optimized set:\n"), smartset.prettyformat(brevs), "\n")
+        if opts['show_set'] or (opts['show_set'] is None and ui.verbose):
+            ui.write(("* analyzed set:\n"), smartset.prettyformat(arevs), "\n")
+            ui.write(("* optimized set:\n"), smartset.prettyformat(brevs), "\n")
         arevs = list(arevs)
         brevs = list(brevs)
         if arevs == brevs:
@@ -1911,8 +1991,10 @@ def debugrevspec(ui, repo, expr, **opts):
 
     func = revset.makematcher(tree)
     revs = func(repo)
-    if ui.verbose:
-        ui.note(("* set:\n"), smartset.prettyformat(revs), "\n")
+    if opts['show_set'] or (opts['show_set'] is None and ui.verbose):
+        ui.write(("* set:\n"), smartset.prettyformat(revs), "\n")
+    if not opts['show_revs']:
+        return
     for c in revs:
         ui.write("%s\n" % c)
 
@@ -2038,17 +2120,22 @@ def debugtemplate(ui, repo, tmpl, **opts):
         if newtree != tree:
             ui.note(("* expanded:\n"), templater.prettyformat(newtree), '\n')
 
-    mapfile = None
     if revs is None:
-        k = 'debugtemplate'
-        t = formatter.maketemplater(ui, k, tmpl)
-        ui.write(templater.stringify(t(k, ui=ui, **props)))
+        t = formatter.maketemplater(ui, tmpl)
+        props['ui'] = ui
+        ui.write(t.render(props))
     else:
-        displayer = cmdutil.changeset_templater(ui, repo, None, opts, tmpl,
-                                                mapfile, buffered=False)
+        displayer = cmdutil.makelogtemplater(ui, repo, tmpl)
         for r in revs:
             displayer.show(repo[r], **props)
         displayer.close()
+
+@command('debugupdatecaches', [])
+def debugupdatecaches(ui, repo, *pats, **opts):
+    """warm all known caches in the repository"""
+    with repo.wlock():
+        with repo.lock():
+            repo.updatecaches()
 
 @command('debugupgraderepo', [
     ('o', 'optimize', [], _('extra optimization to perform'), _('NAME')),
@@ -2075,12 +2162,13 @@ def debugupgraderepo(ui, repo, run=False, optimize=None):
     """
     return upgrade.upgraderepo(ui, repo, run=run, optimize=optimize)
 
-@command('debugwalk', commands.walkopts, _('[OPTION]... [FILE]...'),
+@command('debugwalk', cmdutil.walkopts, _('[OPTION]... [FILE]...'),
          inferrepo=True)
 def debugwalk(ui, repo, *pats, **opts):
     """show how files match on given patterns"""
     m = scmutil.match(repo[None], pats, opts)
-    items = list(repo.walk(m))
+    ui.write(('matcher: %r\n' % m))
+    items = list(repo[None].walk(m))
     if not items:
         return
     f = lambda fn: fn
@@ -2097,12 +2185,12 @@ def debugwalk(ui, repo, *pats, **opts):
     [('', 'three', '', 'three'),
     ('', 'four', '', 'four'),
     ('', 'five', '', 'five'),
-    ] + commands.remoteopts,
+    ] + cmdutil.remoteopts,
     _('REPO [OPTIONS]... [ONE [TWO]]'),
     norepo=True)
 def debugwireargs(ui, repopath, *vals, **opts):
     repo = hg.peer(ui, opts, repopath)
-    for opt in commands.remoteopts:
+    for opt in cmdutil.remoteopts:
         del opts[opt[1]]
     args = {}
     for k, v in opts.iteritems():

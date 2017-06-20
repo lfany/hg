@@ -1,3 +1,5 @@
+#require no-windows
+
 ATTENTION: logtoprocess runs commands asynchronously. Be sure to append "| cat"
 to hg commands, to wait for the output, if you want to test its output.
 Otherwise the test will be flaky.
@@ -6,10 +8,10 @@ Test if logtoprocess correctly captures command-related log calls.
 
   $ hg init
   $ cat > $TESTTMP/foocommand.py << EOF
-  > from mercurial import cmdutil
+  > from mercurial import registrar
   > from time import sleep
   > cmdtable = {}
-  > command = cmdutil.command(cmdtable)
+  > command = registrar.command(cmdtable)
   > @command('foo', [])
   > def foo(ui, repo):
   >     ui.log('foo', 'a message: %(bar)s\n', bar='spam')

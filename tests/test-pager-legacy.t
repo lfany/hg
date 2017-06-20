@@ -14,7 +14,7 @@ pager was running.
   > [extensions]
   > pager=
   > [pager]
-  > pager = python $TESTTMP/fakepager.py
+  > pager = $PYTHON $TESTTMP/fakepager.py
   > EOF
 
   $ hg init repo
@@ -22,7 +22,7 @@ pager was running.
   $ echo a >> a
   $ hg add a
   $ hg ci -m 'add a'
-  $ for x in `python $TESTDIR/seq.py 1 10`; do
+  $ for x in `$PYTHON $TESTDIR/seq.py 1 10`; do
   >   echo a $x >> a
   >   hg ci -m "modify a $x"
   > done
@@ -214,9 +214,9 @@ pager is globally set to off using a flag:
 Pager should not override the exit code of other commands
 
   $ cat >> $TESTTMP/fortytwo.py <<'EOF'
-  > from mercurial import cmdutil, commands
+  > from mercurial import registrar, commands
   > cmdtable = {}
-  > command = cmdutil.command(cmdtable)
+  > command = registrar.command(cmdtable)
   > @command('fortytwo', [], 'fortytwo', norepo=True)
   > def fortytwo(ui, *opts):
   >     ui.write('42\n')

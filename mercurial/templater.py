@@ -53,6 +53,7 @@ def tokenize(program, start, end, term=None):
     """Parse a template expression into a stream of tokens, which must end
     with term if specified"""
     pos = start
+    program = pycompat.bytestr(program)
     while pos < end:
         c = program[pos]
         if c.isspace(): # skip inter-token whitespace
@@ -959,6 +960,9 @@ def shortest(context, mapping, args):
                 return True
         except error.RevlogError:
             return False
+        except error.WdirUnsupported:
+            # single 'ff...' match
+            return True
 
     shortest = node
     startlength = max(6, minlength)
@@ -1293,6 +1297,10 @@ class templater(object):
                 raise IOError(inst.args[0], _('template file %s: %s') %
                               (self.map[t][1], inst.args[1]))
         return self.cache[t]
+
+    def render(self, mapping):
+        """Render the default unnamed template and return result as string"""
+        return stringify(self('', **mapping))
 
     def __call__(self, t, **mapping):
         ttype = t in self.map and self.map[t][0] or 'default'

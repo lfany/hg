@@ -786,7 +786,7 @@ def driverconclude(repo, ms, wctx, labels=None):
     return True
 
 def manifestmerge(repo, wctx, p2, pa, branchmerge, force, matcher,
-                  acceptremote, followcopies):
+                  acceptremote, followcopies, forcefulldiff=False):
     """
     Merge wctx and p2 with ancestor pa and generate merge action list
 
@@ -801,15 +801,18 @@ def manifestmerge(repo, wctx, p2, pa, branchmerge, force, matcher,
 
     # manifests fetched in order are going to be faster, so prime the caches
     [x.manifest() for x in
-     sorted(wctx.parents() + [p2, pa], key=lambda x: x.rev())]
+     sorted(wctx.parents() + [p2, pa], key=scmutil.intrev)]
 
     if followcopies:
         ret = copies.mergecopies(repo, wctx, p2, pa)
         copy, movewithdir, diverge, renamedelete, dirmove = ret
 
+    boolbm = pycompat.bytestr(bool(branchmerge))
+    boolf = pycompat.bytestr(bool(force))
+    boolm = pycompat.bytestr(bool(matcher))
     repo.ui.note(_("resolving manifests\n"))
     repo.ui.debug(" branchmerge: %s, force: %s, partial: %s\n"
-                  % (bool(branchmerge), bool(force), bool(matcher)))
+                  % (boolbm, boolf, boolm))
     repo.ui.debug(" ancestor: %s, local: %s, remote: %s\n" % (pa, wctx, p2))
 
     m1, m2, ma = wctx.manifest(), p2.manifest(), pa.manifest()
@@ -820,6 +823,25 @@ def manifestmerge(repo, wctx, p2, pa, branchmerge, force, matcher,
         # check whether sub state is modified
         if any(wctx.sub(s).dirty() for s in wctx.substate):
             m1['.hgsubstate'] = modifiednodeid
+
+    # Don't use m2-vs-ma optimization if:
+    # - ma is the same as m1 or m2, which we're just going to diff again later
+    # - The caller specifically asks for a full diff, which is useful during bid
+    #   merge.
+    if (pa not in ([wctx, p2] + wctx.parents()) and not forcefulldiff):
+        # Identify which files are relevant to the merge, so we can limit the
+        # total m1-vs-m2 diff to just those files. This has significant
+        # performance benefits in large repositories.
+        relevantfiles = set(ma.diff(m2).keys())
+
+        # For copied and moved files, we need to add the source file too.
+        for copykey, copyvalue in copy.iteritems():
+            if copyvalue in relevantfiles:
+                relevantfiles.add(copykey)
+        for movedirkey in movewithdir:
+            relevantfiles.add(movedirkey)
+        filesmatcher = scmutil.matchfiles(repo, relevantfiles)
+        matcher = matchmod.intersectmatchers(matcher, filesmatcher)
 
     diff = m1.diff(m2, match=matcher)
 
@@ -974,7 +996,7 @@ def calculateupdates(repo, wctx, mctx, ancestors, branchmerge, force,
             repo.ui.note(_('\ncalculating bids for ancestor %s\n') % ancestor)
             actions, diverge1, renamedelete1 = manifestmerge(
                 repo, wctx, mctx, ancestor, branchmerge, force, matcher,
-                acceptremote, followcopies)
+                acceptremote, followcopies, forcefulldiff=True)
             _checkunknownfiles(repo, wctx, mctx, force, actions, mergeforce)
 
             # Track the shortest set of warning on the theory that bid
@@ -1268,7 +1290,7 @@ def applyupdates(repo, actions, wctx, mctx, overwrite, labels=None):
         progress(_updating, z, item=f, total=numupdates, unit=_files)
         flags, = args
         audit(f)
-        util.setflags(repo.wjoin(f), 'l' in flags, 'x' in flags)
+        repo.wvfs.setflags(f, 'l' in flags, 'x' in flags)
         updated += 1
 
     # the ordering is important here -- ms.mergedriver will raise if the merge
@@ -1676,15 +1698,14 @@ def update(repo, node, branchmerge, force, ancestor=None,
         stats = applyupdates(repo, actions, wc, p2, overwrite, labels=labels)
 
         if not partial:
-            repo.dirstate.beginparentchange()
-            repo.setparents(fp1, fp2)
-            recordupdates(repo, actions, branchmerge)
-            # update completed, clear state
-            util.unlink(repo.vfs.join('updatestate'))
+            with repo.dirstate.parentchange():
+                repo.setparents(fp1, fp2)
+                recordupdates(repo, actions, branchmerge)
+                # update completed, clear state
+                util.unlink(repo.vfs.join('updatestate'))
 
-            if not branchmerge:
-                repo.dirstate.setbranch(p2.branch())
-            repo.dirstate.endparentchange()
+                if not branchmerge:
+                    repo.dirstate.setbranch(p2.branch())
 
     if not partial:
         repo.hook('update', parent1=xp1, parent2=xp2, error=stats[3])
@@ -1722,10 +1743,9 @@ def graft(repo, ctx, pctx, labels, keepparent=False):
         parents.remove(pctx)
         pother = parents[0].node()
 
-    repo.dirstate.beginparentchange()
-    repo.setparents(repo['.'].node(), pother)
-    repo.dirstate.write(repo.currenttransaction())
-    # fix up dirstate for copies and renames
-    copies.duplicatecopies(repo, ctx.rev(), pctx.rev())
-    repo.dirstate.endparentchange()
+    with repo.dirstate.parentchange():
+        repo.setparents(repo['.'].node(), pother)
+        repo.dirstate.write(repo.currenttransaction())
+        # fix up dirstate for copies and renames
+        copies.duplicatecopies(repo, ctx.rev(), pctx.rev())
     return stats

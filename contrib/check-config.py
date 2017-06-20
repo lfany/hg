@@ -14,8 +14,26 @@ import sys
 foundopts = {}
 documented = {}
 
-configre = (r"""ui\.config(|int|bool|list)\(['"](\S+)['"],\s*"""
-            r"""['"](\S+)['"](,\s+(?:default=)?(\S+?))?\)""")
+configre = re.compile(r'''
+    # Function call
+    ui\.config(?P<ctype>|int|bool|list)\(
+        # First argument.
+        ['"](?P<section>\S+)['"],\s*
+        # Second argument
+        ['"](?P<option>\S+)['"](,\s+
+        (?:default=)?(?P<default>\S+?))?
+    \)''', re.VERBOSE | re.MULTILINE)
+
+configwithre = re.compile('''
+    ui\.config(?P<ctype>with)\(
+        # First argument is callback function. This doesn't parse robustly
+        # if it is e.g. a function call.
+        [^,]+,\s*
+        ['"](?P<section>\S+)['"],\s*
+        ['"](?P<option>\S+)['"](,\s+
+        (?:default=)?(?P<default>\S+?))?
+    \)''', re.VERBOSE | re.MULTILINE)
+
 configpartialre = (r"""ui\.config""")
 
 def main(args):
@@ -71,13 +89,13 @@ def main(args):
 
             # look for code-like bits
             line = carryover + l
-            m = re.search(configre, line, re.MULTILINE)
+            m = configre.search(line) or configwithre.search(line)
             if m:
-                ctype = m.group(1)
+                ctype = m.group('ctype')
                 if not ctype:
                     ctype = 'str'
-                name = m.group(2) + "." + m.group(3)
-                default = m.group(5)
+                name = m.group('section') + "." + m.group('option')
+                default = m.group('default')
                 if default in (None, 'False', 'None', '0', '[]', '""', "''"):
                     default = ''
                 if re.match('[a-z.]+$', default):

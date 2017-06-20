@@ -16,6 +16,7 @@ from .i18n import _
 from .node import (
     bin,
     hex,
+    nullid,
 )
 
 from . import (
@@ -410,7 +411,7 @@ class wirepeer(peer.peerrepository):
         remote server as a bundle.
 
         When pushing a bundle10 stream, return an integer indicating the
-        result of the push (see localrepository.addchangegroup()).
+        result of the push (see changegroup.apply()).
 
         When pushing a bundle20 stream, return a bundle20 stream.
 
@@ -753,12 +754,12 @@ def _capabilities(repo, proto):
     """
     # copy to prevent modification of the global list
     caps = list(wireprotocaps)
-    if streamclone.allowservergeneration(repo.ui):
+    if streamclone.allowservergeneration(repo):
         if repo.ui.configbool('server', 'preferuncompressed', False):
             caps.append('stream-preferred')
         requiredformats = repo.requirements & repo.supportedformats
         # if our local revlogs are just revlogv1, add 'stream' cap
-        if not requiredformats - set(('revlogv1',)):
+        if not requiredformats - {'revlogv1'}:
             caps.append('stream')
         # otherwise, add 'streamreqs' detailing our local revlog format
         else:
@@ -841,6 +842,17 @@ def getbundle(repo, proto, others):
                               hint=bundle2requiredhint)
 
     try:
+        if repo.ui.configbool('server', 'disablefullbundle', False):
+            # Check to see if this is a full clone.
+            clheads = set(repo.changelog.heads())
+            heads = set(opts.get('heads', set()))
+            common = set(opts.get('common', set()))
+            common.discard(nullid)
+            if not common and clheads == heads:
+                raise error.Abort(
+                    _('server has pull-based clones disabled'),
+                    hint=_('remove --pull if specified or upgrade Mercurial'))
+
         chunks = exchange.getbundlechunks(repo, 'serve', **opts)
     except error.Abort as exc:
         # cleanly forward Abort error to the client
@@ -934,7 +946,7 @@ def stream(repo, proto):
     capability with a value representing the version and flags of the repo
     it is serving. Client checks to see if it understands the format.
     '''
-    if not streamclone.allowservergeneration(repo.ui):
+    if not streamclone.allowservergeneration(repo):
         return '1\n'
 
     def getstream(it):

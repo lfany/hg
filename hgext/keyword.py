@@ -94,7 +94,6 @@ from mercurial.hgweb import webcommands
 
 from mercurial import (
     cmdutil,
-    commands,
     context,
     dispatch,
     error,
@@ -111,7 +110,7 @@ from mercurial import (
 )
 
 cmdtable = {}
-command = cmdutil.command(cmdtable)
+command = registrar.command(cmdtable)
 # Note for extension authors: ONLY specify testedwith = 'ships-with-hg-core' for
 # extensions which SHIP WITH MERCURIAL. Non-mainline extensions should
 # be specifying the version(s) of Mercurial they are tested with, or
@@ -240,8 +239,8 @@ class kwtemplater(object):
         '''Replaces keywords in data with expanded template.'''
         def kwsub(mobj):
             kw = mobj.group(1)
-            ct = cmdutil.changeset_templater(self.ui, self.repo, False, None,
-                                             self.templates[kw], '', False)
+            ct = cmdutil.makelogtemplater(self.ui, self.repo,
+                                          self.templates[kw])
             self.ui.pushbuffer()
             ct.show(ctx, root=self.repo.root, file=path)
             ekw = templatefilters.firstline(self.ui.popbuffer())
@@ -481,7 +480,7 @@ def demo(ui, repo, *args, **opts):
     repo.wvfs.rmtree(repo.root)
 
 @command('kwexpand',
-    commands.walkopts,
+    cmdutil.walkopts,
     _('hg kwexpand [OPTION]... [FILE]...'),
     inferrepo=True)
 def expand(ui, repo, *pats, **opts):
@@ -498,7 +497,7 @@ def expand(ui, repo, *pats, **opts):
          [('A', 'all', None, _('show keyword status flags of all files')),
           ('i', 'ignore', None, _('show files excluded from expansion')),
           ('u', 'unknown', None, _('only show unknown (not tracked) files')),
-         ] + commands.walkopts,
+         ] + cmdutil.walkopts,
          _('hg kwfiles [OPTION]... [FILE]...'),
          inferrepo=True)
 def files(ui, repo, *pats, **opts):
@@ -557,7 +556,7 @@ def files(ui, repo, *pats, **opts):
     fm.end()
 
 @command('kwshrink',
-    commands.walkopts,
+    cmdutil.walkopts,
     _('hg kwshrink [OPTION]... [FILE]...'),
     inferrepo=True)
 def shrink(ui, repo, *pats, **opts):
@@ -640,22 +639,21 @@ def reposetup(ui, repo):
             return n
 
         def rollback(self, dryrun=False, force=False):
-            wlock = self.wlock()
-            origrestrict = kwt.restrict
-            try:
-                if not dryrun:
-                    changed = self['.'].files()
-                ret = super(kwrepo, self).rollback(dryrun, force)
-                if not dryrun:
-                    ctx = self['.']
-                    modified, added = _preselect(ctx.status(), changed)
-                    kwt.restrict = False
-                    kwt.overwrite(ctx, modified, True, True)
-                    kwt.overwrite(ctx, added, True, False)
-                return ret
-            finally:
-                kwt.restrict = origrestrict
-                wlock.release()
+            with self.wlock():
+                origrestrict = kwt.restrict
+                try:
+                    if not dryrun:
+                        changed = self['.'].files()
+                    ret = super(kwrepo, self).rollback(dryrun, force)
+                    if not dryrun:
+                        ctx = self['.']
+                        modified, added = _preselect(ctx.status(), changed)
+                        kwt.restrict = False
+                        kwt.overwrite(ctx, modified, True, True)
+                        kwt.overwrite(ctx, added, True, False)
+                    return ret
+                finally:
+                    kwt.restrict = origrestrict
 
     # monkeypatches
     def kwpatchfile_init(orig, self, ui, gp, backend, store, eolmode=None):

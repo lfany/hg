@@ -8,11 +8,17 @@
 from __future__ import absolute_import
 
 from .i18n import _
-from .node import hex, nullid
+from .node import (
+    hex,
+    nullid,
+    short,
+)
+
 from . import (
     encoding,
     error,
     hbisect,
+    obsutil,
     patch,
     registrar,
     scmutil,
@@ -158,10 +164,10 @@ def _formatrevnode(ctx):
     template provided by cmdutil.changeset_templater"""
     repo = ctx.repo()
     if repo.ui.debugflag:
-        hexnode = ctx.hex()
+        hexfunc = hex
     else:
-        hexnode = ctx.hex()[:12]
-    return '%d:%s' % (scmutil.intrev(ctx.rev()), hexnode)
+        hexfunc = short
+    return '%d:%s' % (scmutil.intrev(ctx), hexfunc(scmutil.binnode(ctx)))
 
 def getfiles(repo, ctx, revcache):
     if 'files' not in revcache:
@@ -555,6 +561,17 @@ def showobsolete(repo, ctx, templ, **args):
         return 'obsolete'
     return ''
 
+@templatekeyword("predecessors")
+def showpredecessors(repo, ctx, **args):
+    """Returns the list if the closest visible successors
+    """
+    predecessors = sorted(obsutil.closestpredecessors(repo, ctx.node()))
+    predecessors = map(hex, predecessors)
+
+    return _hybrid(None, predecessors,
+                   lambda x: {'ctx': repo[x], 'revcache': {}},
+                   lambda d: _formatrevnode(d['ctx']))
+
 @templatekeyword('p1rev')
 def showp1rev(repo, ctx, templ, **args):
     """Integer. The repository-local revision number of the changeset's
@@ -611,7 +628,7 @@ def showphaseidx(repo, ctx, templ, **args):
 @templatekeyword('rev')
 def showrev(repo, ctx, templ, **args):
     """Integer. The repository-local changeset revision number."""
-    return scmutil.intrev(ctx.rev())
+    return scmutil.intrev(ctx)
 
 def showrevslist(name, revs, **args):
     """helper to generate a list of revisions in which a mapped template will

@@ -28,7 +28,7 @@ from .common import (
 
 from .. import (
     archival,
-    context,
+    dagop,
     encoding,
     error,
     graphmod,
@@ -808,7 +808,7 @@ def comparison(web, req, tmpl):
         context = parsecontext(web.config('web', 'comparisoncontext', '5'))
 
     def filelines(f):
-        if util.binary(f.data()):
+        if f.isbinary():
             mt = mimetypes.guess_type(f.path())[0]
             if not mt:
                 mt = 'application/octet-stream'
@@ -886,7 +886,7 @@ def annotate(web, req, tmpl):
             yield p
 
     def annotate(**map):
-        if util.binary(fctx.data()):
+        if fctx.isbinary():
             mt = (mimetypes.guess_type(fctx.path())[0]
                   or 'application/octet-stream')
             lines = [((fctx.filectx(fctx.filerev()), 1), '(binary:%s)' % mt)]
@@ -1013,9 +1013,9 @@ def filelog(web, req, tmpl):
         # would required a dedicated "revnav" class
         nav = None
         if descend:
-            it = context.blockdescendants(fctx, *lrange)
+            it = dagop.blockdescendants(fctx, *lrange)
         else:
-            it = context.blockancestors(fctx, *lrange)
+            it = dagop.blockancestors(fctx, *lrange)
         for i, (c, lr) in enumerate(it, 1):
             diffs = None
             if patch:
@@ -1374,7 +1374,7 @@ def help(web, req, tmpl):
         subtopic = None
 
     try:
-        doc = helpmod.help_(u, topic, subtopic=subtopic)
+        doc = helpmod.help_(u, commands, topic, subtopic=subtopic)
     except error.UnknownCommand:
         raise ErrorResponse(HTTP_NOT_FOUND)
     return tmpl('help', topic=topicname, doc=doc)

@@ -34,7 +34,7 @@ from mercurial import (
 testedwith = 'ships-with-hg-core'
 
 cmdtable = {}
-command = cmdutil.command(cmdtable)
+command = registrar.command(cmdtable)
 revsetpredicate = registrar.revsetpredicate()
 
 class showcmdfunc(registrar._funcregistrarbase):
@@ -58,7 +58,7 @@ class showcmdfunc(registrar._funcregistrarbase):
 showview = showcmdfunc()
 
 @command('show', [
-    # TODO: Switch this template flag to use commands.formatteropts if
+    # TODO: Switch this template flag to use cmdutil.formatteropts if
     # 'hg show' becomes stable before --template/-T is stable. For now,
     # we are putting it here without the '(EXPERIMENTAL)' flag because it
     # is an important part of the 'hg show' user experience and the entire
@@ -185,7 +185,7 @@ def underwayrevset(repo, subset, x):
     # Add working directory parent.
     wdirrev = repo['.'].rev()
     if wdirrev != nullrev:
-        relevant += revset.baseset(set([wdirrev]))
+        relevant += revset.baseset({wdirrev})
 
     return subset & relevant
 
@@ -196,9 +196,8 @@ def showwork(ui, repo, fm):
     revs = repo.revs('sort(_underway(), topo)')
 
     revdag = graphmod.dagwalker(repo, revs)
-    displayer = cmdutil.changeset_templater(ui, repo, None, None,
-                                            tmpl=fm._t.load(fm._topic),
-                                            mapfile=None, buffered=True)
+    tmpl = fm._t.load(fm._topic)
+    displayer = cmdutil.makelogtemplater(ui, repo, tmpl, buffered=True)
 
     ui.setconfig('experimental', 'graphshorten', True)
     cmdutil.displaygraph(ui, repo, revdag, displayer, graphmod.asciiedges)

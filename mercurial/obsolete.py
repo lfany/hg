@@ -74,13 +74,14 @@ import struct
 
 from .i18n import _
 from . import (
-    base85,
     error,
     node,
-    parsers,
     phases,
+    policy,
     util,
 )
+
+parsers = policy.importmod(r'parsers')
 
 _pack = struct.pack
 _unpack = struct.unpack
@@ -95,6 +96,27 @@ _enabled = False
 createmarkersopt = 'createmarkers'
 allowunstableopt = 'allowunstable'
 exchangeopt = 'exchange'
+
+def isenabled(repo, option):
+    """Returns True if the given repository has the given obsolete option
+    enabled.
+    """
+    result = set(repo.ui.configlist('experimental', 'evolution'))
+    if 'all' in result:
+        return True
+
+    # For migration purposes, temporarily return true if the config hasn't been
+    # set but _enabled is true.
+    if len(result) == 0 and _enabled:
+        return True
+
+    # createmarkers must be enabled if other options are enabled
+    if ((allowunstableopt in result or exchangeopt in result) and
+        not createmarkersopt in result):
+        raise error.Abort(_("'createmarkers' obsolete option must be enabled "
+                           "if other obsolete options are enabled"))
+
+    return option in result
 
 ### obsolescence marker flag
 
@@ -218,8 +240,8 @@ def _fm0encodeonemarker(marker):
         if not parents:
             # mark that we explicitly recorded no parents
             metadata['p0'] = ''
-        for i, p in enumerate(parents):
-            metadata['p%i' % (i + 1)] = node.hex(p)
+        for i, p in enumerate(parents, 1):
+            metadata['p%i' % i] = node.hex(p)
     metadata = _fm0encodemeta(metadata)
     numsuc = len(sucs)
     format = _fm0fixed + (_fm0node * numsuc)
@@ -417,23 +439,28 @@ def _fm1readmarkers(data, off):
 formats = {_fm0version: (_fm0readmarkers, _fm0encodeonemarker),
            _fm1version: (_fm1readmarkers, _fm1encodeonemarker)}
 
+def _readmarkerversion(data):
+    return _unpack('>B', data[0:1])[0]
+
 @util.nogc
 def _readmarkers(data):
     """Read and enumerate markers from raw data"""
-    off = 0
-    diskversion = _unpack('>B', data[off:off + 1])[0]
-    off += 1
+    diskversion = _readmarkerversion(data)
+    off = 1
     if diskversion not in formats:
-        raise error.Abort(_('parsing obsolete marker: unknown version %r')
-                         % diskversion)
+        msg = _('parsing obsolete marker: unknown version %r') % diskversion
+        raise error.UnknownVersion(msg, version=diskversion)
     return diskversion, formats[diskversion][0](data, off)
+
+def encodeheader(version=_fm0version):
+    return _pack('>B', version)
 
 def encodemarkers(markers, addheader=False, version=_fm0version):
     # Kept separate from flushmarkers(), it will be reused for
     # markers exchange.
     encodeone = formats[version][1]
     if addheader:
-        yield _pack('>B', version)
+        yield encodeheader(version)
     for marker in markers:
         yield encodeone(marker)
 
@@ -531,7 +558,7 @@ class obsstore(object):
         # caches for various obsolescence related cache
         self.caches = {}
         self.svfs = svfs
-        self._version = defaultformat
+        self._defaultformat = defaultformat
         self._readonly = readonly
 
     def __iter__(self):
@@ -562,7 +589,7 @@ class obsstore(object):
         return self._readonly
 
     def create(self, transaction, prec, succs=(), flag=0, parents=None,
-               date=None, metadata=None):
+               date=None, metadata=None, ui=None):
         """obsolete: add a new obsolete marker
 
         * ensuring it is hashable
@@ -581,6 +608,10 @@ class obsstore(object):
             if 'date' in metadata:
                 # as a courtesy for out-of-tree extensions
                 date = util.parsedate(metadata.pop('date'))
+            elif ui is not None:
+                date = ui.configdate('devel', 'default-date')
+                if date is None:
+                    date = util.makedate()
             else:
                 date = util.makedate()
         if len(prec) != 20:
@@ -604,10 +635,11 @@ class obsstore(object):
         if self._readonly:
             raise error.Abort(_('creating obsolete markers is not enabled on '
                               'this repo'))
-        known = set(self._all)
+        known = set()
+        getsuccessors = self.successors.get
         new = []
         for m in markers:
-            if m not in known:
+            if m not in getsuccessors(m[0], ()) and m not in known:
                 known.add(m)
                 new.append(m)
         if new:
@@ -638,8 +670,19 @@ class obsstore(object):
         return self.add(transaction, markers)
 
     @propertycache
+    def _data(self):
+        return self.svfs.tryread('obsstore')
+
+    @propertycache
+    def _version(self):
+        if len(self._data) >= 1:
+            return _readmarkerversion(self._data)
+        else:
+            return self._defaultformat
+
+    @propertycache
     def _all(self):
-        data = self.svfs.tryread('obsstore')
+        data = self._data
         if not data:
             return []
         self._version, markers = _readmarkers(data)
@@ -694,6 +737,7 @@ class obsstore(object):
         seenmarkers = set()
         seennodes = set(pendingnodes)
         precursorsmarkers = self.precursors
+        succsmarkers = self.successors
         children = self.children
         while pendingnodes:
             direct = set()
@@ -701,12 +745,155 @@ class obsstore(object):
                 direct.update(precursorsmarkers.get(current, ()))
                 pruned = [m for m in children.get(current, ()) if not m[1]]
                 direct.update(pruned)
+                pruned = [m for m in succsmarkers.get(current, ()) if not m[1]]
+                direct.update(pruned)
             direct -= seenmarkers
             pendingnodes = set([m[0] for m in direct])
             seenmarkers |= direct
             pendingnodes -= seennodes
             seennodes |= pendingnodes
         return seenmarkers
+
+def makestore(ui, repo):
+    """Create an obsstore instance from a repo."""
+    # read default format for new obsstore.
+    # developer config: format.obsstore-version
+    defaultformat = ui.configint('format', 'obsstore-version', None)
+    # rely on obsstore class default when possible.
+    kwargs = {}
+    if defaultformat is not None:
+        kwargs['defaultformat'] = defaultformat
+    readonly = not isenabled(repo, createmarkersopt)
+    store = obsstore(repo.svfs, readonly=readonly, **kwargs)
+    if store and readonly:
+        ui.warn(_('obsolete feature not enabled but %i markers found!\n')
+                % len(list(store)))
+    return store
+
+def _filterprunes(markers):
+    """return a set with no prune markers"""
+    return set(m for m in markers if m[1])
+
+def exclusivemarkers(repo, nodes):
+    """set of markers relevant to "nodes" but no other locally-known nodes
+
+    This function compute the set of markers "exclusive" to a locally-known
+    node. This means we walk the markers starting from <nodes> until we reach a
+    locally-known precursors outside of <nodes>. Element of <nodes> with
+    locally-known successors outside of <nodes> are ignored (since their
+    precursors markers are also relevant to these successors).
+
+    For example:
+
+        # (A0 rewritten as A1)
+        #
+        # A0 <-1- A1 # Marker "1" is exclusive to A1
+
+        or
+
+        # (A0 rewritten as AX; AX rewritten as A1; AX is unkown locally)
+        #
+        # <-1- A0 <-2- AX <-3- A1 # Marker "2,3" are exclusive to A1
+
+        or
+
+        # (A0 has unknown precursors, A0 rewritten as A1 and A2 (divergence))
+        #
+        #          <-2- A1 # Marker "2" is exclusive to A0,A1
+        #        /
+        # <-1- A0
+        #        \
+        #         <-3- A2 # Marker "3" is exclusive to A0,A2
+        #
+        # in addition:
+        #
+        #  Markers "2,3" are exclusive to A1,A2
+        #  Markers "1,2,3" are exclusive to A0,A1,A2
+
+        See test/test-obsolete-bundle-strip.t for more examples.
+
+    An example usage is strip. When stripping a changeset, we also want to
+    strip the markers exclusive to this changeset. Otherwise we would have
+    "dangling"" obsolescence markers from its precursors: Obsolescence markers
+    marking a node as obsolete without any successors available locally.
+
+    As for relevant markers, the prune markers for children will be followed.
+    Of course, they will only be followed if the pruned children is
+    locally-known. Since the prune markers are relevant to the pruned node.
+    However, while prune markers are considered relevant to the parent of the
+    pruned changesets, prune markers for locally-known changeset (with no
+    successors) are considered exclusive to the pruned nodes. This allows
+    to strip the prune markers (with the rest of the exclusive chain) alongside
+    the pruned changesets.
+    """
+    # running on a filtered repository would be dangerous as markers could be
+    # reported as exclusive when they are relevant for other filtered nodes.
+    unfi = repo.unfiltered()
+
+    # shortcut to various useful item
+    nm = unfi.changelog.nodemap
+    precursorsmarkers = unfi.obsstore.precursors
+    successormarkers = unfi.obsstore.successors
+    childrenmarkers = unfi.obsstore.children
+
+    # exclusive markers (return of the function)
+    exclmarkers = set()
+    # we need fast membership testing
+    nodes = set(nodes)
+    # looking for head in the obshistory
+    #
+    # XXX we are ignoring all issues in regard with cycle for now.
+    stack = [n for n in nodes if not _filterprunes(successormarkers.get(n, ()))]
+    stack.sort()
+    # nodes already stacked
+    seennodes = set(stack)
+    while stack:
+        current = stack.pop()
+        # fetch precursors markers
+        markers = list(precursorsmarkers.get(current, ()))
+        # extend the list with prune markers
+        for mark in successormarkers.get(current, ()):
+            if not mark[1]:
+                markers.append(mark)
+        # and markers from children (looking for prune)
+        for mark in childrenmarkers.get(current, ()):
+            if not mark[1]:
+                markers.append(mark)
+        # traverse the markers
+        for mark in markers:
+            if mark in exclmarkers:
+                # markers already selected
+                continue
+
+            # If the markers is about the current node, select it
+            #
+            # (this delay the addition of markers from children)
+            if mark[1] or mark[0] == current:
+                exclmarkers.add(mark)
+
+            # should we keep traversing through the precursors?
+            prec = mark[0]
+
+            # nodes in the stack or already processed
+            if prec in seennodes:
+                continue
+
+            # is this a locally known node ?
+            known = prec in nm
+            # if locally-known and not in the <nodes> set the traversal
+            # stop here.
+            if known and prec not in nodes:
+                continue
+
+            # do not keep going if there are unselected markers pointing to this
+            # nodes. If we end up traversing these unselected markers later the
+            # node will be taken care of at that point.
+            precmarkers = _filterprunes(successormarkers.get(prec))
+            if precmarkers.issubset(exclmarkers):
+                seennodes.add(prec)
+                stack.append(prec)
+
+    return exclmarkers
 
 def commonversion(versions):
     """Return the newest version listed in both versions and our local formats.
@@ -744,7 +931,7 @@ def _pushkeyescape(markers):
         currentlen += len(nextdata)
     for idx, part in enumerate(reversed(parts)):
         data = ''.join([_pack('>B', _fm0version)] + part)
-        keys['dump%i' % idx] = base85.b85encode(data)
+        keys['dump%i' % idx] = util.b85encode(data)
     return keys
 
 def listmarkers(repo):
@@ -757,11 +944,11 @@ def pushmarker(repo, key, old, new):
     """Push markers over pushkey"""
     if not key.startswith('dump'):
         repo.ui.warn(_('unknown key: %r') % key)
-        return 0
+        return False
     if old:
         repo.ui.warn(_('unexpected old value for %r') % key)
-        return 0
-    data = base85.b85decode(new)
+        return False
+    data = util.b85decode(new)
     lock = repo.lock()
     try:
         tr = repo.transaction('pushkey: obsolete markers')
@@ -769,19 +956,21 @@ def pushmarker(repo, key, old, new):
             repo.obsstore.mergemarkers(tr, data)
             repo.invalidatevolatilesets()
             tr.close()
-            return 1
+            return True
         finally:
             tr.release()
     finally:
         lock.release()
 
-def getmarkers(repo, nodes=None):
+def getmarkers(repo, nodes=None, exclusive=False):
     """returns markers known in a repository
 
     If <nodes> is specified, only markers "relevant" to those nodes are are
     returned"""
     if nodes is None:
         rawmarkers = repo.obsstore
+    elif exclusive:
+        rawmarkers = exclusivemarkers(repo, nodes)
     else:
         rawmarkers = repo.obsstore.relevantmarkers(nodes)
 
@@ -1084,7 +1273,9 @@ cachefuncs = {}
 def cachefor(name):
     """Decorator to register a function as computing the cache for a set"""
     def decorator(func):
-        assert name not in cachefuncs
+        if name in cachefuncs:
+            msg = "duplicated registration for volatileset '%s' (existing: %r)"
+            raise error.ProgrammingError(msg % (name, cachefuncs[name]))
         cachefuncs[name] = func
         return func
     return decorator
@@ -1121,12 +1312,10 @@ def clearobscaches(repo):
 @cachefor('obsolete')
 def _computeobsoleteset(repo):
     """the set of obsolete revisions"""
-    obs = set()
     getnode = repo.changelog.node
     notpublic = repo._phasecache.getrevset(repo, (phases.draft, phases.secret))
-    for r in notpublic:
-        if getnode(r) in repo.obsstore.successors:
-            obs.add(r)
+    isobs = repo.obsstore.successors.__contains__
+    obs = set(r for r in notpublic if isobs(getnode(r)))
     return obs
 
 @cachefor('unstable')
@@ -1205,7 +1394,8 @@ def _computedivergentset(repo):
     return divergent
 
 
-def createmarkers(repo, relations, flag=0, date=None, metadata=None):
+def createmarkers(repo, relations, flag=0, date=None, metadata=None,
+                  operation=None):
     """Add obsolete markers between changesets in a repo
 
     <relations> must be an iterable of (<old>, (<new>, ...)[,{metadata}])
@@ -1226,6 +1416,11 @@ def createmarkers(repo, relations, flag=0, date=None, metadata=None):
         metadata = {}
     if 'user' not in metadata:
         metadata['user'] = repo.ui.username()
+    useoperation = repo.ui.configbool('experimental',
+                                      'evolution.track-operation',
+                                      False)
+    if useoperation and operation:
+        metadata['operation'] = operation
     tr = repo.transaction('add-obsolescence-marker')
     try:
         markerargs = []
@@ -1258,29 +1453,9 @@ def createmarkers(repo, relations, flag=0, date=None, metadata=None):
         for args in markerargs:
             nprec, nsucs, npare, localmetadata = args
             repo.obsstore.create(tr, nprec, nsucs, flag, parents=npare,
-                                 date=date, metadata=localmetadata)
+                                 date=date, metadata=localmetadata,
+                                 ui=repo.ui)
             repo.filteredrevcache.clear()
         tr.close()
     finally:
         tr.release()
-
-def isenabled(repo, option):
-    """Returns True if the given repository has the given obsolete option
-    enabled.
-    """
-    result = set(repo.ui.configlist('experimental', 'evolution'))
-    if 'all' in result:
-        return True
-
-    # For migration purposes, temporarily return true if the config hasn't been
-    # set but _enabled is true.
-    if len(result) == 0 and _enabled:
-        return True
-
-    # createmarkers must be enabled if other options are enabled
-    if ((allowunstableopt in result or exchangeopt in result) and
-        not createmarkersopt in result):
-        raise error.Abort(_("'createmarkers' obsolete option must be enabled "
-                           "if other obsolete options are enabled"))
-
-    return option in result
